@@ -2,11 +2,11 @@
 
 SpaceKit removes files. That makes safety the most important property of the project, ahead of speed, features or convenience. This document is the contract: what SpaceKit will never do, how that's enforced, and what contributors must preserve.
 
-> **The short version:** SpaceKit can never delete your disk, a volume, your home folder, your personal folders, system folders, credentials or repositories, and it never removes anything without showing you first. Automation is limited to data a rule recognises as regenerable, within a byte budget, and is journaled.
+> **The short version:** SpaceKit can never delete your disk, a volume, your home folder, your personal folders, system folders, credentials or repositories, and it never removes anything without showing you first. Automation is limited to what a rule recognises (regenerable data unless a job opts in to more) and folders you listed in the job, within a byte budget, and is journaled.
 
 ## 1. One gate for everything
 
-Every removal, from every front end (the app, the TUI, the CLI and the background agent), passes through a single component: [`SafetyGuard`](../Sources/SpaceKitCore/Safety/SafetyGuard.swift). The `CleanupExecutor` asks the guard again **immediately before** touching each item, so a plan that was safe when it was reviewed is re-checked against the disk as it is at removal time.
+Every removal, from every front end (the app, the TUI, the CLI and the background agent), passes through a single component: [`SafetyGuard`](../Sources/SpaceKitCore/Safety/SafetyGuard.swift). The `CleanupExecutor` asks the guard again **immediately before** touching each item, so a plan that was safe when it was reviewed is re-checked against the disk as it is at removal time. At that moment it also re-reads whether the item is or contains a git repository, and re-measures its size for the budget and the volume-share check.
 
 The guard returns one of three decisions:
 
@@ -16,58 +16,89 @@ The guard returns one of three decisions:
 | **confirm** | May be removed only after a person explicitly acknowledges the shown warning. Never in automation. |
 | **block** | Never removed, by anyone, in any mode. There is no override. |
 
+**The checked folder is the folder that changes.** After the guard's check, the executor opens the item's parent folder with no symlinks allowed in any component, confirms the kernel's path for that handle is the folder the guard checked, and removes the item by name relative to the handle (`removefileat`, `unlinkat`). A parent swapped for a symlink in between makes the removal fail with nothing removed. Moving to the Trash has no handle-based API, so for the Trash the parent is re-verified immediately before the move. A swap in the moment between that re-check and the move is the one race that remains.
+
 ## 2. Never: the whole disk, volumes and top-level folders
 
 These are **blocked unconditionally** (`checkHardLimits`), regardless of configuration, confirmation or rules:
 
-1. **The disk itself and every top-level folder:** `/`, `/System`, `/Users`, `/Applications`, `/Library`, `/private`, `/usr`, `/bin`, `/sbin`, `/opt`, `/Volumes`, `/cores`, `/dev`, and any path with fewer than two components.
+1. **The disk itself and every top-level folder:** `/`, `/System`, `/Users`, `/Applications`, `/Library`, `/private`, `/usr`, `/bin`, `/sbin`, `/etc`, `/var`, `/tmp`, `/opt`, `/Volumes`, `/cores`, `/dev`, and any path with fewer than two components.
 2. **Volume roots and mount points:** `/Volumes/<anything>`, `/System/Volumes/<anything>` (Data, Preboot, VM, Update), any path that is a mount point, and **any folder that contains a mount point**.
 3. **Anything that contains a protected location.** Removing `~/Library` would remove `~/Library/Keychains`, so `~/Library` is blocked. The same ancestor rule makes the home folder, `/Users` and `/` impossible to remove.
-4. **The home folder and its structure:** `~`, `~/Library`, `~/Library/Application Support`, `~/Library/Containers`, `~/Library/Group Containers`, `~/Library/Caches`, `~/Library/Developer`, `~/Library/Preferences`, `~/Library/Mobile Documents` (iCloud Drive), `~/Library/CloudStorage`, `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures`, `~/Movies`, `~/Music`, `~/Public`, `~/Applications`, `~/.Trash`, `~/.config`, `~/.cache`, `~/.local`, `~/.docker`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`.
+4. **The home folder and its structure:** `~`, `~/Library`, `~/Library/Application Support`, `~/Library/Containers`, `~/Library/Group Containers`, `~/Library/Caches`, `~/Library/Developer`, `~/Library/Preferences`, `~/Library/Keychains`, `~/Library/Mail`, `~/Library/Messages`, `~/Library/Calendars`, `~/Library/Photos`, `~/Library/Mobile Documents` (iCloud Drive), `~/Library/CloudStorage`, `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures`, `~/Movies`, `~/Music`, `~/Public`, `~/Applications`, `~/Developer`, `~/.Trash`, `~/.config`, `~/.cache`, `~/.local`, `~/.docker`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`.
    *Things inside* folders like `~/Library/Caches` or `~/Downloads` can be removed (see the tiers below); the folders themselves cannot.
-5. **Sealed trees, where nothing inside is ever removed:** the operating system (`/System`, `/usr/bin`, `/usr/lib`, `/usr/libexec`, `/usr/share`, `/bin`, `/sbin`, `/private/etc`, `/private/var/db`), keychains, SSH/GPG/cloud credentials (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.config/gcloud`, `~/.config/gh`), Mail, Messages, Contacts, Calendars, password managers, and Docker Desktop's VM disk (reclaim Docker space with Docker's own commands, never by deleting `Docker.raw`).
+5. **Sealed trees, where neither the folder nor anything inside it is ever removed:** the operating system (`/System`, `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/libexec`, `/usr/share`, `/bin`, `/sbin`, `/private/etc`, `/private/var/db`), keychains, SSH/GPG/cloud credentials (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.config/gcloud`, `~/.config/gh`), Mail, Messages, Contacts, Calendars (including Calendar's group container), password managers (1Password, including 1Password 7, Bitwarden, Enpass, KeePassXC, Proton Pass, LastPass), and Docker Desktop's VM disk and group container (reclaim Docker space with Docker's own commands, never by deleting `Docker.raw`).
 6. **Git metadata** (any path containing a `.git` component) and the **insides of library packages** such as `*.photoslibrary`, `*.musiclibrary` and keychains. Those are managed by their apps.
-7. **Anything a `protected` rule describes** (databases, Docker volumes, photo libraries, credentials), and anything that contains it.
-8. **Your own protected paths** from `safety.protectedPaths`, plus their contents and ancestors.
-9. **Running as root.** SpaceKit refuses to remove anything when run with `sudo`.
+7. **Anything a `protected` rule describes** (databases, Docker volumes, photo libraries, credentials), and anything that contains it. For a rule whose path is a glob, that includes every folder a match could sit in, even before a match exists there.
+8. **Your own protected paths** from `safety.protectedPaths`, plus their contents and ancestors, under the path as written and its location with symlinks resolved.
+9. **Running as root.** SpaceKit refuses to remove anything, or run any tool command, when run with `sudo`.
 
-Relative paths are refused. `~`, `..` and symlinks in parent folders are resolved before checking, so a symlink can't smuggle a protected folder in under another name. Removing a symlink removes the link, never its target.
+**Spellings don't matter.** APFS treats `~/library`, `~/Library` and a differently normalized Unicode spelling as the same folder, so every comparison against these lists folds case and Unicode normalization (`PathUtil.comparisonKey`). On a case-sensitive volume this blocks more than strictly needed, never less. The guard checks each path as given, with symlinks in parent folders resolved, and (unless the item is itself a symlink) as it is spelled on disk.
+
+Relative paths are refused, and so are `~name` paths: only `~` and `~/` are expanded. `..` and symlinks in parent folders are resolved before checking, so a symlink can't smuggle a protected folder in under another name. Removing a symlink removes the link, never its target.
 
 ## 3. Tiers for everything else
 
 | What | By hand (app, TUI, CLI) | Automatic jobs |
 |---|---|---|
 | 🟢 Rule item, `safe` (regenerable) | allow | allow, if inside the rule's locations |
-| 🟡 Rule item, `review` | confirm | only if the job sets `includeReview: true` |
+| 🟡 Rule item, `review` | confirm | only if the job sets `includeReview: true`; moved to the Trash |
 | 🔴 Rule item, `protected` | block | block |
 | A git repository (`.git` directly inside) | confirm | block |
 | Folder containing repositories | confirm (unless a 🟢 rule claims it) | block (unless a 🟢 rule claims it) |
 | Personal data (Documents, Desktop, Downloads, Pictures, Movies, Music, iCloud, app containers) without a rule | confirm | only for a folder **listed in the job**, with `olderThan` ≥ 7 days **and** moving to the Trash |
-| Anything no rule recognises | confirm | block, unless the folder is listed in the job |
-| A single item > 10% of the disk's used space | confirm | block above 25% |
+| Anything no rule recognises | confirm | block, unless the folder is listed in the job; then moved to the Trash |
+| A single item > 10% of the disk's used space | confirm | allowed up to 25%, blocked above |
+
+"Inside the rule's locations" means under one of the rule's paths, or, for a pattern rule, a folder with a matching name under the rule's `roots` (or `scan.devRoots`) and outside its exclusions.
 
 ## 4. Automation limits
 
 - **Never silently delete.** Jobs run in one of three modes: **observe** (notify only), **suggest** (prepare a plan and wait for approval) and **automatic**. New jobs default to *suggest*, except jobs created from 🟢 rules.
-- An automatic run stops at **`safety.maxBytesPerRun`** (default 100 GB). Items beyond the budget are skipped and reported.
-- Automatic permanent deletion is allowed only for 🟢 regenerable items. Everything else goes to the Trash.
-- Every automatic run that removes or skips something posts a notification, and every removal is written to the journal (`spacekit journal`).
-- Tool commands (`docker builder prune`, `brew cleanup`, `xcrun simctl delete unavailable`) run **without a shell**, with a timeout, and only for executables on a built-in trusted list or in your `safety.allowedCommands`. Rule files can't run arbitrary programs.
+- An automatic run has a budget of **`safety.maxBytesPerRun`** (default 100 GB). An item that would take the run over what's left of the budget is skipped and reported. The budget is charged with each item's size measured at removal time, not the size in the plan.
+- **Automatic permanent deletion is allowed only for 🟢 regenerable items.** Every other item an automatic run removes goes to the Trash, even when the job says `action: delete`. That includes folders you listed in the job, which have no rule. Things already in the Trash can only be deleted, so an automatic run deletes them only when a 🟢 rule covers them, and skips them otherwise.
+- **Every automatic run that removes something, or leaves an item or a tool command skipped or failed, posts a notification.** This happens even with `automation.notifications: false`; that setting only silences observe and suggest runs.
+- Every removal is written to the journal (`spacekit journal`) as it happens.
+- **Confirmation is never implied.** Automatic runs never get the "confirmed" status, so anything that needs confirmation is skipped. When a person runs a job by hand (the app, the TUI, `spacekit jobs run --yes`), the core passes on only the confirmation that person gave; it never confirms a warning on their behalf.
+
+### Tool commands
+
+Rules can clean with the tool's own command (`docker builder prune`, `brew cleanup`, `xcrun simctl delete unavailable`) instead of removing files. Commands are held to the same standard as items:
+
+- They run **without a shell**, with a 10-minute timeout. A tool still running then (or a child it left holding its output) gets SIGTERM, then SIGKILL, together with its process group.
+- **The executable must be a bare name** such as `brew`: no `/`, no `..`, no `{name}` placeholder. Anything else is rejected when the rule is validated and again before it runs. The name is looked up in `PATH` plus the usual Homebrew, Cargo, Go, Bun, Docker and OrbStack locations, and relative `PATH` entries are ignored.
+- **Built-in trust covers built-in rules only.** Rules from SpaceKit's own rule library may run the executables on the built-in trusted list (see [RULES.md](RULES.md#action)). A rule from any other folder runs a command only if its executable is in your `safety.allowedCommands`, whatever the trusted list says. A rule file you download can't run programs you haven't named. The built-in library is the folder `RuleLibrary.builtinDirectory` finds: `$SPACEKIT_RULES_DIR` if it is set, otherwise the app bundle's rules, the installed `share/spacekit/rules`, or a source checkout's `rules/`. Rules in that folder get built-in trust, so point `SPACEKIT_RULES_DIR` only at a library you trust.
+- **The same gates as items:** refused when running as root, refused while the config is invalid (see §5), refused when the rule is `protected`, need confirmation by hand when the rule is `review`, and run automatically only for 🟢 rules or with `includeReview`. In an automatic run, a command whose estimated size exceeds what's left of the budget doesn't start, and what it actually freed is charged afterwards.
+- **Per-item commands are checked like the item.** For an `itemCommand`, the item substituted for `{path}` and `{name}` goes through the guard like any other item and must be permitted.
+- **A command runs only as its rule says now.** If the rule is no longer loaded (disabled, removed or invalid) or its command changed since the plan was made, the command is refused and the plan must be refreshed.
 
 ## 5. Defaults that favour you
 
-- **Preview first.** The CLI previews by default (`--yes` to act), the TUI and app always show a review screen listing every item with the guard's verdict and reasons.
-- **The Trash by default.** `safety.trash: always` is the default, so everything can be put back until you empty the Trash. Set `safety.trash: rules` to let regenerable caches be deleted directly.
-- **Read-only scanning.** Scans read names, sizes and dates. SpaceKit never reads file contents and sends nothing anywhere.
-- **Journal.** `~/Library/Application Support/SpaceKit/journal.jsonl` records what was removed, when, how, by which rule or job, and where trashed items went.
+- **Preview first.** The CLI previews by default (`--yes` to act), the TUI and app always show a review screen listing every item with the guard's verdict and reasons. `--yes` confirms the warnings the preview printed. The TUI accepts `y` only after the whole list has been shown. The app needs a ticked acknowledgement before it removes anything with a warning.
+- **The Trash by default.** `safety.trash: always` is the default, so everything can be put back until you empty the Trash. With it, the CLI refuses `--permanent` and the app hides the delete option. Set `safety.trash: rules` to let regenerable caches be deleted directly.
+- **A broken config stops cleaning.** If the config file exists but can't be read, read-only features keep working with the defaults and a warning, but every removal and tool command, manual or automatic, is refused with "Config file is invalid: … Fix it (spacekit config validate) before cleaning." The defaults would lack your protected paths, allowed commands and disabled rules, so they are never used to clean.
+- **Only valid rules are loaded.** A rule with a validation error is reported (`spacekit rules validate`) and not loaded. A rule in your folder can't take the place of a built-in `protected` rule, and can't replace a built-in rule with a lower safety level; the built-in rule stays. `rules.disabled` never turns off a `protected` rule. See [RULES.md](RULES.md#your-own-rules-and-overrides).
+- **Only what you reviewed.** Every plan records when it was made. Plain files directly in a folder ("Files in …" items) and entries in the Trash that were modified, created or moved there after that time weren't in the preview, so they are left alone. A saved plan from before this check (an old suggestion) can't remove loose files or Trash entries; refresh it. Approving a suggestion evaluates its job again first and drops items that no longer meet the job's conditions.
+- **Read-only scanning.** Scans read names, sizes and dates, and never read the contents of your files. The exceptions are small metadata files: Ollama's model manifests (JSON lists of the blobs each model uses, read to size models), the system's `/usr/share/firmlinks`, and SpaceKit's own config, rules and state. SpaceKit sends nothing anywhere.
+- **Names can't rewrite the screen.** The CLI and TUI pass file names, paths, rule text and tool output through one sanitizer, `TerminalText.sanitize`, which shows control characters as visible escapes. A file named with an escape sequence can't hide or rewrite a line of a cleanup preview.
+- **Journal.** `~/Library/Application Support/SpaceKit/journal.jsonl` records what was removed, when, how (`trash`, `delete` or `command`), by which rule or job, and where trashed items went. It is written one entry per removal as each happens, so an interrupted run still leaves a record, and each loose file gets its own entry. Deleting something already in the Trash is recorded as `delete`. A journal write that fails is reported with the run's result (and the CLI exits nonzero), never swallowed.
 
 ## 6. For contributors
 
-- **The guard is the only gate.** New features that remove anything must go through `CleanupExecutor` (which calls the guard). Never call `FileManager.removeItem`, `trashItem`, `removefile` or `rm` elsewhere.
+- **The guard is the only gate.** New features that remove anything must go through `CleanupExecutor` (which calls the guard). Never call `FileManager.removeItem`, `trashItem`, `removefile` or `rm` elsewhere. The only exceptions are SpaceKit's own files, each removed at a fixed path: the previous `config.yaml.bak` before a new backup is written (`ConfigStore.save`), the LaunchAgent plist on `spacekit agent uninstall` (`LaunchAgent.uninstall`), and the `request` file in `SPACEKIT_DEBUG_DIR` once a debug build has read it (`DebugAutomation`). Tests remove their own `TempTree` folders.
 - **Config can add protections, never remove them.** Don't add options that weaken the lists above.
-- **Every guarantee has a test.** [`SafetyGuardTests`](../Tests/SpaceKitCoreTests/SafetyGuardTests.swift) covers the whole-disk, home, sealed-tree, repository, personal-folder, mount-point, symlink, root and automation rules. A change that makes any of them fail does not ship. Add a test for any new rule you introduce.
+- **`SPACEKIT_HOME` is for debug builds only.** It points the guard's idea of home at a sandbox, which would strip every home protection from the real home, so release builds ignore it (`PathUtil.home`).
+- **Print untrusted text through `TerminalText.sanitize`.** That includes anything from the disk, a rule file or a tool's output that reaches a terminal.
+- **Every guarantee has a test.** A change that makes any of them fail does not ship. Add a test for any new rule you introduce.
+  - [`SafetyGuardTests`](../Tests/SpaceKitCoreTests/SafetyGuardTests.swift): the whole-disk, home, sealed-tree, repository, personal-folder, mount-point, symlink, root, `~name`, case and Unicode, protected-rule and volume-share rules, and the automation tiers.
+  - [`CleanupExecutionTests`](../Tests/SpaceKitCoreTests/CleanupExecutionTests.swift): automatic runs trashing instead of deleting, items already in the Trash, the budget charged with measured sizes, repositories re-checked at removal time, the journal written per removal, the plan's creation time, the invalid-config refusal, symlinks and handle-based removal.
+  - [`CleanupCommandTests`](../Tests/SpaceKitCoreTests/CleanupCommandTests.swift): bare names, built-in trust and `allowedCommands`, the root, config, budget and per-item gates for tool commands, and the command timeout.
+  - [`RuleLoadingTests`](../Tests/SpaceKitCoreTests/RuleLoadingTests.swift): overrides of built-in rules, protected rules that can't be disabled, and invalid rules that aren't loaded.
+  - [`AutomationTests`](../Tests/SpaceKitCoreTests/AutomationTests.swift): no confirmation on a person's behalf, and notifications from automatic runs.
+  - [`ConfigValueTests`](../Tests/SpaceKitCoreTests/ConfigValueTests.swift) and [`ConfigUpdateTests`](../Tests/SpaceKitCoreTests/ConfigUpdateTests.swift): strict ages and schedules, and a config that doesn't parse is never overwritten.
+  - [`PathUtilTests`](../Tests/SpaceKitCoreTests/PathUtilTests.swift) and [`TerminalTextTests`](../Tests/SpaceKitCoreTests/TerminalTextTests.swift): `SPACEKIT_HOME` ignored unless the build allows it, comparison keys, and the terminal sanitizer.
 - **Rules must be honest.** If removing something costs a 20 GB download, it's `review`, even if it's "just a cache". See [RULES.md](RULES.md).
-- **Debug hooks stay sandboxed.** The app's `SPACEKIT_DEBUG_DIR` automation (debug builds only) can only confirm cleanups whose every item lies inside a temporary sandbox home, and never runs tool commands.
+- **Debug hooks stay sandboxed.** The app's `SPACEKIT_DEBUG_DIR` automation (debug builds only) can only run cleanups whose every item lies inside a temporary sandbox home, never runs tool commands, and never confirms warnings, so it removes only items the guard allows outright.
 
 ## Reporting a safety problem
 

@@ -408,6 +408,19 @@ struct SafetyGuardAutomationTests {
         #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
     }
 
+    @Test("By hand, a safe rule outside its own locations counts as no rule: the person confirms")
+    func manualOutsideScope() {
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let guardian = testGuard()
+        let manual = CleanupContext.manual(confirmed: false)
+        #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: rule, context: manual).decision == .allow)
+        let tool = guardian.evaluate(path: "/Users/tester/.vscode/extensions/ext/node_modules", rule: rule, context: manual)
+        #expect(tool.decision == .confirm)
+        #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: rule, context: manual).decision == .confirm)
+    }
+
     @Test("Automatic scope must hold for the path with its parent's symlinks resolved, not only as written")
     func scopeOfResolvedParent() throws {
         let tree = try TempTree()

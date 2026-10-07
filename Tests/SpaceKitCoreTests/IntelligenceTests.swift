@@ -44,6 +44,29 @@ struct OverlapTests {
     }
 }
 
+@Suite("Rule index scope")
+struct RuleIndexScopeTests {
+    @Test("A pattern match outside the rule's roots or inside an excluded tool home isn't recognised")
+    func patternScope() throws {
+        let tree = try TempTree()
+        try tree.file("home/Code/app/package.json", bytes: 10)
+        try tree.directory("home/Code/app/node_modules")
+        try tree.file("home/.vscode/extensions/ext/package.json", bytes: 10)
+        try tree.directory("home/.vscode/extensions/ext/node_modules")
+        try tree.file("other/app/package.json", bytes: 10)
+        try tree.directory("other/app/node_modules")
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"], sibling: ["package.json"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let index = RuleIndex(rules: [rule], home: tree.path("home"))
+        #expect(index.rule(for: tree.path("home/Code/app/node_modules"))?.id == "node.modules")
+        #expect(index.rule(for: tree.path("home/.vscode/extensions/ext/node_modules")) == nil)
+        #expect(index.rule(for: tree.path("other/app/node_modules")) == nil)
+        let rooted = RuleIndex(rules: [rule], home: tree.path("home"), patternRoots: [tree.path("other")])
+        #expect(rooted.rule(for: tree.path("other/app/node_modules"))?.id == "node.modules")
+    }
+}
+
 @Suite("Loose files name what they counted")
 struct LooseFileNameTests {
     @Test("A children rule's loose files leave out a single file another rule claims")

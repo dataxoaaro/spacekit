@@ -85,6 +85,7 @@ public struct SafetyGuard: Sendable {
     private let userProtected: [Location]
     private let mountKeys: [String]
     private let protectedPatterns: [ProtectedPattern]
+    private let scope: RuleScope
 
     /// An automatic job may not remove a single item bigger than this share of the volume's used space.
     public static let maxAutomaticVolumeShare = 0.25
@@ -103,6 +104,7 @@ public struct SafetyGuard: Sendable {
         self.isRunningAsRoot = isRunningAsRoot
         self.patternRoots = patternRoots
         self.volumeCapacity = volumeCapacity
+        scope = RuleScope(home: home, patternRoots: patternRoots)
         critical = SafetyGuard.criticalPaths(home: home).map(Location.init)
         sealed = SafetyGuard.sealedTrees(home: home).map(Location.init)
         personal = SafetyGuard.personalAreas(home: home).map(Location.init)
@@ -244,7 +246,9 @@ public struct SafetyGuard: Sendable {
 
         switch context {
         case .manual:
-            if let rule {
+            // A rule speaks only for its own locations; elsewhere (a node_modules inside a tool's folder) the item
+            // is as unknown as one no rule matched.
+            if let rule, candidates.allSatisfy({ scope.contains($0, rule: rule) }) {
                 if rule.safety.level == .review {
                     verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
                 }
@@ -255,7 +259,7 @@ public struct SafetyGuard: Sendable {
             }
         case .automatic(let automation):
             // Every spelling must be in scope: a symlinked parent can put the real location somewhere else.
-            let customRoots = automation.customPaths.map(scopePath)
+            let customRoots = automation.customPaths.map(scope.resolve)
             let isCustom = candidates.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
             if let rule {
                 if rule.safety.level == .review && !automation.allowReview {
@@ -340,29 +344,9 @@ public struct SafetyGuard: Sendable {
         }
     }
 
-    /// True if `path` is one of the places `rule` describes (or inside one). For pattern rules this mirrors
-    /// where `RuleEngine` looks: under the rule's roots, outside its exclusions and outside bundles.
+    /// True if `path` is one of the places `rule` describes (or inside one). See `RuleScope`.
     public func isInsideRuleScope(_ path: String, rule: Rule) -> Bool {
-        if rule.paths.contains(where: { PathUtil.isInside(path, pattern: scopePath($0)) }) { return true }
-        guard let match = rule.match, match.names.contains(PathUtil.lastComponent(path)) else { return false }
-        let roots = (match.roots ?? patternRoots).map(scopePath)
-        guard roots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
-        return !isExcludedFromPatterns(path, match: match)
-    }
-
-    /// A rule or job location the way `RuleEngine` resolves it, so it compares with scanned paths.
-    private func scopePath(_ pattern: String) -> String {
-        PathUtil.expand(PathUtil.canonicalPattern(pattern, home: home), home: home)
-    }
-
-    /// Exclusions are compared by key so a differently spelled path stays excluded.
-    private func isExcludedFromPatterns(_ path: String, match: PatternSpec) -> Bool {
-        let key = PathUtil.comparisonKey(path)
-        let excluded = (RuleEngine.defaultPatternExcludes + match.exclude).contains { exclude in
-            PathUtil.isInside(key, pattern: PathUtil.comparisonKey(scopePath(exclude)))
-        }
-        return excluded
-            || PathUtil.components(key).dropLast().contains { component in RuleEngine.bundleSuffixes.contains { component.hasSuffix($0) } }
+        scope.contains(path, rule: rule)
     }
 }
 

@@ -113,12 +113,16 @@ public struct RuleSettings: Codable, Sendable, Equatable {
 
 public struct AutomationSettings: Codable, Sendable, Equatable {
     public var notifications: Bool = true
-    /// How often the background agent wakes up to check for due jobs.
+    /// How often the background agent wakes up to check for due jobs, within `checkEveryRange`.
     public var checkEvery: Age = .hours(1)
     /// How often the agent takes a full storage snapshot for history ("what grew?"). `never` disables it.
-    public var snapshot: Schedule? = Schedule(every: .weekly, at: "04:00", weekday: .sunday)
+    public var snapshot: Schedule? = .defaultSnapshot
     /// AI models used within this window count as active.
     public var activeModelWindow: Age = .days(90)
+
+    /// Shortest and longest agent wake-up interval, in seconds. launchd needs a finite interval, and checking
+    /// less than daily would make daily jobs run late.
+    public static let checkEveryRange: ClosedRange<TimeInterval> = 300...86_400
 
     public init() {}
 
@@ -127,11 +131,12 @@ public struct AutomationSettings: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         notifications = try c.decodeIfPresent(Bool.self, forKey: .notifications) ?? true
-        checkEvery = try c.decodeIfPresent(Age.self, forKey: .checkEvery) ?? .hours(1)
+        let every = try c.decodeIfPresent(Age.self, forKey: .checkEvery) ?? .hours(1)
+        checkEvery = Age(seconds: min(max(every.seconds, Self.checkEveryRange.lowerBound), Self.checkEveryRange.upperBound))
         if let word = try? c.decodeIfPresent(String.self, forKey: .snapshot), ["never", "off", "none"].contains(word.lowercased()) {
             snapshot = nil
         } else {
-            snapshot = try c.decodeIfPresent(Schedule.self, forKey: .snapshot) ?? Schedule(every: .weekly, at: "04:00", weekday: .sunday)
+            snapshot = try c.decodeIfPresent(Schedule.self, forKey: .snapshot) ?? .defaultSnapshot
         }
         activeModelWindow = try c.decodeIfPresent(Age.self, forKey: .activeModelWindow) ?? .days(90)
     }

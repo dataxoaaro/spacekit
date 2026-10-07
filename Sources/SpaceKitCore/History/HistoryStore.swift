@@ -41,17 +41,11 @@ public struct HistoryStore: Sendable {
     public init(file: String) { self.file = file }
 
     public func records(since: Date? = nil) -> [HistoryRecord] {
-        let decoder = JSONDecoder.spaceKit
-        return LockedFile.readLines(file).compactMap { line in
-            guard let record = try? decoder.decode(HistoryRecord.self, from: Data(line.utf8)) else { return nil }
-            if let since, record.date < since { return nil }
-            return record
-        }
-        .sorted { $0.date < $1.date }
+        JSONLines.read(file, since: since, date: \HistoryRecord.date).sorted { $0.date < $1.date }
     }
 
     public func append(_ record: HistoryRecord) throws {
-        try LockedFile.append(String(decoding: try JSONEncoder.spaceKit.encode(record), as: UTF8.self) + "\n", to: file)
+        try JSONLines.append([record], to: file)
     }
 
     public func recordVolumeSample(_ capacity: VolumeCapacity, now: Date = Date()) throws {

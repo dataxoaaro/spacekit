@@ -97,7 +97,3 @@ extension NSColor {
             blue: CGFloat(hex & 0xff) / 255, alpha: 1)
     }
 }
-
-extension UInt64 {
-    var bytesText: String { ByteCount.format(self) }
-}

@@ -64,7 +64,7 @@ struct CapacityBar: View {
             }
         }
         .frame(height: height)
-        .accessibilityLabel("\(capacity.name): \(capacity.used.bytesText) of \(capacity.total.bytesText) used")
+        .accessibilityLabel("\(capacity.name): \(capacity.used.formattedBytes) of \(capacity.total.formattedBytes) used")
     }
 }
 

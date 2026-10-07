@@ -40,16 +40,16 @@ struct AIView: View {
         let days = Int(report.activeWindow.days)
         return HStack(spacing: 12) {
             StatTile(
-                title: "AI storage", value: report.total.bytesText, detail: "\(report.tools.count) tools", symbol: "cpu",
+                title: "AI storage", value: report.total.formattedBytes, detail: "\(report.tools.count) tools", symbol: "cpu",
                 tint: Theme.categorical[2])
             StatTile(
-                title: "Potentially reclaimable", value: report.reclaimable().bytesText, detail: "Caches, orphaned blobs, idle models",
+                title: "Potentially reclaimable", value: report.reclaimable().formattedBytes, detail: "Caches, orphaned blobs, idle models",
                 symbol: "arrow.down.circle", tint: Theme.good)
             StatTile(
-                title: "Actively using", value: report.active().bytesText, detail: "Used in the last \(days) days",
+                title: "Actively using", value: report.active().formattedBytes, detail: "Used in the last \(days) days",
                 symbol: "bolt.circle", tint: Theme.categorical[0])
             StatTile(
-                title: "Unused \(days)+ days", value: report.unused().bytesText, detail: "Candidates to remove",
+                title: "Unused \(days)+ days", value: report.unused().formattedBytes, detail: "Candidates to remove",
                 symbol: "moon.zzz", tint: Theme.warning)
         }
     }
@@ -66,7 +66,7 @@ private struct ToolCard: View {
                 HStack {
                     Text(tool.name).font(.headline)
                     Spacer()
-                    Text(tool.size.bytesText).font(.title3.weight(.semibold)).monospacedDigit()
+                    Text(tool.size.formattedBytes).font(.title3.weight(.semibold)).monospacedDigit()
                 }
                 Table(tool.models) {
                     TableColumn("Model") { model in
@@ -75,7 +75,7 @@ private struct ToolCard: View {
                             Text(model.name).lineLimit(1).truncationMode(.middle)
                         }
                     }
-                    TableColumn("Size") { model in Text(model.size.bytesText).monospacedDigit() }
+                    TableColumn("Size") { model in Text(model.size.formattedBytes).monospacedDigit() }
                         .width(min: 70, ideal: 80, max: 100)
                     TableColumn("Status") { model in status(model) }
                         .width(min: 80, ideal: 90, max: 110)

@@ -29,7 +29,7 @@ struct RulesView: View {
                                 Text(rule.name)
                                 Spacer()
                                 if let finding = model.analysis?.finding(ruleID: rule.id) {
-                                    Text(finding.size.bytesText).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                    Text(finding.size.formattedBytes).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                                 }
                             }
                             .tag(rule.id)

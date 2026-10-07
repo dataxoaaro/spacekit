@@ -111,7 +111,7 @@ struct DiskMapView: View {
             .onChange(of: proxy.size) { _, size in viewSize = size }
             .task(id: key) { await relayout() }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Disk map of \(focus.displayName), \(focus.size.bytesText)")
+            .accessibilityLabel("Disk map of \(focus.displayName), \(focus.size.formattedBytes)")
             .accessibilityHint("The list beside the map shows the same items.")
         }
     }
@@ -196,7 +196,7 @@ struct DiskMapView: View {
         let shown = model.hovered
         return VStack(spacing: 2) {
             Text(shown?.name ?? focus.displayName).font(.headline).lineLimit(2).multilineTextAlignment(.center)
-            Text((shown?.size ?? focus.size).bytesText).font(.title3.weight(.semibold)).monospacedDigit()
+            Text((shown?.size ?? focus.size).formattedBytes).font(.title3.weight(.semibold)).monospacedDigit()
             if shown == nil, focus.parent != nil {
                 Text("Click to go up").font(.caption2).foregroundStyle(.secondary)
             }
@@ -231,7 +231,7 @@ struct DiskMapView: View {
             let isParent = cell.item.directory.map { !$0.children.isEmpty } ?? false
             let showsLabel = rect.width > 54 && rect.height > 18 && (cell.depth == 0 || !isParent || rect.height > 40)
             if showsLabel {
-                let label = Text("\(cell.item.name)  \(Text(cell.item.size.bytesText).foregroundStyle(.white.opacity(0.8)))")
+                let label = Text("\(cell.item.name)  \(Text(cell.item.size.formattedBytes).foregroundStyle(.white.opacity(0.8)))")
                     .font(cell.depth == 0 ? .caption.weight(.semibold) : .caption2)
                     .foregroundStyle(.white)
                 var labelContext = context

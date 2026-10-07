@@ -161,7 +161,7 @@ struct SidebarView: View {
                             Image(systemName: "trash")
                             VStack(alignment: .leading) {
                                 Text("Trash").font(.caption.weight(.semibold))
-                                Text("\(trash.bytesText) still on disk").font(.caption2).foregroundStyle(.secondary)
+                                Text("\(trash.formattedBytes) still on disk").font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text("Empty…").font(.caption)
@@ -185,7 +185,7 @@ struct SidebarView: View {
         case .dev:
             guard let analysis = model.analysis else { return nil }
             let safe = analysis.total(.safe)
-            return safe > 0 ? Text(safe.bytesText) : nil
+            return safe > 0 ? Text(safe.formattedBytes) : nil
         case .automation:
             return model.suggestions.isEmpty ? nil : Text("\(model.suggestions.count)")
         default:
@@ -207,7 +207,7 @@ struct CleanupListButton: View {
                 Image(systemName: "tray.full")
                 VStack(alignment: .leading) {
                     Text("Cleanup List").font(.caption.weight(.semibold))
-                    Text("\(model.cleanupList.count) items · \(model.cleanupListBytes.bytesText)").font(.caption2).foregroundStyle(
+                    Text("\(model.cleanupList.count) items · \(model.cleanupListBytes.formattedBytes)").font(.caption2).foregroundStyle(
                         .secondary)
                 }
                 Spacer()
@@ -238,7 +238,7 @@ struct CleanupListPopover: View {
                                 .middle)
                         }
                         Spacer()
-                        Text(item.size.bytesText).monospacedDigit().foregroundStyle(.secondary)
+                        Text(item.size.formattedBytes).monospacedDigit().foregroundStyle(.secondary)
                         Button {
                             model.cleanupList.removeAll { $0.id == item.id }
                         } label: {
@@ -257,7 +257,7 @@ struct CleanupListPopover: View {
                 }
                 .disabled(!model.cleanupList.contains { $0.kind == .directory })
                 Spacer()
-                Button("Review & Clean \(model.cleanupListBytes.bytesText)") {
+                Button("Review & Clean \(model.cleanupListBytes.formattedBytes)") {
                     model.review(CleanupPlan(items: model.cleanupList, useTrash: true), title: "Clean \(model.cleanupList.count) items")
                     dismiss()
                 }
@@ -277,14 +277,14 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 12) {
             if let capacity = model.bootVolume {
                 CapacitySummary(capacity: capacity, showsName: true)
-                Text("\(capacity.used.bytesText) of \(capacity.total.bytesText) used").font(.caption).foregroundStyle(.secondary)
+                Text("\(capacity.used.formattedBytes) of \(capacity.total.formattedBytes) used").font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             if let next = model.jobRunner.nextRuns().first {
                 Label("Next: \(next.job.name), \(next.date.relativeDescription())", systemImage: "clock").font(.callout)
             }
             if model.recovered90Days > 0 {
-                Label("Recovered \(model.recovered90Days.bytesText) in 3 months", systemImage: "arrow.uturn.backward.circle").font(.callout)
+                Label("Recovered \(model.recovered90Days.formattedBytes) in 3 months", systemImage: "arrow.uturn.backward.circle").font(.callout)
             }
             if !model.suggestions.isEmpty {
                 Button {

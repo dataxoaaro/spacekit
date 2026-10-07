@@ -78,11 +78,27 @@ struct KeyParserTests {
         #expect(keys("\u{3}") == [.control("c")])
     }
 
-    @Test("Escape alone, twice and as Alt")
+    @Test("Escape twice and as Alt")
     func escapeKey() {
-        #expect(keys("\u{1B}") == [.escape])
-        #expect(keys("\u{1B}\u{1B}") == [.escape, .escape])
+        #expect(keys("\u{1B}\u{1B}[B") == [.escape, .down])
         #expect(keys("\u{1B}q") == [.escape])
+    }
+
+    @Test("A lone Escape at the end of a read waits for the rest of a possible arrow key")
+    func trailingEscape() {
+        let alone = KeyParser.parse([0x1B])
+        #expect(alone.keys.isEmpty && alone.rest == [0x1B])
+        let split = KeyParser.parse(alone.rest + Array("[B".utf8))
+        #expect(split.keys == [.down] && split.rest.isEmpty)
+        #expect(KeyParser.parse(Array("j\u{1B}\u{1B}".utf8)).keys == [.character("j"), .escape])
+    }
+
+    @Test("When no more bytes come, a lone Escape is the Escape key and a cut-off sequence is dropped")
+    func flushing() {
+        #expect(KeyParser.flush([0x1B]) == [.escape])
+        #expect(KeyParser.flush(Array("\u{1B}[".utf8)).isEmpty)
+        #expect(KeyParser.flush(Array(Array("🟢".utf8).prefix(2))).isEmpty)
+        #expect(KeyParser.flush([]).isEmpty)
     }
 
     @Test("Unknown sequences are skipped without eating the next key")

@@ -40,7 +40,7 @@ extension TUIApp {
             grew: history.whatGrew(over: .days(90)))
     }
 
-    func handleJobs(_ key: Key) {
+    func handleJobs(_ key: TerminalKey) {
         if key == .character("i") {
             toggleAgent()
             return

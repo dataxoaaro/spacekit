@@ -28,7 +28,7 @@ extension TUIApp {
         let runner = JobRunner(context: context)
         let states = context.jobStates.load()
         state.automation = AutomationSnapshot(
-            recovered: context.journal.recovered(since: Date().addingTimeInterval(-90 * 86_400)),
+            recovered: context.journal.recovered(since: Age.days(90).ago()),
             states: states, nextRuns: runner.nextRuns(), agent: LaunchAgent(paths: context.paths).status(),
             estimate: runner.estimatedRecovery(states: states))
     }
@@ -36,8 +36,8 @@ extension TUIApp {
     func refreshHistory() {
         let history = context.history
         state.history = HistorySnapshot(
-            days: history.dailyUsage(days: 120), monthDelta: history.usedDelta(over: 30 * 86_400),
-            grew: history.whatGrew(over: 90 * 86_400))
+            days: history.dailyUsage(days: 120), monthDelta: history.usedDelta(over: .days(30)),
+            grew: history.whatGrew(over: .days(90)))
     }
 
     func handleJobs(_ key: Key) {

@@ -203,7 +203,7 @@ final class AppModel {
         let context = self.context
         jobStates = context.jobStates.load()
         suggestions = context.suggestions.all()
-        journal = context.journal.entries(since: Date().addingTimeInterval(-90 * 86_400))
+        journal = context.journal.entries(since: Age.days(90).ago())
         recovered90Days = journal.reduce(0) { $0 + $1.bytes }
     }
 
@@ -216,7 +216,7 @@ final class AppModel {
     }
 
     func refreshHistory() {
-        history = context.history.records(since: Date().addingTimeInterval(-365 * 86_400))
+        history = context.history.records(since: Age.days(365).ago())
     }
 
     /// Evaluates a job off the main actor, marking it as running meanwhile (cards show a spinner).
@@ -466,7 +466,7 @@ final class AppModel {
 
     func refreshSnapshots() {
         Task {
-            let count = await Task.detached(priority: .utility) { LocalSnapshots.list(volume: "/").count }.value
+            let count = await Task.detached(priority: .utility) { LocalSnapshots.list().count }.value
             if count != localSnapshotCount { localSnapshotCount = count }
         }
     }

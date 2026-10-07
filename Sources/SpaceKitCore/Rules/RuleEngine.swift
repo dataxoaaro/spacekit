@@ -50,7 +50,7 @@ public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
 
     /// Days since last use, if known.
     public func idleDays(now: Date = Date()) -> Int? {
-        lastUsed.map { max(0, Int(now.timeIntervalSince($0) / 86_400)) }
+        lastUsed.map { max(0, Int(Age.since($0, now: now).days)) }
     }
 }
 

@@ -57,7 +57,7 @@ struct TrashCommand: ParsableCommand {
                 verb: "Delete", hint: "Nothing deleted. Run with --yes to empty the Trash.")
         else { return }
         if !json, let capacity = VolumeCapacity.of(path: "/"), capacity.purgeable > 1_000_000_000,
-            !LocalSnapshots.list(volume: "/").isEmpty
+            !LocalSnapshots.list().isEmpty
         {
             print("Local Time Machine snapshots still reference these files; the space shows as purgeable until macOS releases it.".dim)
         }

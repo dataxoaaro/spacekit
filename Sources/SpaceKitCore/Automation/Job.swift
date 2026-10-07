@@ -287,7 +287,7 @@ public struct Schedule: Codable, Sendable, Hashable, CustomStringConvertible {
             match.hour = hour
             match.minute = minute
         }
-        return calendar.nextDate(after: date, matching: match, matchingPolicy: .nextTime) ?? date.addingTimeInterval(86_400)
+        return calendar.nextDate(after: date, matching: match, matchingPolicy: .nextTime) ?? date.addingTimeInterval(Age.days(1).seconds)
     }
 
     /// "Sunday · 03:00", "Every day · 03:00".

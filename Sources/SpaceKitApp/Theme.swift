@@ -66,7 +66,7 @@ enum Theme {
 
     static func ageColor(_ date: Date?) -> Color {
         guard let date else { return other }
-        let days = Date().timeIntervalSince(date) / 86_400
+        let days = Age.since(date).days
         return (ageBuckets.first { days < $0.maxDays } ?? ageBuckets[ageBuckets.count - 1]).color
     }
 

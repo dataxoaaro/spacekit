@@ -10,7 +10,6 @@ public struct JobState: Codable, Sendable {
     public var lastMatchedBytes: UInt64?
     /// Bytes the last run would clean (after conditions).
     public var lastEligibleBytes: UInt64?
-    public var lastFreedBytes: UInt64?
 
     public init(firstSeen: Date = Date()) { self.firstSeen = firstSeen }
 }

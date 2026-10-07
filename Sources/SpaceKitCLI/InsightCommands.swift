@@ -26,7 +26,7 @@ struct HistoryCommand: ParsableCommand {
             let context = global.loadContext()
             let history = context.history
             if json {
-                try Output.json(history.records(since: Date().addingTimeInterval(-Double(days) * 86_400)))
+                try Output.json(history.records(since: Age.days(Double(days)).ago()))
                 return
             }
             let daily = history.dailyUsage(days: days)
@@ -43,10 +43,10 @@ struct HistoryCommand: ParsableCommand {
                 daily.first!.date.formatted(.dateTime.month(.abbreviated).day()).dim + " → "
                     + daily.last!.date.formatted(.dateTime.month(.abbreviated).day()).dim)
             print()
-            if let month = history.usedDelta(over: 30 * 86_400) {
+            if let month = history.usedDelta(over: .days(30)) {
                 print((ByteCount.formatDelta(month) + " this month").bold.fg(month > 0 ? ANSI.review : ANSI.safe))
             }
-            let grew = history.whatGrew(over: Double(days) * 86_400)
+            let grew = history.whatGrew(over: .days(Double(days)))
             if !grew.isEmpty {
                 print()
                 print("WHAT GREW?".bold)
@@ -88,7 +88,7 @@ struct JournalCommand: ParsableCommand {
 
     func run() throws {
         let context = global.loadContext()
-        let since = Date().addingTimeInterval(-Double(days) * 86_400)
+        let since = Age.days(Double(days)).ago()
         let entries = context.journal.entries(since: since)
         if json {
             try Output.json(entries)

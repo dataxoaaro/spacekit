@@ -101,4 +101,11 @@ struct ConfigValueTests {
         let rule = try #require(try RuleLibrary.parse(yaml: "name: x\npath: ~/.cache/x\nexclusions: [active_projects]\n").first)
         #expect(Job.suggested(for: rule).when.keepRecent == Job.defaultActiveProjectsWindow)
     }
+
+    @Test("Ages convert to and from dates")
+    func ageDates() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(Age.days(2).ago(from: now) == Date(timeIntervalSince1970: 1_000_000 - 172_800))
+        #expect(Age.since(Date(timeIntervalSince1970: 1_000_000 - 3 * 86_400), now: now).days == 3)
+    }
 }

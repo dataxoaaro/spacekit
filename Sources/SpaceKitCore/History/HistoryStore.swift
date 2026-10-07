@@ -85,15 +85,15 @@ public struct HistoryStore: Sendable {
     }
 
     /// Change in used space over a window.
-    public func usedDelta(over window: TimeInterval, now: Date = Date()) -> Int64? {
-        let recent = records(since: now.addingTimeInterval(-window))
+    public func usedDelta(over window: Age, now: Date = Date()) -> Int64? {
+        let recent = records(since: window.ago(from: now))
         guard let first = recent.first, let last = recent.last, first.date != last.date else { return nil }
         return Int64(bitPattern: last.used) - Int64(bitPattern: first.used)
     }
 
     /// Which rule groups grew the most between the oldest and newest snapshot in the window.
-    public func whatGrew(over window: TimeInterval, now: Date = Date(), limit: Int = 8) -> [GrowthItem] {
-        let snapshots = records(since: now.addingTimeInterval(-window)).filter { $0.kind == .snapshot }
+    public func whatGrew(over window: Age, now: Date = Date(), limit: Int = 8) -> [GrowthItem] {
+        let snapshots = records(since: window.ago(from: now)).filter { $0.kind == .snapshot }
         guard let first = snapshots.first, let last = snapshots.last, first.date != last.date else { return [] }
         let before = first.groups ?? [:]
         let after = last.groups ?? [:]
@@ -111,7 +111,7 @@ public struct HistoryStore: Sendable {
 
     /// One used-space value per day (the last sample of each day), for charts.
     public func dailyUsage(days: Int, now: Date = Date(), calendar: Calendar = .current) -> [(date: Date, used: UInt64, total: UInt64)] {
-        let since = now.addingTimeInterval(-Double(days) * 86_400)
+        let since = Age.days(Double(days)).ago(from: now)
         var byDay: [Date: HistoryRecord] = [:]
         for record in records(since: since) {
             byDay[calendar.startOfDay(for: record.date)] = record

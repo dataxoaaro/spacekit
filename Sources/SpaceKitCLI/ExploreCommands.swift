@@ -160,7 +160,7 @@ struct DiskCommand: ParsableCommand {
             }
         }
         if !json, let boot = capacities.first(where: { $0.mountPoint == "/" }), boot.purgeable > 1_000_000_000 {
-            let snapshots = LocalSnapshots.list(volume: "/").count
+            let snapshots = LocalSnapshots.list().count
             print()
             print(
                 ("Available counts purgeable space (as Finder does); macOS releases it automatically when it's needed."

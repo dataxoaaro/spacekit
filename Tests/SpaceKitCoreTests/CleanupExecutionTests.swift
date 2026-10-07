@@ -14,18 +14,7 @@ func sandboxExecutor(
     var executor = CleanupExecutor(
         safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules, extraAllowedCommands: allowed,
         maxBytesPerAutomaticRun: budget.bytes, configError: configError)
-    executor.trash = { path in
-        let trash = home + "/.Trash"
-        try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
-        var destination = trash + "/" + PathUtil.lastComponent(path)
-        var counter = 2
-        while FileManager.default.fileExists(atPath: destination) {
-            destination = trash + "/\(PathUtil.lastComponent(path)) \(counter)"
-            counter += 1
-        }
-        try FileManager.default.moveItem(atPath: path, toPath: destination)
-        return destination
-    }
+    executor.trash = sandboxTrash(home: home)
     return executor
 }
 
@@ -410,6 +399,7 @@ struct CheckedLocationTests {
         let guardian = SafetyGuard(
             home: tree.path("home"), userProtectedPaths: [tree.path("home/Protected")], volumes: emptyVolumes, isRunningAsRoot: false)
         var executor = CleanupExecutor(safety: guardian, journal: nil, rules: [])
+        executor.trash = sandboxTrash(home: tree.path("home"))
         let calls = CallCounter()
         let harmless = tree.path("home/Harmless")
         let protected = tree.path("home/Protected")

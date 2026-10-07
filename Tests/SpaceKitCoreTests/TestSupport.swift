@@ -60,3 +60,19 @@ let emptyVolumes = VolumeTable(volumes: [], firmlinks: [])
 func testGuard(home: String = "/Users/tester", protectedPaths: [String] = [], rules: [Rule] = [], root: Bool = false) -> SafetyGuard {
     SafetyGuard(home: home, userProtectedPaths: protectedPaths, protectedRules: rules, volumes: emptyVolumes, isRunningAsRoot: root)
 }
+
+/// Moves items into `home/.Trash` (renaming on collision, like Finder), so no test ever reaches the real Trash.
+func sandboxTrash(home: String) -> @Sendable (String) throws -> String? {
+    { path in
+        let trash = home + "/.Trash"
+        try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+        var destination = trash + "/" + PathUtil.lastComponent(path)
+        var counter = 2
+        while FileManager.default.fileExists(atPath: destination) {
+            destination = trash + "/\(PathUtil.lastComponent(path)) \(counter)"
+            counter += 1
+        }
+        try FileManager.default.moveItem(atPath: path, toPath: destination)
+        return destination
+    }
+}

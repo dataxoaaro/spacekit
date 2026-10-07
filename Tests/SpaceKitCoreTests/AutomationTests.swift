@@ -26,7 +26,6 @@ struct RunnerFixture {
     init() throws {
         tree = try TempTree()
         stateDirectory = tree.path("state")
-        // Permanent deletion keeps test files out of the real Trash.
         config.safety.trash = .rules
         config.automation.snapshot = nil
     }
@@ -39,7 +38,8 @@ struct RunnerFixture {
 
     var runner: JobRunner {
         let guardian = SafetyGuard(home: tree.path("home"), protectedRules: rules, volumes: emptyVolumes, isRunningAsRoot: false)
-        let executor = CleanupExecutor(safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules)
+        var executor = CleanupExecutor(safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules)
+        executor.trash = sandboxTrash(home: tree.path("home"))
         return JobRunner(context: context, executor: executor, notifier: notifier)
     }
 

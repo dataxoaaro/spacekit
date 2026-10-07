@@ -7,9 +7,11 @@ import Testing
 struct CleanupExecutorTests {
     func executor(_ tree: TempTree, rules: [Rule] = [], budget: ByteCount = .gb(100)) -> CleanupExecutor {
         let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
-        return CleanupExecutor(
+        var executor = CleanupExecutor(
             safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules,
             maxBytesPerAutomaticRun: budget.bytes)
+        executor.trash = sandboxTrash(home: tree.path("home"))
+        return executor
     }
 
     @Test("Dry runs touch nothing")

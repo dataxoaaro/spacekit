@@ -15,10 +15,9 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams", from: "5.1.0"),
     ],
     targets: [
-        .target(name: "CRemovefile"),
         .target(
             name: "SpaceKitCore",
-            dependencies: ["CRemovefile", .product(name: "Yams", package: "Yams")]
+            dependencies: [.product(name: "Yams", package: "Yams")]
         ),
         .target(
             name: "SpaceKitTUI",

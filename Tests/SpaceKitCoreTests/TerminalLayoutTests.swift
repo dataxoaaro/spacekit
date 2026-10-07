@@ -162,36 +162,4 @@ struct ScrollingTests {
             }
         }
     }
-
-    @Test("A pager knows the end was shown only after drawing it")
-    func pagerEnd() {
-        var pager = Pager(lineCount: 10)
-        #expect(pager.display(visible: 4) == 0..<4)
-        #expect(!pager.hasShownEnd)
-        pager.scroll(by: 4, visible: 4)
-        #expect(pager.display(visible: 4) == 4..<8)
-        #expect(!pager.hasShownEnd)
-        pager.scroll(by: 100, visible: 4)
-        #expect(pager.display(visible: 4) == 6..<10)
-        #expect(pager.hasShownEnd)
-        pager.scroll(by: -100, visible: 4)
-        #expect(pager.display(visible: 4) == 0..<4)
-        #expect(pager.hasShownEnd)
-    }
-
-    @Test("A pager that fits shows its end at once; one that is never drawn doesn't")
-    func pagerFits() {
-        var fits = Pager(lineCount: 3)
-        #expect(fits.display(visible: 8) == 0..<3)
-        #expect(fits.hasShownEnd)
-        var empty = Pager(lineCount: 0)
-        #expect(empty.display(visible: 1) == 0..<0)
-        #expect(empty.hasShownEnd)
-        var hidden = Pager(lineCount: 3)
-        #expect(hidden.display(visible: 0).isEmpty)
-        #expect(!hidden.hasShownEnd)
-        hidden.scroll(by: 5, visible: 0)
-        #expect(hidden.offset == 2)
-        #expect(!hidden.hasShownEnd)
-    }
 }

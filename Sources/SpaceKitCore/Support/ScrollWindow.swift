@@ -23,33 +23,3 @@ public struct ScrollWindow: Equatable, Sendable {
         return offset..<min(count, offset + visible)
     }
 }
-
-/// A scrolling view of read-only lines that remembers whether its last line has been on screen, so a
-/// confirmation can wait until everything it covers has been shown.
-public struct Pager: Equatable, Sendable {
-    public let lineCount: Int
-    public private(set) var offset = 0
-    /// True once the last line has been drawn (or there were no lines).
-    public private(set) var hasShownEnd = false
-
-    public init(lineCount: Int) { self.lineCount = max(0, lineCount) }
-
-    /// Moves by `delta` lines when `visible` lines fit, without scrolling past either end.
-    public mutating func scroll(by delta: Int, visible: Int) {
-        offset = Pager.clamp(offset + delta, lineCount: lineCount, visible: visible)
-    }
-
-    /// The lines to draw in `visible` rows. Call it with what is actually drawn: it records whether the end
-    /// was shown.
-    public mutating func display(visible: Int) -> Range<Int> {
-        guard visible > 0 else { return offset..<offset }
-        offset = Pager.clamp(offset, lineCount: lineCount, visible: visible)
-        let range = offset..<min(lineCount, offset + visible)
-        if range.upperBound == lineCount { hasShownEnd = true }
-        return range
-    }
-
-    private static func clamp(_ offset: Int, lineCount: Int, visible: Int) -> Int {
-        min(max(offset, 0), max(0, lineCount - max(1, visible)))
-    }
-}

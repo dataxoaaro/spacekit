@@ -9,9 +9,7 @@ public struct MountedVolume: Sendable, Hashable, Identifiable {
     public let device: String
     public let fileSystem: String
     public let deviceID: dev_t
-    public let isReadOnly: Bool
     public let isBrowsable: Bool
-    public let isLocal: Bool
 
     /// The APFS container (or whole disk) this volume lives on, e.g. `disk3` for `/dev/disk3s5` or `/dev/disk3s1s1`.
     public var container: String? {
@@ -93,8 +91,8 @@ public enum LocalSnapshots {
 
     /// The command that releases snapshot-held space right away. It must be run by the person, in Terminal;
     /// SpaceKit never thins backups itself.
-    public static func thinCommand(volume: String = "/") -> String {
-        "tmutil thinlocalsnapshots \(volume) 999999999999 4"
+    public static func thinCommand() -> String {
+        "tmutil thinlocalsnapshots / 999999999999 4"
     }
 }
 
@@ -169,16 +167,13 @@ public struct VolumeTable: Sendable {
             }
             var st = stat()
             guard lstat(mountPoint, &st) == 0 else { continue }
-            let flags = entry.f_flags
             result.append(
                 MountedVolume(
                     mountPoint: mountPoint,
                     device: device,
                     fileSystem: fsType,
                     deviceID: st.st_dev,
-                    isReadOnly: flags & UInt32(MNT_RDONLY) != 0,
-                    isBrowsable: flags & UInt32(MNT_DONTBROWSE) == 0,
-                    isLocal: flags & UInt32(MNT_LOCAL) != 0
+                    isBrowsable: entry.f_flags & UInt32(MNT_DONTBROWSE) == 0
                 ))
         }
         return result

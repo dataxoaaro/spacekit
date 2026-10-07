@@ -58,13 +58,25 @@ public struct SafetyVerdict: Sendable, Equatable {
 /// The single gate every removal passes through, in every front end.
 ///
 /// The built-in protections below are not configurable. The config can only *add* protected paths.
-/// See `docs/SAFETY.md` for the reasoning behind each rule.
+/// Every comparison against a protected list uses `PathUtil.comparisonKey`, because APFS treats differently
+/// cased or normalized spellings as the same folder. See `docs/SAFETY.md` for the reasoning behind each rule.
 public struct SafetyGuard: Sendable {
     public let home: String
     public let userProtectedPaths: [String]
     public let protectedRules: [Rule]
     public let volumes: VolumeTable
     public let isRunningAsRoot: Bool
+    /// Where pattern rules without their own `roots` look (the config's `scan.devRoots`).
+    public let patternRoots: [String]
+    /// Reads the capacity of the volume holding a path.
+    public let volumeCapacity: @Sendable (String) -> VolumeCapacity?
+
+    private let critical: [Location]
+    private let sealed: [Location]
+    private let personal: [Location]
+    private let userProtected: [Location]
+    private let mountKeys: [String]
+    private let protectedPatterns: [ProtectedPattern]
 
     /// An automatic job may not remove a single item bigger than this share of the volume's used space.
     public static let maxAutomaticVolumeShare = 0.25
@@ -73,22 +85,48 @@ public struct SafetyGuard: Sendable {
 
     public init(
         home: String = PathUtil.home, userProtectedPaths: [String] = [], protectedRules: [Rule] = [],
-        volumes: VolumeTable = .current(), isRunningAsRoot: Bool = geteuid() == 0
+        volumes: VolumeTable = .current(), isRunningAsRoot: Bool = geteuid() == 0, patternRoots: [String] = ["~"],
+        volumeCapacity: @escaping @Sendable (String) -> VolumeCapacity? = { VolumeCapacity.of(path: $0) }
     ) {
         self.home = home
         self.userProtectedPaths = userProtectedPaths.map { PathUtil.expand($0, home: home) }
         self.protectedRules = protectedRules.filter { $0.safety.level == .protected }
         self.volumes = volumes
         self.isRunningAsRoot = isRunningAsRoot
+        self.patternRoots = patternRoots
+        self.volumeCapacity = volumeCapacity
+        critical = SafetyGuard.criticalPaths(home: home).map(Location.init)
+        sealed = SafetyGuard.sealedTrees(home: home).map(Location.init)
+        personal = SafetyGuard.personalAreas(home: home).map(Location.init)
+        // A protected path that is (or sits behind) a symlink is protected at its real location too.
+        userProtected = self.userProtectedPaths.flatMap { path in
+            [path, PathUtil.resolveParent(path), PathUtil.realpath(path)].compactMap { $0 }
+                .map { Location(path: path, key: PathUtil.comparisonKey($0)) }
+        }
+        mountKeys = volumes.volumes.map { PathUtil.comparisonKey($0.mountPoint) }
+        protectedPatterns = self.protectedRules.map { rule in
+            ProtectedPattern(
+                rule: rule,
+                patterns: rule.paths.map { PathUtil.comparisonKey(PathUtil.expand($0, home: home)) },
+                names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
+        }
     }
 
     // MARK: Built-in lists
 
     /// Never removed, and nothing that *contains* them is ever removed either. This is what makes
     /// "delete the whole disk", "delete my home folder" or "delete /Users" impossible.
-    public var criticalPaths: [String] {
-        let h = home
-        return [
+    public var criticalPaths: [String] { SafetyGuard.criticalPaths(home: home) }
+
+    /// Nothing inside these, nor the folders themselves, is ever removed: the OS, credentials, and app
+    /// databases that break when edited.
+    public var sealedTrees: [String] { SafetyGuard.sealedTrees(home: home) }
+
+    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
+    public var personalAreas: [String] { SafetyGuard.personalAreas(home: home) }
+
+    static func criticalPaths(home h: String) -> [String] {
+        [
             "/", "/System", "/System/Volumes", "/System/Volumes/Data", "/System/Volumes/Preboot", "/System/Volumes/VM",
             "/System/Volumes/Update", "/usr", "/bin", "/sbin", "/etc", "/var", "/tmp", "/private", "/private/etc",
             "/private/var", "/private/var/db", "/private/tmp", "/Library", "/Applications", "/Users", "/Volumes", "/opt", "/cores", "/dev",
@@ -105,30 +143,34 @@ public struct SafetyGuard: Sendable {
         ]
     }
 
-    /// Nothing inside these is ever removed: the OS, credentials, and app databases that break when edited.
-    public var sealedTrees: [String] {
-        let h = home
-        return [
+    static func sealedTrees(home h: String) -> [String] {
+        [
             "/System", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/private/etc",
             "/private/var/db", "/Library/Keychains", "/System/Volumes/Preboot", "/System/Volumes/VM", "/System/Volumes/Update",
             "\(h)/Library/Keychains", "\(h)/.ssh", "\(h)/.gnupg", "\(h)/.aws", "\(h)/.kube", "\(h)/.config/gcloud", "\(h)/.config/gh",
             "\(h)/Library/Mail", "\(h)/Library/Messages", "\(h)/Library/Application Support/AddressBook", "\(h)/Library/Calendars",
+            "\(h)/Library/Group Containers/group.com.apple.calendar",
             "\(h)/Library/Containers/com.docker.docker/Data/vms", "\(h)/Library/Group Containers/group.com.docker",
+            // Password managers: their vaults and local caches of them.
             "\(h)/Library/Application Support/1Password", "\(h)/Library/Group Containers/2BUA8C4S2C.com.1password",
+            "\(h)/Library/Containers/com.1password.1password", "\(h)/Library/Group Containers/2BUA8C4S2C.com.agilebits",
+            "\(h)/Library/Containers/com.agilebits.onepassword7", "\(h)/Library/Application Support/Bitwarden",
+            "\(h)/Library/Containers/com.bitwarden.desktop", "\(h)/Library/Containers/in.sinew.Enpass-Desktop",
+            "\(h)/Library/Application Support/KeePassXC", "\(h)/Library/Application Support/Proton Pass",
+            "\(h)/Library/Containers/com.lastpass.LastPass",
         ]
     }
 
-    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
-    public var personalAreas: [String] {
-        let h = home
-        return [
+    static func personalAreas(home h: String) -> [String] {
+        [
             "\(h)/Documents", "\(h)/Desktop", "\(h)/Downloads", "\(h)/Pictures", "\(h)/Movies", "\(h)/Music",
             "\(h)/Library/Mobile Documents", "\(h)/Library/CloudStorage", "\(h)/Library/Containers", "\(h)/Library/Group Containers",
             "\(h)/Library/Application Support/MobileSync", "\(h)/Public",
         ]
     }
 
-    /// Name suffixes of package folders whose insides must never be edited piecemeal.
+    /// Name suffixes of package folders whose insides must never be edited piecemeal. Lowercase, compared
+    /// against comparison keys.
     static let sealedBundleSuffixes = [
         ".photoslibrary", ".photolibrary", ".musiclibrary", ".tvlibrary", ".aplibrary", ".keychain-db", ".keychain",
     ]
@@ -151,14 +193,12 @@ public struct SafetyGuard: Sendable {
     ) -> SafetyVerdict {
         var verdict = SafetyVerdict.allow
 
-        guard rawPath.hasPrefix("/") || rawPath.hasPrefix("~") else {
+        // `~name` would otherwise expand relative to the working directory.
+        guard rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/") else {
             return SafetyVerdict(decision: .block, reasons: ["Path must be absolute"])
         }
         let path = PathUtil.expand(rawPath, home: home)
-        // Resolve symlinks in the parent so a link can't smuggle a protected folder in under another name.
-        // The final component is not resolved: removing a symlink removes the link, not its target.
-        let resolved = PathUtil.resolveParent(path)
-        let candidates = Array(Set([path, resolved]))
+        let candidates = SafetyGuard.spellings(of: path)
 
         if isRunningAsRoot {
             verdict.raise(.block, "SpaceKit never removes files while running as root (sudo)")
@@ -178,12 +218,17 @@ public struct SafetyGuard: Sendable {
             verdict.raise(context.isAutomatic ? .block : .confirm, "This folder contains git repositories")
         }
 
-        let personal = candidates.contains { candidate in personalAreas.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
+        let isPersonal = candidates.contains { candidate in
+            let key = PathUtil.comparisonKey(candidate)
+            return personal.contains { PathUtil.isStrictAncestor($0.key, of: key) }
+        }
 
-        if let size, let capacity = VolumeCapacity.of(path: PathUtil.parent(path)), capacity.used > 0 {
+        if let size, let capacity = volumeCapacity(PathUtil.parent(path)), capacity.used > 0 {
             let share = Double(size) / Double(capacity.used)
-            if context.isAutomatic && share > SafetyGuard.maxAutomaticVolumeShare {
-                verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(Int(share * 100))% of the disk's used space")
+            if context.isAutomatic {
+                if share > SafetyGuard.maxAutomaticVolumeShare {
+                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(Int(share * 100))% of the disk's used space")
+                }
             } else if share > SafetyGuard.confirmVolumeShare {
                 verdict.raise(.confirm, "This holds \(Int(share * 100))% of the disk's used space")
             }
@@ -195,7 +240,7 @@ public struct SafetyGuard: Sendable {
                 if rule.safety.level == .review {
                     verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
                 }
-            } else if personal {
+            } else if isPersonal {
                 verdict.raise(.confirm, "This is personal data, not a cache")
             } else {
                 verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
@@ -214,7 +259,7 @@ public struct SafetyGuard: Sendable {
             }
             // Rules carry curated knowledge about what's inside personal areas (Mail downloads, app caches in
             // containers); folders a person typed into a job don't, so those get the strict treatment.
-            if personal && rule == nil {
+            if isPersonal && rule == nil {
                 let ageOK = (automation.olderThan?.days ?? 0) >= 7
                 if !(isCustom && ageOK && automation.usesTrash) {
                     verdict.raise(
@@ -227,68 +272,103 @@ public struct SafetyGuard: Sendable {
         return verdict
     }
 
+    /// The spellings `path` is checked under: as given, with symlinked parents resolved (a link can't smuggle a
+    /// protected folder in under another name), and, unless the item is itself a symlink, as stored on disk.
+    /// The final component of a symlink is not resolved: removing a symlink removes the link, not its target.
+    static func spellings(of path: String) -> [String] {
+        var result = [path]
+        func add(_ spelling: String?) {
+            if let spelling, !result.contains(spelling) { result.append(spelling) }
+        }
+        add(PathUtil.resolveParent(path))
+        var st = stat()
+        if lstat(path, &st) == 0, st.st_mode & S_IFMT != S_IFLNK {
+            add(PathUtil.realpath(path))
+        }
+        return result
+    }
+
     /// Checks that can never be overridden.
     private func checkHardLimits(_ path: String, into verdict: inout SafetyVerdict) {
-        let parts = PathUtil.components(path)
+        let key = PathUtil.comparisonKey(path)
+        let parts = PathUtil.components(key)
         if parts.count < 2 {
             verdict.raise(.block, "Top-level folders and volume roots can't be removed")
         }
         // /Volumes/<name> is where volumes mount; block it even when nothing is mounted right now.
-        if (parts.count == 2 && parts[0] == "Volumes") || (parts.count == 3 && parts[0] == "System" && parts[1] == "Volumes") {
+        if (parts.count == 2 && parts[0] == "volumes") || (parts.count == 3 && parts[0] == "system" && parts[1] == "volumes") {
             verdict.raise(.block, "Volume roots can't be removed")
         }
-        if let critical = criticalPaths.first(where: { PathUtil.isAncestorOrEqual(path, of: $0) }) {
+        if let critical = critical.first(where: { PathUtil.isAncestorOrEqual(key, of: $0.key) }) {
             verdict.raise(
                 .block,
-                critical == path
-                    ? "\(PathUtil.abbreviate(path, home: home)) is a protected system or home location"
-                    : "Removing this would also remove \(PathUtil.abbreviate(critical, home: home)), which is protected")
+                critical.key == key
+                    ? "\(PathUtil.abbreviate(critical.path, home: home)) is a protected system or home location"
+                    : "Removing this would also remove \(PathUtil.abbreviate(critical.path, home: home)), which is protected")
         }
-        if let sealed = sealedTrees.first(where: { PathUtil.isStrictAncestor($0, of: path) }) {
-            verdict.raise(.block, "Nothing inside \(PathUtil.abbreviate(sealed, home: home)) is ever removed")
+        if let sealed = sealed.first(where: { PathUtil.isAncestorOrEqual($0.key, of: key) }) {
+            verdict.raise(.block, "\(PathUtil.abbreviate(sealed.path, home: home)) and everything inside it are never removed")
         }
-        if volumes.isMountPoint(path)
-            || volumes.volumes.contains(where: { PathUtil.isStrictAncestor(path, of: $0.mountPoint) && $0.mountPoint != "/" })
-        {
+        if mountKeys.contains(key) || mountKeys.contains(where: { $0 != "/" && PathUtil.isStrictAncestor(key, of: $0) }) {
             verdict.raise(.block, "This is (or contains) a mounted volume")
         }
-        for protected in userProtectedPaths
-        where PathUtil.isAncestorOrEqual(protected, of: path) || PathUtil.isAncestorOrEqual(path, of: protected) {
-            verdict.raise(.block, "Protected in your configuration: \(PathUtil.abbreviate(protected, home: home))")
+        for protected in userProtected
+        where PathUtil.isAncestorOrEqual(protected.key, of: key) || PathUtil.isAncestorOrEqual(key, of: protected.key) {
+            verdict.raise(.block, "Protected in your configuration: \(PathUtil.abbreviate(protected.path, home: home))")
         }
-        let components = PathUtil.components(path)
-        if components.contains(where: { $0 == ".git" }) {
+        if parts.contains(".git") {
             verdict.raise(.block, "Git metadata is never removed")
         }
-        if components.dropLast().contains(where: { component in SafetyGuard.sealedBundleSuffixes.contains { component.hasSuffix($0) } }) {
+        if parts.dropLast().contains(where: { component in SafetyGuard.sealedBundleSuffixes.contains { component.hasSuffix($0) } }) {
             verdict.raise(.block, "Files inside libraries such as Photos are managed by their app")
         }
-        for rule in protectedRules {
-            for pattern in rule.paths {
-                let base = PathUtil.expand(pattern, home: home)
-                let matches =
-                    base.contains("*")
-                    ? PathUtil.matches(path, glob: base) || PathUtil.matches(path, glob: base + "/**")
-                    : PathUtil.isAncestorOrEqual(base, of: path) || PathUtil.isAncestorOrEqual(path, of: base)
-                if matches { verdict.raise(.block, "Protected by rule “\(rule.name)”") }
-            }
-            if let names = rule.match?.names, components.contains(where: { names.contains(String($0)) }) {
-                verdict.raise(.block, "Protected by rule “\(rule.name)”")
+        for protected in protectedPatterns {
+            let located = protected.patterns.contains { PathUtil.isInside(key, pattern: $0) || PathUtil.couldContain(key, pattern: $0) }
+            if located || parts.contains(where: { protected.names.contains(String($0)) }) {
+                verdict.raise(.block, "Protected by rule “\(protected.rule.name)”")
             }
         }
     }
 
-    /// True if `path` is one of the places `rule` describes (or inside one).
+    /// True if `path` is one of the places `rule` describes (or inside one). For pattern rules this mirrors
+    /// where `RuleEngine` looks: under the rule's roots, outside its exclusions and outside bundles.
     public func isInsideRuleScope(_ path: String, rule: Rule) -> Bool {
-        for pattern in rule.paths {
-            let base = PathUtil.expand(pattern, home: home)
-            if base.contains("*") {
-                if PathUtil.matches(path, glob: base) || PathUtil.matches(path, glob: base + "/**") { return true }
-            } else if PathUtil.isAncestorOrEqual(base, of: path) {
-                return true
-            }
-        }
-        if let names = rule.match?.names, names.contains(PathUtil.lastComponent(path)) { return true }
-        return false
+        if rule.paths.contains(where: { PathUtil.isInside(path, pattern: PathUtil.expand($0, home: home)) }) { return true }
+        guard let match = rule.match, match.names.contains(PathUtil.lastComponent(path)) else { return false }
+        let roots = (match.roots ?? patternRoots).map { PathUtil.expand($0, home: home) }
+        guard roots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
+        return !isExcludedFromPatterns(path, match: match)
     }
+
+    /// Exclusions are compared by key so a differently spelled path stays excluded.
+    private func isExcludedFromPatterns(_ path: String, match: PatternSpec) -> Bool {
+        let key = PathUtil.comparisonKey(path)
+        let excluded = (RuleEngine.defaultPatternExcludes + match.exclude).contains { exclude in
+            PathUtil.isInside(key, pattern: PathUtil.comparisonKey(PathUtil.expand(exclude, home: home)))
+        }
+        return excluded
+            || PathUtil.components(key).dropLast().contains { component in RuleEngine.bundleSuffixes.contains { component.hasSuffix($0) } }
+    }
+}
+
+/// A protected location as written (for messages) and as compared.
+private struct Location: Sendable {
+    let path: String
+    let key: String
+
+    init(_ path: String) {
+        self.init(path: path, key: PathUtil.comparisonKey(path))
+    }
+
+    init(path: String, key: String) {
+        self.path = path
+        self.key = key
+    }
+}
+
+/// A protected rule's locations and names, as comparison keys.
+private struct ProtectedPattern: Sendable {
+    let rule: Rule
+    let patterns: [String]
+    let names: Set<String>
 }

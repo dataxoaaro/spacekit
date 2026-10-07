@@ -166,7 +166,7 @@ private struct HardLinkEntry {
     var ownerFolder: String
     var ownerName: String
 
-    func sortsAfter(folder: String, name: String) -> Bool {
+    func sortsBeforeOwner(folder: String, name: String) -> Bool {
         folder != ownerFolder ? folder < ownerFolder : name < ownerName
     }
 }
@@ -314,7 +314,7 @@ private final class ScanJob: @unchecked Sendable {
                     size: size, modified: modified, credited: node, creditedName: name, owner: node, ownerFolder: folder, ownerName: name)
                 return true
             }
-            if table.values[index].sortsAfter(folder: folder, name: name) {
+            if table.values[index].sortsBeforeOwner(folder: folder, name: name) {
                 table.values[index].owner = node
                 table.values[index].ownerFolder = folder
                 table.values[index].ownerName = name

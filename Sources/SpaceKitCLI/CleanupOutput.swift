@@ -25,10 +25,17 @@ enum CleanupOutput {
         return lines
     }
 
+    /// Each reason carries its own decision: a blocked item can also have a reason that alone would only need
+    /// confirmation, and that one isn't labelled "Blocked".
     private static func verdictLines(_ verdict: SafetyVerdict, _ text: String) -> [String] {
-        let reasons = verdict.decision == .allow ? [] : verdict.reasons.map(Output.safe)
-        return ["  \(verdict.decision.mark) " + text]
-            + reasons.map { "        " + (verdict.decision == .block ? "Blocked: \($0)" : $0).fg(verdict.decision.color) }
+        var lines = ["  \(verdict.decision.mark) " + text]
+        guard verdict.decision != .allow else { return lines }
+        for entry in verdict.entries {
+            let reason = Output.safe(entry.reason)
+            let label: String = entry.decision == .block ? "Blocked: " + reason : reason
+            lines.append("        " + label.fg(entry.decision.color))
+        }
+        return lines
     }
 
     /// The summary, then everything that didn't go as planned.
@@ -76,9 +83,7 @@ enum CleanupOutput {
         }
         Output.emit([heading.bold] + planLines(plan, executor: executor, context: review), toStandardError: json)
         let preview = executor.execute(plan, context: .manual(confirmed: true), dryRun: true)
-        let wouldAct = (preview.items.map(\.outcome) + preview.commands.map(\.outcome)).contains {
-            if case .wouldRemove = $0 { true } else { false }
-        }
+        let wouldAct = preview.items.contains { $0.outcome.isWouldRemove } || preview.commands.contains { $0.outcome.isWouldRemove }
         guard wouldAct else {
             Output.emit(["Nothing in this plan can be removed.".dim], toStandardError: json)
             if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
@@ -108,7 +113,7 @@ enum CleanupOutput {
             if case .wouldRemove(let bytes) = entry.outcome { return total + bytes }
             return total
         }
-        let commands = preview.commands.filter { if case .wouldRemove = $0.outcome { true } else { false } }.count
+        let commands = preview.commands.filter { $0.outcome.isWouldRemove }.count
         let parts = [
             itemBytes > 0 ? ByteCount.format(itemBytes) + (plan.useTrash ? " to the Trash" : " permanently") : "",
             commands > 0 ? "run \(commands) tool command\(commands == 1 ? "" : "s")" : "",

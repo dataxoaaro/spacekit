@@ -265,14 +265,11 @@ public struct RuleEngine: Sendable {
 
                     var matched = false
                     for (index, rule, ruleRoots) in byName[child.name] ?? [] {
-                        let match = rule.match!
-                        guard ruleRoots.contains(where: { PathUtil.isAncestorOrEqual($0, of: childPath) }) else { continue }
-                        if !match.sibling.isEmpty && !match.sibling.contains(where: { tree.markers.contains($0, in: node.markers) }) {
-                            continue
-                        }
-                        if !match.contains.isEmpty && !match.contains.contains(where: { tree.markers.contains($0, in: child.markers) }) {
-                            continue
-                        }
+                        guard ruleRoots.contains(where: { PathUtil.isAncestorOrEqual($0, of: childPath) }),
+                            rule.match!.markersPresent(
+                                sibling: { tree.markers.contains($0, in: node.markers) },
+                                inside: { tree.markers.contains($0, in: child.markers) })
+                        else { continue }
                         var item = RuleEngine.item(
                             for: child, markers: tree.markers, project: path, lastUsed: projectActivity(node, excluding: child))
                         item.name = child.name
@@ -361,5 +358,13 @@ public struct RuleEngine: Sendable {
             }
         }
         return result
+    }
+}
+
+extension PatternSpec {
+    /// The marker check of a pattern match: at least one `sibling` next to the folder and at least one of
+    /// `contains` inside it, each only when listed. The engine answers from scan markers, `RuleIndex` from disk.
+    func markersPresent(sibling hasSibling: (String) -> Bool, inside hasInside: (String) -> Bool) -> Bool {
+        (sibling.isEmpty || sibling.contains(where: hasSibling)) && (contains.isEmpty || contains.contains(where: hasInside))
     }
 }

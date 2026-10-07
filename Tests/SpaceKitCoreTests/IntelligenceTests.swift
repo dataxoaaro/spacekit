@@ -176,3 +176,18 @@ struct StorageCategoryTests {
         #expect(lookup("Documents/report.pdf") == .documents)
     }
 }
+
+@Suite("Rule index")
+struct RuleIndexTests {
+    @Test("Pattern rules are recognised only with their marker on disk")
+    func patternMarkers() throws {
+        let tree = try TempTree()
+        try tree.file("app/package.json", bytes: 10)
+        try tree.directory("app/node_modules")
+        try tree.directory("loose/node_modules")
+        let rule = Rule(id: "nm", name: "node_modules", match: PatternSpec(names: ["node_modules"], sibling: ["package.json"]))
+        let index = RuleIndex(rules: [rule], home: tree.root)
+        #expect(index.rule(for: tree.path("app/node_modules"))?.id == "nm")
+        #expect(index.rule(for: tree.path("loose/node_modules")) == nil)
+    }
+}

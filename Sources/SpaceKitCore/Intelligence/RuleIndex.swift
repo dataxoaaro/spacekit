@@ -43,33 +43,15 @@ public struct RuleIndex: Sendable {
         let fm = FileManager.default
         let parent = PathUtil.parent(path)
         return candidates.first { rule in
-            guard let match = rule.match else { return false }
-            if !match.sibling.isEmpty && !match.sibling.contains(where: { fm.fileExists(atPath: PathUtil.join(parent, $0)) }) {
-                return false
-            }
-            if !match.contains.isEmpty && !match.contains.contains(where: { fm.fileExists(atPath: PathUtil.join(path, $0)) }) {
-                return false
-            }
-            return true
+            rule.match?.markersPresent(
+                sibling: { fm.fileExists(atPath: PathUtil.join(parent, $0)) },
+                inside: { fm.fileExists(atPath: PathUtil.join(path, $0)) }) ?? false
         }
     }
-
-    /// The rule for this path or its nearest ancestor (so files deep inside DerivedData are recognised).
-    public func rule(containing path: String) -> Rule? {
-        var current = path
-        while current != "/" && !current.isEmpty {
-            if let rule = rule(for: current) { return rule }
-            current = PathUtil.parent(current)
-        }
-        return nil
-    }
-
-    /// A pattern rule whose folder name matches, without checking markers. Used only as a hint.
-    public func patternHint(forName name: String) -> Rule? { byName[name]?.first }
 }
 
-/// Memoizes `RuleIndex.rule(containing:)` for one pass over many related paths (a map layout, a list).
-/// Not thread-safe: use one per task.
+/// The rule for a path or its nearest ancestor (so files deep inside DerivedData are recognised), memoized
+/// for one pass over many related paths (a map layout, a list). Not thread-safe: use one per task.
 public final class RuleLookupCache {
     public let index: RuleIndex
     private var containing: [String: Rule?] = [:]

@@ -63,6 +63,7 @@ public struct Scanner: Sendable {
         progress.root.withLock { $0 = root }
 
         job.run()
+        job.resolveHardLinks()
         Scanner.aggregate(root)
 
         let elapsed = ContinuousClock.now - clock
@@ -157,6 +158,23 @@ private struct HardLinkKey: Hashable {
     let inode: UInt64
 }
 
+/// One multiply-linked file. During the scan its bytes go to the first link a worker reaches, so live totals
+/// stay right; afterwards they move to the link in the folder whose path sorts first (then by name), so the
+/// same disk always gives the same tree whatever the thread timing.
+private struct HardLinkEntry {
+    let size: UInt64
+    let modified: Int64
+    let credited: DirNode
+    let creditedName: String
+    var owner: DirNode
+    var ownerFolder: String
+    var ownerName: String
+
+    func sortsAfter(folder: String, name: String) -> Bool {
+        folder != ownerFolder ? folder < ownerFolder : name < ownerName
+    }
+}
+
 private final class ScanJob: @unchecked Sendable {
     let options: ScanOptions
     let progress: ScanProgress
@@ -167,7 +185,7 @@ private final class ScanJob: @unchecked Sendable {
     /// Exact paths to skip, with the reason flag.
     let skipPaths: [String: DirNode.Flags]
     let excludeGlobs: [String]
-    let hardLinks = Mutex<Set<HardLinkKey>>([])
+    let hardLinks = Mutex<[HardLinkKey: HardLinkEntry]>([:])
     let unreadable = Mutex<[String]>([])
 
     private let condition = NSCondition()
@@ -299,6 +317,52 @@ private final class ScanJob: @unchecked Sendable {
         }
     }
 
+    // MARK: Hard links
+
+    /// Records one link of a multiply-linked file. Returns true if this is the first link seen, which gets
+    /// the bytes for now.
+    private func recordHardLink(_ key: HardLinkKey, node: DirNode, folder: String, name: String, size: UInt64, modified: Int64) -> Bool {
+        hardLinks.withLock { table in
+            guard let index = table.index(forKey: key) else {
+                table[key] = HardLinkEntry(
+                    size: size, modified: modified, credited: node, creditedName: name, owner: node, ownerFolder: folder, ownerName: name)
+                return true
+            }
+            if table.values[index].sortsAfter(folder: folder, name: name) {
+                table.values[index].owner = node
+                table.values[index].ownerFolder = folder
+                table.values[index].ownerName = name
+            }
+            return false
+        }
+    }
+
+    /// Moves each multiply-linked file's bytes from the link credited during the scan to its owner.
+    /// Runs once, single-threaded, after every worker has finished and before aggregation.
+    func resolveHardLinks() {
+        let entries = hardLinks.withLock { table in
+            defer { table = [:] }
+            return Array(table.values)
+        }
+        for entry in entries where entry.owner !== entry.credited || entry.ownerName != entry.creditedName {
+            let from = entry.credited
+            let to = entry.owner
+            // The links themselves stay counted where they are; only the bytes (and the tracked leaf) move.
+            if entry.size >= options.minFileSize && entry.size > 0 {
+                guard let index = from.files.firstIndex(where: { $0.name == entry.creditedName }) else { continue }
+                from.files.remove(at: index)
+                from.otherFilesCount += 1
+                to.otherFilesCount -= min(to.otherFilesCount, 1)
+                to.files.append(FileLeaf(name: entry.ownerName, size: entry.size, modified: entry.modified))
+            } else {
+                from.otherFilesSize -= min(from.otherFilesSize, entry.size)
+                to.otherFilesSize &+= entry.size
+            }
+            from.directFileSize -= min(from.directFileSize, entry.size)
+            to.directFileSize &+= entry.size
+        }
+    }
+
     // MARK: Listing one directory
 
     private func publish(_ node: DirNode) {
@@ -358,7 +422,6 @@ private final class ScanJob: @unchecked Sendable {
         attributes.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE)
 
         let minFileSize = options.minFileSize
-        let countHardLinksOnce = options.countHardLinksOnce
         let liveDepth = options.liveDepth
 
         var childNodes: [DirNode] = []
@@ -475,9 +538,11 @@ private final class ScanJob: @unchecked Sendable {
                         allocated = UInt64(max(0, field.loadUnaligned(as: Int64.self)))
                         field += 8
                     }
-                    if countHardLinksOnce, linkCount > 1, objectType == UInt32(VREG.rawValue) {
-                        let key = HardLinkKey(device: device, inode: inode)
-                        let isFirst = hardLinks.withLock { $0.insert(key).inserted }
+                    if linkCount > 1, objectType == UInt32(VREG.rawValue) {
+                        let fileName = String(decoding: UnsafeBufferPointer(start: name, count: nameLength), as: UTF8.self)
+                        let isFirst = recordHardLink(
+                            HardLinkKey(device: device, inode: inode), node: node, folder: item.path, name: fileName,
+                            size: allocated, modified: modified)
                         if !isFirst { allocated = 0 }
                     }
                     directBytes &+= allocated

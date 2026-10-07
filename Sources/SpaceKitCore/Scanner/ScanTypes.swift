@@ -24,8 +24,6 @@ public struct ScanOptions: Sendable {
     public var markers: MarkerRegistry = MarkerRegistry(names: [])
     /// Directories up to this depth keep a live running total during the scan (for progressive UI).
     public var liveDepth: Int = 2
-    /// Count each multiply-hard-linked file once (pnpm stores, Time Machine, etc.).
-    public var countHardLinksOnce = true
 
     public init() {}
 

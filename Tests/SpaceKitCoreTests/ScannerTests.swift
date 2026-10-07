@@ -46,6 +46,29 @@ struct ScannerTests {
         #expect(result.root.size == tree.allocated("store/blob"))
     }
 
+    @Test("Hard-linked bytes go to the link whose folder sorts first, whatever the thread timing", arguments: [UInt64(0), 2_000_000])
+    func hardLinkAttribution(minFileSize: UInt64) throws {
+        let tree = try TempTree()
+        let original = try tree.file("store/blob", bytes: 1_000_000)
+        for folder in ["z-last", "a-first", "m-middle"] {
+            try tree.directory(folder)
+            try FileManager.default.linkItem(atPath: original, toPath: tree.path("\(folder)/linked"))
+        }
+        for index in 0..<40 { try tree.file("filler/d\(index)/f.bin", bytes: 4_000) }
+        let bytes = tree.allocated("store/blob")
+        for threads in [1, 2, 4, 8, 1, 4, 8] {
+            let result = try scan(tree.root, minFileSize: minFileSize) { $0.threads = threads }
+            #expect(result.node(at: tree.path("a-first"))?.size == bytes, "threads \(threads)")
+            for folder in ["store", "m-middle", "z-last"] {
+                #expect(result.node(at: tree.path(folder))?.size == 0, "\(folder), threads \(threads)")
+                #expect(result.node(at: tree.path(folder))?.directFileCount == 1)
+            }
+            let first = try #require(result.node(at: tree.path("a-first")))
+            #expect(first.files.map(\.name) == (minFileSize == 0 ? ["linked"] : []))
+            #expect(result.inconsistencies().isEmpty, "\(result.inconsistencies())")
+        }
+    }
+
     @Test("Symlinks are not followed")
     func symlinks() throws {
         let tree = try TempTree()

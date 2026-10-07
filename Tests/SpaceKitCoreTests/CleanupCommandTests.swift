@@ -65,6 +65,9 @@ struct CleanupCommandTests {
         let builtin = rule(tree, origin: .builtin, command: arguments)
         let refused = sandboxExecutor(tree, rules: [user]).execute(plan, context: .manual(confirmed: true), dryRun: true)
         #expect(isSkipped(outcome(refused), mentioning: "allowedCommands"))
+        // Validation warns with the words the executor refuses with.
+        let warning = RuleLibrary.issues(for: user).first { $0.severity == .warning }?.message ?? ""
+        #expect(isSkipped(outcome(refused), mentioning: warning))
         let trusted = sandboxExecutor(tree, rules: [builtin]).execute(plan, context: .manual(confirmed: true), dryRun: true)
         #expect(wouldRun(outcome(trusted)))
         let allowed = sandboxExecutor(tree, rules: [user], allowed: ["swift"]).execute(plan, context: .manual(confirmed: true), dryRun: true)

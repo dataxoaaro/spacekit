@@ -287,6 +287,13 @@ public struct RuleLibrary: Sendable {
         return components.count < 2 || prefix == "/" || prefix == folded(home) || folded(expanded) == folded(home)
     }
 
+    /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
+    /// executor's refusal say the same thing.
+    static func untrustedRuleCommand(_ executable: String) -> String {
+        "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
+            + "Add it to safety.allowedCommands to allow it"
+    }
+
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
         guard let executable = command.first, Shell.isBareName(executable) else {
             return [(.error, "command must start with a bare program name such as brew, without / or .. or {name}; got '\(command.first ?? "")'")]
@@ -297,8 +304,7 @@ public struct RuleLibrary: Sendable {
                 issues.append((.warning, "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"))
             }
         } else {
-            issues.append(
-                (.warning, "command '\(executable)' only runs if listed in safety.allowedCommands; built-in trust covers SpaceKit's own rules only"))
+            issues.append((.warning, untrustedRuleCommand(executable)))
         }
         if command.contains(where: { $0.contains(";") || $0.contains("&&") || $0.contains("|") || $0.contains("`") || $0.contains("$(") }) {
             issues.append((.error, "commands run without a shell; remove shell syntax (; && | ` $( )"))

@@ -18,6 +18,21 @@ public enum CleanupOutcome: Sendable, Equatable {
         return false
     }
 
+    public var isWouldRemove: Bool {
+        if case .wouldRemove = self { return true }
+        return false
+    }
+
+    public var isSkipped: Bool {
+        if case .skipped = self { return true }
+        return false
+    }
+
+    public var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
     /// Where a trashed item went. `nil` if it was deleted permanently (or not removed).
     public var trashedTo: String? {
         if case .removed(_, let trashedTo) = self { return trashedTo }

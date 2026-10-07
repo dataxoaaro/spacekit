@@ -64,11 +64,7 @@ extension CleanupReport {
     /// Rules whose tool command removed something. Commands free space their own way, so only a re-evaluation of
     /// these rules shows what's left.
     public var rulesToReevaluate: Set<String> {
-        Set(
-            commands.compactMap { entry -> String? in
-                if case .removed = entry.outcome { return entry.command.ruleID }
-                return nil
-            })
+        Set(commands.filter(\.outcome.isRemoved).map(\.command.ruleID))
     }
 }
 

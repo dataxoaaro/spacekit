@@ -67,9 +67,7 @@ extension CleanupExecutor {
                 verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
             }
         } else {
-            verdict.raise(
-                .block,
-                "'\(executable)' comes from a rule outside SpaceKit's built-in library; add it to safety.allowedCommands to allow it")
+            verdict.raise(.block, RuleLibrary.untrustedRuleCommand(executable))
         }
     }
 

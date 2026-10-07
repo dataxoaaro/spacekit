@@ -18,13 +18,14 @@ public struct Age: Hashable, Comparable, Sendable, Codable, CustomStringConverti
 
     public static func < (lhs: Age, rhs: Age) -> Bool { lhs.seconds < rhs.seconds }
 
+    private static let minuteSuffixes = ["minutes", "minute", "min", "m"]
     private static let units: [(suffixes: [String], seconds: Double)] = [
         (["years", "year", "yr", "y"], 365 * 86_400),
         (["months", "month", "mo"], 30 * 86_400),
         (["weeks", "week", "wk", "w"], 7 * 86_400),
         (["days", "day", "d"], 86_400),
         (["hours", "hour", "hr", "h"], 3600),
-        (["minutes", "minute", "min", "m"], 60),
+        (minuteSuffixes, 60),
     ]
 
     /// The longest age accepted from text or config. Keeps every later conversion (descriptions, date arithmetic) finite.
@@ -95,7 +96,7 @@ extension Age {
     public static func retentionProblem(_ age: Age, text: String) -> String? {
         guard age < minimumRetention else { return nil }
         let written = text.trimmingCharacters(in: .whitespaces).lowercased()
-        for suffix in ["minutes", "minute", "min", "m"] where written.hasSuffix(suffix) {
+        for suffix in minuteSuffixes where written.hasSuffix(suffix) {
             let number = written.dropLast(suffix.count).trimmingCharacters(in: .whitespaces)
             if Double(number) != nil {
                 return "'\(text)' means \(number) minutes; did you mean \(number)mo (months)? Ages here must be at least 1 day."

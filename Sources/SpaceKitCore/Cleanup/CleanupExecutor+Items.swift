@@ -1,7 +1,7 @@
 import Foundation
 
 extension CleanupExecutor {
-    enum Removal {
+    enum RemovalMethod {
         case trash, delete
 
         var journalMethod: JournalEntry.Method { self == .trash ? .trash : .delete }
@@ -90,7 +90,7 @@ extension CleanupExecutor {
     /// Removes the plain files directly inside the checked folder, leaving subfolders alone. Each file is checked
     /// by the guard, charged to the budget and journaled on its own, so a partial failure keeps an exact record.
     private func removeLooseFiles(
-        _ item: CleanupItem, in directory: String, removal: Removal, created: Date, context: CleanupContext, run: inout Run
+        _ item: CleanupItem, in directory: String, removal: RemovalMethod, created: Date, context: CleanupContext, run: inout Run
     ) -> CleanupOutcome {
         let names = item.looseFileNames ?? []
         let fd: Int32
@@ -163,7 +163,7 @@ extension CleanupExecutor {
     ///
     /// Things already in the Trash can only be deleted, and automatic runs delete only regenerable (safe) items:
     /// anything else they remove goes to the Trash.
-    func removal(useTrash: Bool, rule: Rule?, inTrash: Bool, context: CleanupContext) -> Removal? {
+    func removal(useTrash: Bool, rule: Rule?, inTrash: Bool, context: CleanupContext) -> RemovalMethod? {
         let isSafe = rule?.safety.level == .safe
         if inTrash { return context.isAutomatic && !isSafe ? nil : .delete }
         return useTrash || (context.isAutomatic && !isSafe) ? .trash : .delete

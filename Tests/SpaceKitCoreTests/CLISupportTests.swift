@@ -65,6 +65,17 @@ struct CleanupReportStatusTests {
     let item = CleanupItem(path: "/tmp/a", size: 1)
     let command = PlannedCommand(ruleID: "r", arguments: ["brew", "cleanup"], estimatedBytes: 1)
 
+    @Test("Outcomes answer what happened without a pattern match")
+    func outcomePredicates() {
+        let outcomes: [CleanupOutcome] = [
+            .removed(bytes: 1, trashedTo: nil), .wouldRemove(bytes: 1), .skipped(reason: "x"), .failed(reason: "y"),
+        ]
+        #expect(outcomes.map(\.isRemoved) == [true, false, false, false])
+        #expect(outcomes.map(\.isWouldRemove) == [false, true, false, false])
+        #expect(outcomes.map(\.isSkipped) == [false, false, true, false])
+        #expect(outcomes.map(\.isFailed) == [false, false, false, true])
+    }
+
     @Test("Skipped items alone are not a problem")
     func skippedItems() {
         var report = CleanupReport(dryRun: false)

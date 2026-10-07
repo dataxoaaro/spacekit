@@ -20,7 +20,7 @@ struct CleanupExecutorTests {
         try tree.file("home/Projects/app/build/out.o", bytes: 10_000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/app/build"), size: 10_000)], useTrash: false)
         let report = executor(tree).execute(plan, context: .manual(confirmed: true), dryRun: true)
-        #expect(report.wouldFreeBytes == 10_000)
+        #expect(report.items.map(\.outcome) == [.wouldRemove(bytes: 10_000)])
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app/build/out.o")))
         #expect(Journal(file: tree.path("state/journal.jsonl")).entries().isEmpty)
     }

@@ -280,11 +280,11 @@ public struct RuleLibrary: Sendable {
     static func isTooBroad(_ path: String, home: String) -> Bool {
         let expanded = PathUtil.expand(path, home: home)
         let components = PathUtil.components(expanded)
-        let literal = components.prefix { component in !component.contains(where: { "*?[".contains($0) }) }
+        let literal = components.prefix { !PathUtil.isGlob(String($0)) }
         // APFS ignores case and Unicode normalization, so `~/library/..` names the same folders as `~/Library/..`.
-        func folded(_ text: String) -> String { text.precomposedStringWithCanonicalMapping.lowercased() }
-        let prefix = folded("/" + literal.joined(separator: "/"))
-        return components.count < 2 || prefix == "/" || prefix == folded(home) || folded(expanded) == folded(home)
+        let prefix = PathUtil.comparisonKey("/" + literal.joined(separator: "/"))
+        let homeKey = PathUtil.comparisonKey(home)
+        return components.count < 2 || prefix == "/" || prefix == homeKey || PathUtil.comparisonKey(expanded) == homeKey
     }
 
     /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the

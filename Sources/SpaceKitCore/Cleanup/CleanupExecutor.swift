@@ -72,14 +72,6 @@ public struct CleanupReport: Sendable {
         return parts.joined(separator: " and ")
     }
 
-    public var wouldFreeBytes: UInt64 {
-        let all = items.map(\.outcome) + commands.map(\.outcome)
-        return all.reduce(0) { total, outcome in
-            if case .wouldRemove(let bytes) = outcome { return total &+ bytes }
-            return total
-        }
-    }
-
     public var skipped: [(item: CleanupItem, reason: String)] {
         items.compactMap { entry in
             if case .skipped(let reason) = entry.outcome { return (entry.item, reason) }

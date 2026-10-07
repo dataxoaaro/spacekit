@@ -258,7 +258,8 @@ struct StorageCategoryTests {
         #expect(size(.systemData) == tree.allocated("Documents/app-logs/run.log"))
         #expect(size(.media) == tree.allocated("Documents/Photos Backup/img.heic"))
         #expect(size(.documents) == tree.allocated("Documents/report.pdf"))
-        let lookup = { (relative: String) in CategoryBreakdown.category(for: tree.path(relative), findings: findings, home: tree.root) }
+        let locations = CategoryBreakdown.locations(home: tree.root, findings: findings)
+        let lookup = { (relative: String) in CategoryBreakdown.nearestCategory(for: tree.path(relative), in: locations) ?? .other }
         #expect(lookup("Documents/app-logs/run.log") == .systemData)
         #expect(lookup("Documents/Photos Backup/img.heic") == .media)
         #expect(lookup("Documents/report.pdf") == .documents)

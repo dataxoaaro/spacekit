@@ -10,7 +10,7 @@ enum RepositoryProbe {
 
     /// A `.git` somewhere below `path`'s subfolders. The search is bounded so a huge tree can't stall a cleanup;
     /// beyond the bound the scan's answer (which the executor keeps) stands. Symlinks are not followed.
-    static func containsRepository(_ path: String, maxDepth: Int = 6, maxDirectories: Int = 5_000) -> Bool {
+    static func containsRepository(_ path: String) -> Bool {
         var queue: [(path: String, depth: Int)] = [(path, 0)]
         var index = 0
         while index < queue.count, index < maxDirectories {
@@ -32,6 +32,9 @@ enum RepositoryProbe {
         }
         return false
     }
+
+    private static let maxDepth = 6
+    private static let maxDirectories = 5_000
 
     private static func entryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
         withUnsafeBytes(of: entry.pointee.d_name) { buffer in

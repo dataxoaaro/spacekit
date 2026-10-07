@@ -109,11 +109,6 @@ extension Analysis {
 }
 
 extension CategoryBreakdown {
-    /// The category `compute(tree:findings:)` would attribute `path` to.
-    public static func category(for path: String, findings: [Finding], home: String = PathUtil.home) -> StorageCategory {
-        nearestCategory(for: path, in: locations(home: home, findings: findings)) ?? .other
-    }
-
     /// Subtracts removed bytes from the matching categories instead of recomputing the whole breakdown.
     public static func subtracting(
         _ removals: [Removal], from slices: [CategorySlice], findings: [Finding],

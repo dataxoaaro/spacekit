@@ -132,10 +132,6 @@ public struct VolumeTable: Sendable {
         return Set(volumes.filter { $0.container == container }.map(\.deviceID))
     }
 
-    public func isMountPoint(_ path: String) -> Bool {
-        volumes.contains { $0.mountPoint == path }
-    }
-
     /// Data-volume paths that are reachable through a firmlink from inside `scanRoot`, and would
     /// therefore be counted twice. Returns absolute paths such as `/System/Volumes/Data/Users`.
     public func duplicateFirmlinkTargets(whenScanning scanRoot: String) -> Set<String> {

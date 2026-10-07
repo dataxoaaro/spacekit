@@ -145,15 +145,6 @@ public struct SafetyGuard: Sendable {
 
     /// Never removed, and nothing that *contains* them is ever removed either. This is what makes
     /// "delete the whole disk", "delete my home folder" or "delete /Users" impossible.
-    public var criticalPaths: [String] { SafetyGuard.criticalPaths(home: home) }
-
-    /// Nothing inside these, nor the folders themselves, is ever removed: the OS, credentials, and app
-    /// databases that break when edited.
-    public var sealedTrees: [String] { SafetyGuard.sealedTrees(home: home) }
-
-    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
-    public var personalAreas: [String] { SafetyGuard.personalAreas(home: home) }
-
     static func criticalPaths(home h: String) -> [String] {
         [
             "/", "/System", "/System/Volumes", "/System/Volumes/Data", "/System/Volumes/Preboot", "/System/Volumes/VM",
@@ -172,6 +163,8 @@ public struct SafetyGuard: Sendable {
         ]
     }
 
+    /// Nothing inside these, nor the folders themselves, is ever removed: the OS, credentials, and app
+    /// databases that break when edited.
     static func sealedTrees(home h: String) -> [String] {
         [
             "/System", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/private/etc",
@@ -190,6 +183,7 @@ public struct SafetyGuard: Sendable {
         ]
     }
 
+    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
     static func personalAreas(home h: String) -> [String] {
         [
             "\(h)/Documents", "\(h)/Desktop", "\(h)/Downloads", "\(h)/Pictures", "\(h)/Movies", "\(h)/Music",
@@ -374,14 +368,11 @@ public struct SafetyGuard: Sendable {
 private struct Location: Sendable {
     let path: String
     let key: String
+}
 
+extension Location {
     init(_ path: String) {
         self.init(path: path, key: PathUtil.comparisonKey(path))
-    }
-
-    init(path: String, key: String) {
-        self.path = path
-        self.key = key
     }
 }
 

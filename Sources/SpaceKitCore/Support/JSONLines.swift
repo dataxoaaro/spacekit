@@ -6,11 +6,8 @@ enum JSONLines {
     static func append<Record: Encodable>(_ records: [Record], to file: String) throws {
         guard !records.isEmpty else { return }
         let encoder = JSONEncoder.spaceKit
-        var text = ""
-        for record in records {
-            text += String(decoding: try encoder.encode(record), as: UTF8.self) + "\n"
-        }
-        try LockedFile.append(text, to: file)
+        let lines: [String] = try records.map { String(decoding: try encoder.encode($0), as: UTF8.self) + "\n" }
+        try LockedFile.append(lines.joined(), to: file)
     }
 
     /// Records dated `since` or later (all when `nil`), in file order.

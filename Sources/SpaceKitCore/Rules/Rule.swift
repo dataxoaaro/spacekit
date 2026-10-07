@@ -105,7 +105,6 @@ public struct Rule: Codable, Sendable, Identifiable, Hashable {
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     public var isPattern: Bool { match != nil }
-    public var topCategory: String { String(category.split(separator: ".").first ?? "other") }
 
     public init(
         id: String, name: String, group: String = "", category: String = "other",

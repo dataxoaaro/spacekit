@@ -58,6 +58,7 @@ public struct Scanner: Sendable {
             let rootNodes = resolved.map { DirNode(name: $0, parent: root) }
             root.children = rootNodes
             root.listed.store(true, ordering: .releasing)
+            progress.rootChildren.withLock { $0 = rootNodes }
             job.seed(zip(rootNodes, resolved).map { job.makeRootItem(node: $0.0, path: $0.1) })
         }
         progress.root.withLock { $0 = root }
@@ -570,6 +571,7 @@ private final class ScanJob: @unchecked Sendable {
         node.newestModified = newestModified
         node.newestAccessed = newestAccessed
         publish(node)
+        if node.parent == nil { progress.rootChildren.withLock { $0 = childNodes } }
 
         for anchor in item.anchors { anchor.liveBytes.add(directBytes, ordering: .relaxed) }
         progress.files.add(UInt64(directCount), ordering: .relaxed)

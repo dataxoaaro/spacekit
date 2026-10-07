@@ -87,6 +87,7 @@ public final class ScanProgress: Sendable {
     let cancelled = Atomic<Bool>(false)
     let currentPath = Mutex<String>("")
     let root = Mutex<DirNode?>(nil)
+    let rootChildren = Mutex<[DirNode]>([])
 
     public init() {}
 
@@ -108,8 +109,13 @@ public final class ScanProgress: Sendable {
         )
     }
 
-    /// The root node of the scan in progress; children appear as they are listed (check `isListed`).
+    /// The root node of the scan in progress. Read its subfolders through `liveChildren`, not `children`.
     public var liveRoot: DirNode? { root.withLock { $0 } }
+
+    /// The scan root's subfolders, available once the root is listed. Safe to read while the scan runs
+    /// (their `name`, `isListed` and `liveSize`), unlike `liveRoot.children`, which the scan's final pass
+    /// sorts in place.
+    public var liveChildren: [DirNode] { rootChildren.withLock { $0 } }
 
     public func cancel() { cancelled.store(true, ordering: .relaxed) }
     public var isCancelled: Bool { cancelled.load(ordering: .relaxed) }
@@ -141,7 +147,8 @@ public enum ScanError: Error, LocalizedError {
     }
 }
 
-/// The result of a scan: an immutable directory tree plus statistics.
+/// The result of a scan: a directory tree plus statistics. The tree changes only through the mutation
+/// methods in `TreeMutations.swift` (see `DirNode` for the threading rules).
 public final class ScanTree: @unchecked Sendable {
     public let root: DirNode
     /// The scanned paths. One element for a normal scan, several for a multi-root scan (where `root` is virtual).

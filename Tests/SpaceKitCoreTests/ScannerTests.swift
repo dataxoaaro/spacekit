@@ -201,3 +201,21 @@ struct LayoutTests {
         #expect(hit?.ring == 2)
     }
 }
+
+@Suite("Live scan view")
+struct LiveScanTests {
+    @Test("The root's subfolders are available to live readers without touching the tree being finalized")
+    func liveChildren() throws {
+        let tree = try TempTree()
+        try tree.file("a/x.bin", bytes: 10_000)
+        try tree.file("b/y.bin", bytes: 20_000)
+        let progress = ScanProgress()
+        let result = try Scanner().scan(tree.root, progress: progress)
+        #expect(Set(progress.liveChildren.map(\.name)) == ["a", "b"])
+        #expect(Set(progress.liveChildren.map(ObjectIdentifier.init)) == Set(result.root.children.map(ObjectIdentifier.init)))
+
+        let multi = ScanProgress()
+        _ = try Scanner().scan(roots: [tree.path("a"), tree.path("b")], progress: multi)
+        #expect(multi.liveChildren.map(\.name) == [tree.path("a"), tree.path("b")])
+    }
+}

@@ -17,9 +17,15 @@ public struct FileLeaf: Sendable, Hashable {
 /// `otherFilesSize` / `otherFilesCount`. That keeps a full-disk scan of millions of files in a
 /// few hundred megabytes while still drawing every file that's big enough to see.
 ///
-/// Thread-safety: a node's stored properties are written by exactly one scanner worker before the
-/// node is published (`isListed`), and by the single-threaded aggregation pass after the scan.
-/// After `Scanner.scan` returns, the tree is immutable and safe to read from any thread.
+/// Thread-safety: `@unchecked Sendable` rests on who writes when, not on immutability.
+/// - During a scan, the worker that lists a directory writes its stored properties, then publishes it
+///   (`isListed`, release/acquire). Other threads may read only `name`, `isListed` and `liveSize` of the
+///   nodes in `ScanProgress.liveChildren`.
+/// - When the workers finish, the scanning thread resolves hard links and aggregates totals (sorting
+///   `children` in place) before `Scanner.scan` returns.
+/// - After that, the tree changes only through `ScanTree.applyRemoval`, `applyMove` and `splice`, which
+///   the tree's owner calls from one thread or actor at a time. Reads on other threads must be
+///   synchronized with those calls by the owner (the app keeps its trees on the main actor).
 public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
     /// Folder name; roots are named by their absolute path. Changes only when an item is moved (e.g. to the Trash).
     public internal(set) var name: String

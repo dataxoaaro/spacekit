@@ -8,7 +8,8 @@ import Foundation
 /// - `size == directFileSize + Σ children.size`
 /// - `fileCount == directFileCount + Σ children.fileCount`, `dirCount == Σ (children.dirCount + 1)`
 ///
-/// Mutations must happen on one thread at a time, after the scan finished (the app uses the main actor).
+/// Mutations must happen on one thread at a time, after the scan finished, with no other thread reading the
+/// tree meanwhile (the app uses the main actor). See `DirNode` for the full threading rules.
 extension ScanTree {
     // MARK: Removal
 

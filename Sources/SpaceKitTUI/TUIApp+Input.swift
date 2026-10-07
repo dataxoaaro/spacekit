@@ -249,25 +249,13 @@ extension TUIApp {
         var lines: [String] = []
         if let description = rule.description { lines.append(clean(description)) }
         lines.append("")
-        lines.append("Reclaimable: ".dim + ByteCount.format(finding.size).bold)
-        lines.append("Risk: ".dim + rule.safety.level.badge)
-        if let recreatedBy = rule.recreatedBy { lines.append("Recreated by: ".dim + clean(recreatedBy)) }
-        if let used = finding.lastUsed { lines.append("Last used: ".dim + used.relativeDescription()) }
-        lines.append("Items: ".dim + "\(finding.items.count)")
+        lines += finding.terminalFacts().map { "\($0.label): ".dim + $0.value }
         lines.append("")
         for item in finding.items {
             let age = item.idleDays().map { "\($0)d" } ?? "–"
             lines.append(
                 ANSI.pad(ByteCount.format(item.size), to: 9, alignRight: true) + "  " + ANSI.pad(age, to: 5, alignRight: true) + "  "
                     + clean(PathUtil.abbreviate(item.path)))
-        }
-        if let command = rule.action.command {
-            lines.append("")
-            lines.append("Cleans with: ".dim + clean(command.joined(separator: " ")))
-        }
-        if let manual = rule.action.manual {
-            lines.append("")
-            lines.append("How to clean: ".dim + clean(manual))
         }
         state.modal = Modal(title: clean(rule.name), lines: lines)
     }

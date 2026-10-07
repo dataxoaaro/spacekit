@@ -151,7 +151,7 @@ struct DiskCommand: ParsableCommand {
         if !json {
             for capacity in capacities {
                 let fraction = capacity.usedFraction
-                let color: UInt8 = fraction > 0.9 ? ANSI.protected : fraction > 0.75 ? ANSI.review : ANSI.accent
+                let color = capacity.fullness.terminalColor
                 print(
                     ANSI.pad(Output.safe(capacity.name).bold, to: 24) + ANSI.bar(fraction: fraction, width: 30, color: color)
                         + "  " + "\(ByteCount.format(capacity.available)) available".bold + " of \(ByteCount.format(capacity.total))".dim

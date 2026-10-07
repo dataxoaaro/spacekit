@@ -50,12 +50,7 @@ struct HistoryCommand: ParsableCommand {
             if !grew.isEmpty {
                 print()
                 print("WHAT GREW?".bold)
-                for item in grew {
-                    print(
-                        "  " + ANSI.pad(Output.safe(item.name), to: 26)
-                            + ANSI.pad(ByteCount.formatDelta(item.delta), to: 10, alignRight: true).fg(
-                                item.delta > 0 ? ANSI.review : ANSI.safe))
-                }
+                for item in grew { print(item.terminalLine) }
             }
         }
     }
@@ -278,7 +273,7 @@ struct DoctorCommand: ParsableCommand {
         if let capacity = VolumeCapacity.of(path: "/") {
             checks.append(
                 Check(
-                    check: "Startup disk", ok: capacity.usedFraction < 0.9,
+                    check: "Startup disk", ok: capacity.fullness != .nearlyFull,
                     detail: "\(ByteCount.format(capacity.available)) available of \(ByteCount.format(capacity.total))"
                         + (capacity.purgeable > 0
                             ? " (\(ByteCount.format(capacity.freeNow)) free now, \(ByteCount.format(capacity.purgeable)) purgeable)" : "")))

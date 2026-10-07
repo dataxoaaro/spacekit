@@ -96,17 +96,11 @@ private struct ToolCard: View {
 
     @ViewBuilder
     private func status(_ model: AIModel) -> some View {
-        switch model.kind {
-        case .orphaned:
-            Label("Orphaned", systemImage: "exclamationmark.circle").foregroundStyle(Theme.warning)
-        case .cache:
-            Label("Cache", systemImage: "archivebox").foregroundStyle(.secondary)
-        default:
-            if model.isActive(within: window) {
-                Label("Active", systemImage: "bolt.fill").foregroundStyle(Theme.good)
-            } else {
-                Label("Idle", systemImage: "moon.zzz").foregroundStyle(Theme.warning)
-            }
+        switch model.status(within: window) {
+        case .orphaned: Label("Orphaned", systemImage: "exclamationmark.circle").foregroundStyle(Theme.warning)
+        case .cache: Label("Cache", systemImage: "archivebox").foregroundStyle(.secondary)
+        case .active: Label("Active", systemImage: "bolt.fill").foregroundStyle(Theme.good)
+        case .idle: Label("Idle", systemImage: "moon.zzz").foregroundStyle(Theme.warning)
         }
     }
 

@@ -63,7 +63,7 @@ extension TUIApp {
         var right = ""
         if let capacity = state.tree?.capacity ?? VolumeCapacity.of(path: state.rootPath) {
             let fraction = capacity.usedFraction
-            let color: UInt8 = fraction > 0.9 ? ANSI.protected : fraction > 0.75 ? ANSI.review : ANSI.accent
+            let color = capacity.fullness.terminalColor
             let usage = "\(ByteCount.format(capacity.used)) / \(ByteCount.format(capacity.total))".bold
             right =
                 "\(TerminalText.sanitize(capacity.name))  " + usage + "  " + ANSI.bar(fraction: fraction, width: 16, color: color) + " "

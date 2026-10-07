@@ -22,7 +22,8 @@ struct JobsCommand: ParsableCommand {
     /// defaults loaded in its place would drop protected paths, allowed commands and disabled rules.
     static func updateConfig(_ context: SpaceKitContext, _ change: (inout SpaceKitConfig) throws -> Void) throws {
         if let error = context.configError {
-            throw ValidationError("Config file is invalid: \(error). Fix it (spacekit config validate) first; nothing was saved.")
+            Output.warn("The config file is invalid, so nothing was saved. Fix it first (spacekit config validate): \(Output.safe(error))")
+            throw ExitCode.failure
         }
         try context.configStore.update(change)
     }
@@ -63,11 +64,9 @@ struct JobsCommand: ParsableCommand {
                 return
             }
             for job in context.config.jobs {
-                let toggle = job.enabled ? "ON ●".fg(ANSI.safe) : "OFF ○".dim
                 print(
-                    ANSI.pad(toggle, to: 6) + " " + ANSI.pad(Output.safe(job.name).bold, to: 32) + ANSI.pad(job.mode.title, to: 11)
-                        + ANSI.pad(job.schedule.description, to: 22)
-                        + (job.enabled ? (next[job.id].map { "next " + $0.relativeDescription() } ?? "") : "").dim)
+                    ANSI.pad(job.terminalToggle, to: 6) + " " + ANSI.pad(Output.safe(job.name).bold, to: 32) + ANSI.pad(job.mode.title, to: 11)
+                        + ANSI.pad(job.schedule.description, to: 22) + job.nextRunText(next[job.id]).dim)
                 print(
                     "       " + "\(Output.safe(job.id))  ·  ".dim + job.conditionSummary.dim
                         + (states[job.id]?.lastOutcome.map { "  ·  last: \(Output.safe($0))" } ?? "").dim)

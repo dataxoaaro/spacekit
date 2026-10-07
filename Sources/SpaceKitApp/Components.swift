@@ -53,7 +53,11 @@ struct CapacityBar: View {
     var height: CGFloat = 8
 
     var tint: Color {
-        capacity.usedFraction > 0.9 ? Theme.critical : capacity.usedFraction > 0.8 ? Theme.warning : Theme.categorical[0]
+        switch capacity.fullness {
+        case .nearlyFull: return Theme.critical
+        case .filling: return Theme.warning
+        case .comfortable: return Theme.categorical[0]
+        }
     }
 
     var body: some View {

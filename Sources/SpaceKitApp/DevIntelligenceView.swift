@@ -130,20 +130,15 @@ struct FindingCard: View {
                     Text(description).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                    if finding.isCleanable { fact("Reclaimable", finding.size.formattedBytes) }
-                    GridRow {
-                        Text("Risk").foregroundStyle(.secondary)
-                        HStack {
-                            Text(rule.safety.level.risk)
-                            SafetyBadge(level: rule.safety.level)
+                    ForEach(finding.facts(), id: \.kind) { fact in
+                        GridRow {
+                            Text(fact.label).foregroundStyle(.secondary)
+                            HStack {
+                                Text(fact.value)
+                                if fact.kind == .risk { SafetyBadge(level: rule.safety.level) }
+                            }
                         }
                     }
-                    if let recreatedBy = rule.recreatedBy { fact("Recreated by", recreatedBy) }
-                    if let used = finding.lastUsed { fact("Last used", used.relativeDescription()) }
-                    if finding.items.count > 1 || rule.isPattern {
-                        fact(rule.isPattern ? "Projects" : "Items", "\(finding.items.count)")
-                    }
-                    if let manual = rule.action.manual { fact("How to clean", manual) }
                 }
                 .font(.callout)
 
@@ -205,13 +200,6 @@ struct FindingCard: View {
                     }
                 }
             }
-        }
-    }
-
-    private func fact(_ title: String, _ value: String) -> some View {
-        GridRow {
-            Text(title).foregroundStyle(.secondary)
-            Text(value)
         }
     }
 }

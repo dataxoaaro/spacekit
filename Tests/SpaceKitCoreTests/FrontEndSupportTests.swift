@@ -79,4 +79,43 @@ struct FrontEndSupportTests {
         let others = try #require(items.first { if case .otherFiles = $0 { return true } else { return false } })
         #expect(CleanupItem(others, markers: scanned.markers, ruleID: nil) == nil)
     }
+
+    @Test("Finding facts list what applies, in order")
+    func findingFacts() {
+        let now = Date()
+        var rule = Rule(
+            id: "r", name: "R", paths: ["~/x"], safety: SafetySpec(level: .review), action: ActionSpec(command: ["brew", "cleanup"]))
+        rule.recreatedBy = "brew"
+        let items = [
+            FindingItem(path: "/a", kind: .directory, name: "a", size: 1_000_000, lastUsed: now.addingTimeInterval(-3 * 86_400)),
+            FindingItem(path: "/b", kind: .directory, name: "b", size: 1_000_000),
+        ]
+        let facts = Finding(rule: rule, items: items).facts(now: now)
+        #expect(facts.map(\.kind) == [.reclaimable, .risk, .recreatedBy, .lastUsed, .items, .cleansWith])
+        #expect(facts.first { $0.kind == .cleansWith }?.value == "brew cleanup")
+        #expect(facts.first { $0.kind == .items }?.label == "Items")
+
+        let reportOnly = Rule(id: "p", name: "P", paths: ["~/y"], safety: SafetySpec(level: .protected))
+        let single = Finding(rule: reportOnly, items: [items[1]]).facts(now: now)
+        #expect(single.map(\.kind) == [.risk])
+    }
+
+    @Test("AI model status and disk fullness")
+    func statusAndFullness() {
+        let now = Date()
+        func model(_ kind: AIModel.Kind, used: Date?) -> AIModel {
+            AIModel(name: "m", kind: kind, size: 1, lastUsed: used, paths: [], removeCommand: nil, ruleID: "r")
+        }
+        #expect(model(.model, used: now).status(within: .days(90), now: now) == .active)
+        #expect(model(.dataset, used: nil).status(within: .days(90), now: now) == .idle)
+        #expect(model(.cache, used: now).status(within: .days(90), now: now) == .cache)
+        #expect(model(.orphaned, used: now).status(within: .days(90), now: now) == .orphaned)
+
+        func disk(usedPercent: UInt64) -> VolumeCapacity {
+            VolumeCapacity(name: "d", mountPoint: "/", total: 100, freeNow: 100 - usedPercent, available: 100 - usedPercent)
+        }
+        #expect(disk(usedPercent: 50).fullness == .comfortable)
+        #expect(disk(usedPercent: 80).fullness == .filling)
+        #expect(disk(usedPercent: 95).fullness == .nearlyFull)
+    }
 }

@@ -204,7 +204,7 @@ public final class TUIApp {
 
     /// Re-evaluates only `ruleIDs`, after their tool commands freed space their own way.
     func refreshFindings(ruleIDs: Set<String>) {
-        let rules = ruleIDs.compactMap { context.library.rule(id: $0) }
+        let rules = ruleIDs.compactMap { self.context.library.rule(id: $0) }
         guard !rules.isEmpty, state.analysis != nil else { return }
         let (context, generation, inbox) = (context, state.generation, inbox)
         Thread.detachNewThread {

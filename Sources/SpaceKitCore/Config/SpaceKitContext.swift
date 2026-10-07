@@ -25,12 +25,18 @@ public struct SpaceKitContext: Sendable {
             configError = error.localizedDescription
             config = SpaceKitConfig()
         }
-        var directories = config.rules.directories
-        if !directories.contains(where: { PathUtil.expand($0) == paths.userRulesDirectory }) {
-            directories.append(paths.userRulesDirectory)
-        }
+        let directories = ruleDirectories(config: config, paths: paths)
         let library = RuleLibrary.load(directories: directories, disabled: Set(config.rules.disabled))
         return SpaceKitContext(paths: paths, config: config, library: library, configError: configError)
+    }
+
+    /// Where user rules load from: `rules.directories`, plus the standard rules folder if it isn't listed.
+    public var ruleDirectories: [String] { SpaceKitContext.ruleDirectories(config: config, paths: paths) }
+
+    static func ruleDirectories(config: SpaceKitConfig, paths: SpaceKitPaths) -> [String] {
+        var directories = config.rules.directories.map { PathUtil.expand($0) }
+        if !directories.contains(paths.userRulesDirectory) { directories.append(paths.userRulesDirectory) }
+        return directories
     }
 
     public var configStore: ConfigStore { ConfigStore(file: paths.configFile) }

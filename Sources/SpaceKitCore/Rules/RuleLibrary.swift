@@ -68,7 +68,7 @@ public struct RuleLibrary: Sendable {
                 do {
                     parsed = try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file)
                 } catch {
-                    issues.append(RuleIssue(severity: .error, source: file, message: describe(error)))
+                    issues.append(RuleIssue(severity: .error, source: file, message: DecodingErrorText.describe(error)))
                     continue
                 }
                 for var rule in parsed {
@@ -180,17 +180,9 @@ public struct RuleLibrary: Sendable {
         var rules: [Rule]
     }
 
-    /// Same as `DecodingErrorText.describe(_:)`.
-    public static func describe(_ error: Error) -> String { DecodingErrorText.describe(error) }
-
     // MARK: Lookup
 
     public func rule(id: String) -> Rule? { rules.first { $0.id == id } }
-
-    public var groups: [String] {
-        var seen = Set<String>()
-        return rules.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
-    }
 
     public func rules(inCategory prefix: String) -> [Rule] {
         rules.filter { $0.category == prefix || $0.category.hasPrefix(prefix + ".") }

@@ -106,22 +106,8 @@ struct RulesView: View {
             path = directory + "/my-rule-\(index).yaml"
             index += 1
         }
-        let template = """
-            # Schema: docs/RULES.md — save, then click Reload in SpaceKit.
-            id: custom.my-cache
-            name: My tool's cache
-            group: Custom
-            category: developer.cache
-            description: What this is, and what happens if it's removed.
-            path: ~/Library/Caches/com.example.tool
-            granularity: whole        # or children: each entry inside is an item
-            recreatedBy: My tool
-            safety:
-              level: safe             # safe | review | protected
-              trash: true
-            action: remove
-
-            """
+        let rule = RuleScaffold.rule(name: "My tool's cache", paths: ["~/Library/Caches/com.example.tool"])
+        guard let template = try? RuleScaffold.yaml(rule, note: "save, then click Reload in SpaceKit") else { return }
         try? template.write(toFile: path, atomically: true, encoding: .utf8)
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }

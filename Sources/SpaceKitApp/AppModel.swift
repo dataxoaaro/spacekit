@@ -480,7 +480,7 @@ final class AppModel {
     /// Every rule that loads, disabled ones included, so Settings can turn them back on. Cached until the next reload.
     func rulesIncludingDisabled() -> [Rule] {
         if let cached = rulesIncludingDisabledCache { return cached }
-        let rules = RuleLibrary.load(directories: config.rules.directories).rules
+        let rules = RuleLibrary.load(directories: context.ruleDirectories).rules
         rulesIncludingDisabledCache = rules
         return rules
     }

@@ -179,3 +179,33 @@ struct RuleLoadingTests {
         #expect(SafetyLevel(alias: "regenerable") == .safe)
     }
 }
+
+@Suite("Rule scaffold and rule folders")
+struct RuleScaffoldTests {
+    @Test("The scaffold is a valid custom rule that parses back from its YAML")
+    func scaffold() throws {
+        let rule = RuleScaffold.rule(name: "My tool's cache", paths: ["~/Library/Caches/com.example.tool"])
+        #expect(rule.id == "custom." + Rule.slug("My tool's cache"))
+        #expect(rule.category == "personal.custom" && rule.safety.level == .review && rule.action.remove)
+        #expect(!RuleLibrary.issues(for: rule).contains { $0.severity == .error })
+        let yaml = try RuleScaffold.yaml(rule, note: "save, then Reload")
+        #expect(yaml.hasPrefix("# Schema: docs/RULES.md · save, then Reload\n"))
+        #expect(try RuleLibrary.parse(yaml: yaml, source: "x.yaml").map(\.id) == [rule.id])
+
+        let pattern = RuleScaffold.rule(name: "Build", match: "build", sibling: "Makefile", safety: .protected)
+        #expect(pattern.match?.names == ["build"] && pattern.match?.sibling == ["Makefile"])
+        #expect(pattern.action.isEmpty)
+    }
+
+    @Test("User rules load from the configured folders plus the standard one, once")
+    func ruleDirectories() {
+        let paths = SpaceKitPaths(configFile: "/tmp/sk/config.yaml", stateDirectory: "/tmp/sk/state")
+        var config = SpaceKitConfig()
+        config.rules.directories = ["/tmp/sk/extra"]
+        let context = SpaceKitContext(paths: paths, config: config, library: RuleLibrary(rules: []))
+        #expect(context.ruleDirectories == ["/tmp/sk/extra", paths.userRulesDirectory])
+        config.rules.directories = [paths.userRulesDirectory]
+        #expect(SpaceKitContext(paths: paths, config: config, library: RuleLibrary(rules: [])).ruleDirectories == [paths.userRulesDirectory])
+    }
+}
+

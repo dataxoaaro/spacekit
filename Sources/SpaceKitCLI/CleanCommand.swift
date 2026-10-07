@@ -55,10 +55,10 @@ struct CleanCommand: ParsableCommand {
             throw ValidationError("--older-than and --keep-recent filter what rules find; they can't apply to the paths you named.")
         }
 
-        var plan = try rulePlan(rules, context: context, created: started)
+        var plan = try rulePlan(rules, context: context)
         if !paths.isEmpty {
             let index = context.ruleIndex
-            plan.items += try paths.map { try pathItem($0, context: context, index: index) }
+            plan.items += try paths.map { try pathItem($0, context: context, index: index, scanStarted: started) }
             // A path someone names isn't covered by a rule's permission to delete.
             plan.useTrash = !permanent
         }
@@ -101,8 +101,8 @@ struct CleanCommand: ParsableCommand {
         return (rules, paths)
     }
 
-    private func rulePlan(_ rules: [Rule], context: SpaceKitContext, created: Date) throws -> CleanupPlan {
-        guard !rules.isEmpty else { return CleanupPlan(created: created) }
+    private func rulePlan(_ rules: [Rule], context: SpaceKitContext) throws -> CleanupPlan {
+        guard !rules.isEmpty else { return CleanupPlan() }
         let analysis = try ProgressReporter.run("Analysing") { try context.analyzer.analyzeSync(rules: rules, progress: $0) }
         for finding in analysis.findings where !finding.isCleanable {
             Output.warn(Output.safe(finding.rule.name + " is report-only" + (finding.rule.action.manual.map { ": \($0)" } ?? "")))
@@ -110,15 +110,15 @@ struct CleanCommand: ParsableCommand {
         return CleanupPlan.make(
             findings: analysis.findings.filter(\.isCleanable),
             trashPreference: permanent ? false : context.trashPreference(for: .rule),
-            created: created
+            scanStarted: analysis.scanStarted
         ) { finding in
             finding.eligibleItems(olderThan: olderThan, keepRecent: keepRecent)
         }
     }
 
     /// One named path as a plan item. A symlink is the link itself, measured as such, because that is what the
-    /// executor removes.
-    private func pathItem(_ path: String, context: SpaceKitContext, index: RuleIndex) throws -> CleanupItem {
+    /// executor removes. `scanStarted` is when the command started, before the path was looked at.
+    private func pathItem(_ path: String, context: SpaceKitContext, index: RuleIndex, scanStarted: Date) throws -> CleanupItem {
         var st = stat()
         guard lstat(path, &st) == 0 else { throw ValidationError("No such file or folder: \(Output.safe(path))") }
         let isFolder = (st.st_mode & S_IFMT) == S_IFDIR
@@ -126,16 +126,16 @@ struct CleanCommand: ParsableCommand {
         let rule = index.rule(for: path)
         // Ask the guard before measuring, so `clean /` doesn't scan the whole disk just to refuse.
         if context.safetyGuard.evaluate(path: path, rule: rule, context: .manual(confirmed: false)).isBlocked {
-            return CleanupItem(path: path, kind: kind, size: 0, ruleID: rule?.id)
+            return CleanupItem(path: path, kind: kind, size: 0, ruleID: rule?.id, scanStarted: scanStarted)
         }
         var options = context.scanOptions
         options.minFileSize = .max
         guard isFolder, let tree = try? Scanner(options: options).scan(path) else {
-            return CleanupItem(path: path, kind: kind, size: FileSize.allocated(st), ruleID: rule?.id)
+            return CleanupItem(path: path, kind: kind, size: FileSize.allocated(st), ruleID: rule?.id, scanStarted: scanStarted)
         }
         let repository = tree.root.repositoryFlags(tree.markers)
         return CleanupItem(
             path: path, kind: .directory, size: tree.root.size, ruleID: rule?.id,
-            isRepository: repository.isRepository, containsRepository: repository.containsRepository)
+            isRepository: repository.isRepository, containsRepository: repository.containsRepository, scanStarted: scanStarted)
     }
 }

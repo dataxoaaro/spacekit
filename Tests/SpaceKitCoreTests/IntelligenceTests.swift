@@ -101,7 +101,7 @@ struct LooseFileNameTests {
             action: ActionSpec(remove: true))
         let result = try scan(tree.root)
         let findings = RuleEngine(rules: [outer, inner]).evaluate(result).filter { $0.rule.id == "cache" }
-        let plan = CleanupPlan.make(findings: findings, trashPreference: false, created: Date())
+        let plan = CleanupPlan.make(findings: findings, trashPreference: false, scanStarted: result.scanStarted)
         #expect(plan.items.first { $0.kind == .looseFiles }?.looseFileNames == ["small.tmp"])
 
         let report = sandboxExecutor(tree, rules: [outer, inner]).execute(plan, context: .manual(confirmed: true), dryRun: false)
@@ -116,7 +116,8 @@ struct LooseFileNameTests {
         try tree.file("home/cache/a.tmp", bytes: 1_000)
         let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
         let plan = CleanupPlan(
-            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1_000, ruleID: "cache")], useTrash: false)
+            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1_000, ruleID: "cache", scanStarted: Date())],
+            useTrash: false)
         let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.skipped.first?.reason.contains("refresh") == true)
         #expect(onDisk(tree.path("home/cache/a.tmp")))
@@ -127,7 +128,7 @@ struct LooseFileNameTests {
         let tree = try TempTree()
         try tree.file("home/.Trash/a.tmp", bytes: 1_000)
         try tree.file("home/.Trash/dir/b", bytes: 1_000)
-        let plan = Trash.emptyingPlan(try scan(tree.path("home/.Trash")), rules: [], created: Date(), home: tree.path("home"))
+        let plan = Trash.emptyingPlan(try scan(tree.path("home/.Trash")), rules: [], home: tree.path("home"))
         #expect(plan.items.first { $0.kind == .looseFiles }?.looseFileNames == ["a.tmp"])
     }
 }

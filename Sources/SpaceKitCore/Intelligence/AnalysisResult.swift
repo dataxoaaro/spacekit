@@ -24,8 +24,8 @@ public struct AnalysisResult: Sendable {
     }
 
     /// When the scan behind the findings began: the Explore scan's if the analysis reused it, its own otherwise.
-    /// Plans built from the findings are dated by it.
-    public var scanStarted: Date { analysis.tree.started }
+    /// Items of plans built from the findings carry it (`Analysis.scanStarted`).
+    public var scanStarted: Date { analysis.scanStarted }
 
     /// Drops what a cleanup removed from the findings, shrinking the analysis tree too when it's a separate scan
     /// from `exploreTree` (which the front end updates itself, see `Removal.apply(_:to:)`). Only call it while

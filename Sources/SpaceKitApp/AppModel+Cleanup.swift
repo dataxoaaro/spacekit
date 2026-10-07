@@ -6,7 +6,7 @@ extension AppModel {
     // MARK: Cleanup
 
     func cleanupItem(for item: DiskItem) -> CleanupItem? {
-        CleanupItem(item, markers: tree?.markers, ruleID: rule(for: item.path)?.id)
+        tree.flatMap { CleanupItem(item, in: $0, ruleID: rule(for: item.path)?.id) }
     }
 
     func addToCleanupList(_ items: [CleanupItem]) {
@@ -31,19 +31,19 @@ extension AppModel {
         pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
     }
 
-    /// A plan for items picked from the map or the cleanup list, dated by the scan they came from (loose files
-    /// changed since aren't touched), moved to the Trash.
+    /// A plan for items picked from the map or the cleanup list, moved to the Trash. Each item carries the start time
+    /// of the scan it came from, so loose files changed since aren't touched, even in a list kept across rescans.
     func manualPlan(_ items: [CleanupItem]) -> CleanupPlan {
-        CleanupPlan(items: items, useTrash: true, created: treeScanStarted)
+        CleanupPlan(items: items, useTrash: true)
     }
 
-    /// When the scan behind the Dev and AI findings began. It's the Explore scan's unless the analysis scanned
-    /// the rule locations itself.
-    var analysisScanStarted: Date { analysisResult?.scanStarted ?? treeScanStarted }
-
+    /// `finding` is one of the current analysis's findings; its items carry that analysis's scan start time, which is
+    /// the Explore scan's unless the analysis scanned the rule locations itself.
     func reviewFinding(_ finding: Finding, items: [FindingItem]? = nil) {
-        let trash = context.trashPreference(for: .rule)
-        let plan = CleanupPlan.make(findings: [finding], trashPreference: trash, created: analysisScanStarted) { items ?? $0.items }
+        guard let analysis else { return }
+        let plan = CleanupPlan.make(
+            findings: [finding], trashPreference: context.trashPreference(for: .rule), scanStarted: analysis.scanStarted
+        ) { items ?? $0.items }
         review(plan, title: "Clean \(finding.rule.name)")
     }
 

@@ -13,6 +13,11 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
     /// For loose files: the names the preview counted, the only ones the executor removes. `nil` for other kinds,
     /// and for loose-files items saved before names were recorded (those can't remove anything; refresh them).
     public var looseFileNames: [String]?
+    /// When the scan this item came from started. Loose files and Trash entries changed after it weren't in the
+    /// preview, so the executor leaves them alone. Each item keeps its own time, so a plan may mix items from
+    /// different scans (a cleanup list kept across rescans). `nil` for an item from no scan, or one saved before
+    /// this was recorded: its loose files and Trash entries are never removed.
+    public var scanStarted: Date?
 
     public var id: String { kind == .looseFiles ? CleanupItem.looseFilesPath(in: path) : path }
 
@@ -21,7 +26,8 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
 
     public init(
         path: String, kind: FindingItem.Kind = .directory, name: String? = nil, size: UInt64, ruleID: String? = nil,
-        isRepository: Bool = false, containsRepository: Bool = false, lastUsed: Date? = nil, looseFileNames: [String]? = nil
+        isRepository: Bool = false, containsRepository: Bool = false, lastUsed: Date? = nil, looseFileNames: [String]? = nil,
+        scanStarted: Date? = nil
     ) {
         self.path = path
         self.kind = kind
@@ -32,13 +38,15 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
         self.containsRepository = containsRepository
         self.lastUsed = lastUsed
         self.looseFileNames = looseFileNames
+        self.scanStarted = scanStarted
     }
 
-    public init(_ item: FindingItem, ruleID: String?) {
+    /// A finding's item, from a scan that started at `scanStarted`.
+    public init(_ item: FindingItem, ruleID: String?, scanStarted: Date) {
         self.init(
             path: item.path, kind: item.kind, name: item.displayName, size: item.size, ruleID: ruleID,
             isRepository: item.isRepository, containsRepository: item.containsRepository, lastUsed: item.lastUsed,
-            looseFileNames: item.looseFileNames)
+            looseFileNames: item.looseFileNames, scanStarted: scanStarted)
     }
 }
 
@@ -83,19 +91,12 @@ public struct CleanupPlan: Codable, Sendable {
     public var manualSteps: [String]
     /// Move items to the Trash instead of deleting them.
     public var useTrash: Bool
-    /// When the plan was made. Loose files and Trash entries changed after this weren't in the preview, so the
-    /// executor leaves them alone. `nil` only for plans saved before this existed; those can't remove loose files.
-    public var created: Date?
 
-    public init(
-        items: [CleanupItem] = [], commands: [PlannedCommand] = [], manualSteps: [String] = [], useTrash: Bool = true,
-        created: Date? = Date()
-    ) {
+    public init(items: [CleanupItem] = [], commands: [PlannedCommand] = [], manualSteps: [String] = [], useTrash: Bool = true) {
         self.items = items
         self.commands = commands
         self.manualSteps = manualSteps
         self.useTrash = useTrash
-        self.created = created
     }
 
     public var totalBytes: UInt64 {
@@ -109,14 +110,14 @@ public struct CleanupPlan: Codable, Sendable {
 
     /// Builds a plan from findings. `select` chooses which items of each finding to include (all by default).
     /// `trashPreference`: `true` forces the Trash; `nil` follows each rule's `safety.trash`.
-    /// `created`: when the findings were gathered (defaults to now).
+    /// `scanStarted`: when the scan behind the findings started (`Analysis.scanStarted`).
     public static func make(
         findings: [Finding],
         trashPreference: Bool? = true,
-        created: Date = Date(),
+        scanStarted: Date,
         select: (Finding) -> [FindingItem] = { $0.items }
     ) -> CleanupPlan {
-        var plan = CleanupPlan(useTrash: true, created: created)
+        var plan = CleanupPlan(useTrash: true)
         var allRulesWantDelete = !findings.isEmpty
         for finding in findings where finding.rule.safety.level != .protected {
             let rule = finding.rule
@@ -137,7 +138,7 @@ public struct CleanupPlan: Codable, Sendable {
                             measurePaths: [item.path], itemPath: item.path))
                 }
             } else if rule.action.remove {
-                plan.items += chosen.map { CleanupItem($0, ruleID: rule.id) }
+                plan.items += chosen.map { CleanupItem($0, ruleID: rule.id, scanStarted: scanStarted) }
                 if rule.safety.trash || rule.safety.level != .safe { allRulesWantDelete = false }
             } else if let manual = rule.action.manual {
                 plan.manualSteps.append("\(rule.name): \(manual)")

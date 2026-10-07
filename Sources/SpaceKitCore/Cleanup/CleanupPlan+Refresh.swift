@@ -6,8 +6,8 @@ extension CleanupPlan {
     /// must not be removed on the strength of the old preview.
     ///
     /// Items are matched by path and kind, item commands by the item they name, and whole-rule commands by
-    /// their rule still having eligible items. `created`, `useTrash` and the manual steps are kept, so the
-    /// executor still leaves alone whatever changed after the original preview.
+    /// their rule still having eligible items. Kept items keep their scan start times, and `useTrash` and the manual
+    /// steps are kept, so the executor still leaves alone whatever changed after the original preview.
     public func keeping(onlyEligible eligible: [Finding]) -> (plan: CleanupPlan, dropped: [CleanupItem]) {
         let eligibleIDs = Set(eligible.flatMap { $0.items.map(\.id) })
         let eligiblePaths = Set(eligible.flatMap { $0.items.map(\.path) })

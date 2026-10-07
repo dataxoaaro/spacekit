@@ -10,6 +10,10 @@ public struct Analysis: Sendable {
         self.tree = tree
     }
 
+    /// When the scan behind the findings started: the tree's. Findings merged in from a later targeted scan keep
+    /// this earlier time, which only ever leaves more alone.
+    public var scanStarted: Date { tree.scanStarted }
+
     public func findings(_ level: SafetyLevel) -> [Finding] { findings.filter { $0.safety == level } }
 
     public func total(_ level: SafetyLevel) -> UInt64 { findings(level).reduce(0) { $0 &+ $1.size } }

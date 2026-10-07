@@ -77,8 +77,6 @@ final class AppModel {
     private var scanTask: Task<Void, Never>?
     /// Bumped by every scan; a scan that finishes after a newer one started is dropped.
     @ObservationIgnored private var scanGeneration = 0
-    /// When the scan behind `tree` started. Plans made from it don't touch loose files changed after this.
-    @ObservationIgnored private(set) var treeScanStarted = Date()
     /// The folder the current `tree` is a scan of (`scanPath` moves on as soon as another scan starts).
     @ObservationIgnored private var treeScanPath: String?
     /// Off-main work reading the trees, and tree changes waiting for it to finish (see `readingTrees`).
@@ -271,7 +269,6 @@ final class AppModel {
         scanTask?.cancel()
         scanGeneration += 1
         let generation = scanGeneration
-        let started = Date()
         let progress = ScanProgress()
         scanProgress = progress
         progressSnapshot = progress.snapshot
@@ -295,7 +292,7 @@ final class AppModel {
                 if tree.stats.cancelled {
                     self.stopScan()
                 } else {
-                    self.finishScan(tree, path: root, started: started)
+                    self.finishScan(tree, path: root)
                 }
             } catch {
                 guard self.scanGeneration == generation else { return }
@@ -317,10 +314,9 @@ final class AppModel {
         if let treeScanPath { scanPath = treeScanPath }
     }
 
-    private func finishScan(_ tree: ScanTree, path: String, started: Date) {
+    private func finishScan(_ tree: ScanTree, path: String) {
         self.tree = tree
         treeScanPath = path
-        treeScanStarted = started
         treeRevision += 1
         focus = tree.root
         scanProgress = nil

@@ -15,18 +15,18 @@ struct PlanRefreshTests {
 
     @Test("Keeps only items and commands that are still eligible, and the original creation date")
     func keepsEligible() {
-        let created = Date(timeIntervalSince1970: 1_000)
+        let scanned = Date(timeIntervalSince1970: 1_000)
         let plan = CleanupPlan(
             items: [
-                CleanupItem(path: "/tmp/x/a", size: 100, ruleID: "cache"),
-                CleanupItem(path: "/tmp/x/b", size: 100, ruleID: "cache"),
-                CleanupItem(path: "/tmp/x", kind: .looseFiles, size: 10, ruleID: "cache"),
+                CleanupItem(path: "/tmp/x/a", size: 100, ruleID: "cache", scanStarted: scanned),
+                CleanupItem(path: "/tmp/x/b", size: 100, ruleID: "cache", scanStarted: scanned),
+                CleanupItem(path: "/tmp/x", kind: .looseFiles, size: 10, ruleID: "cache", scanStarted: scanned),
             ],
             commands: [
                 PlannedCommand(ruleID: "tool", arguments: ["brew", "cleanup"], estimatedBytes: 5),
                 PlannedCommand(ruleID: "gone", arguments: ["x", "/tmp/y/c"], estimatedBytes: 5, itemPath: "/tmp/y/c"),
             ],
-            useTrash: false, created: created)
+            useTrash: false)
         let eligible = [
             Finding(rule: rule, items: [item("/tmp/x/a"), item("/tmp/x", kind: .looseFiles)]),
             Finding(rule: toolRule, items: [item("/tmp/t")]),
@@ -37,7 +37,7 @@ struct PlanRefreshTests {
         #expect(refreshed.items.map(\.id) == ["/tmp/x/a", "/tmp/x/*"])
         #expect(refreshed.commands.map(\.ruleID) == ["tool"])
         #expect(dropped.map(\.path) == ["/tmp/x/b"])
-        #expect(refreshed.created == created)
+        #expect(refreshed.items.allSatisfy { $0.scanStarted == scanned })
         #expect(refreshed.useTrash == false)
     }
 
@@ -125,7 +125,7 @@ struct ManualJobRunTests {
     func manualResult() throws {
         let fixture = try RunnerFixture()
         let job = Job(id: "j", name: "J", rules: ["r"])
-        let evaluation = JobEvaluation(job: job, findings: [], eligible: [])
+        let evaluation = JobEvaluation(job: job, findings: [], eligible: [], scanStarted: Date())
         var report = CleanupReport(dryRun: false)
         report.items = [(CleanupItem(path: "/tmp/a", size: 7), .removed(bytes: 7, trashedTo: nil))]
         let date = Date(timeIntervalSince1970: 5_000)
@@ -142,7 +142,7 @@ struct ManualJobRunTests {
     @Test("Without a report the run wasn't triggered")
     func notTriggered() {
         let job = Job(id: "j", name: "J", rules: ["r"])
-        let result = JobRunResult.manual(JobEvaluation(job: job, findings: [], eligible: []), report: nil)
+        let result = JobRunResult.manual(JobEvaluation(job: job, findings: [], eligible: [], scanStarted: Date()), report: nil)
         guard case .notTriggered(let reason) = result.action else {
             Issue.record("expected notTriggered")
             return

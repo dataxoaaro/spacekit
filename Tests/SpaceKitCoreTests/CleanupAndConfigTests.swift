@@ -74,7 +74,8 @@ struct CleanupExecutorTests {
         try tree.file("home/cache/a.tmp", bytes: 1000)
         try tree.file("home/cache/b.tmp", bytes: 1000)
         try tree.file("home/cache/sub/keep.bin", bytes: 1000)
-        let item = CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"])
+        let item = CleanupItem(
+            path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"], scanStarted: Date())
         let plan = CleanupPlan(items: [item], useTrash: false)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.freedBytes > 0)

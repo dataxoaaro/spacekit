@@ -28,7 +28,7 @@ func onDisk(_ path: String) -> Bool {
     return lstat(path, &st) == 0
 }
 
-/// Lets file times move past a plan's `created` date.
+/// Lets file times move past a scan's start time.
 func waitForClockTick() { usleep(20_000) }
 
 func cacheRule(_ tree: TempTree, id: String = "cache", level: SafetyLevel, paths: [String]) -> Rule {
@@ -87,12 +87,14 @@ struct AutomaticCleanupTests {
         let safe = cacheRule(tree, id: "safe", level: .safe, paths: ["home/.Trash"])
         let context = CleanupContext.automatic(AutomationContext(jobID: "j", allowReview: true))
 
-        let reviewPlan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, ruleID: "review")])
+        let old = CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, ruleID: "review", scanStarted: Date())
+        let reviewPlan = CleanupPlan(items: [old])
         let skipped = sandboxExecutor(tree, rules: [review]).execute(reviewPlan, context: context, dryRun: false)
         #expect(skipped.skipped.count == 1)
         #expect(onDisk(tree.path("home/.Trash/old/x")))
 
-        let safePlan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.Trash/older"), size: 4000, ruleID: "safe")])
+        let older = CleanupItem(path: tree.path("home/.Trash/older"), size: 4000, ruleID: "safe", scanStarted: Date())
+        let safePlan = CleanupPlan(items: [older])
         let deleted = sandboxExecutor(tree, rules: [safe]).execute(safePlan, context: context, dryRun: false)
         #expect(deleted.items.first?.outcome.isRemoved == true)
         #expect(!onDisk(tree.path("home/.Trash/older")))
@@ -138,7 +140,7 @@ struct TrashAndJournalTests {
     func trashContentsAreDeleted() throws {
         let tree = try TempTree()
         try tree.file("home/.Trash/old/x", bytes: 4000)
-        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.Trash/old"), size: 4000)], useTrash: true)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, scanStarted: Date())], useTrash: true)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.items.first?.outcome.trashedTo == nil)
@@ -155,7 +157,7 @@ struct TrashAndJournalTests {
         let plan = CleanupPlan(
             items: [
                 CleanupItem(path: tree.path("home/cache/a"), size: 4000, ruleID: "cache"),
-                CleanupItem(path: tree.path("home/.Trash/old"), size: 4000),
+                CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, scanStarted: Date()),
             ], useTrash: false)
         var executor = sandboxExecutor(tree, rules: [rule])
         executor.alwaysTrash = true
@@ -170,7 +172,7 @@ struct TrashAndJournalTests {
     func trashCaseFolded() throws {
         let tree = try TempTree()
         try tree.file("home/.Trash/old/x", bytes: 4000)
-        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.TRASH/old"), size: 4000)], useTrash: true)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.TRASH/old"), size: 4000, scanStarted: Date())], useTrash: true)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.items.first?.outcome.trashedTo == nil)
         #expect(journalEntries(tree).map(\.method) == [.delete])
@@ -214,7 +216,10 @@ struct TrashAndJournalTests {
         try tree.file("home/cache/b.tmp", bytes: 1000)
         waitForClockTick()
         let plan = CleanupPlan(
-            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"])],
+            items: [
+                CleanupItem(
+                    path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"], scanStarted: Date())
+            ],
             useTrash: true)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.trashedBytes > 0)
@@ -242,7 +247,8 @@ struct TrashAndJournalTests {
         let plan = CleanupPlan(
             items: [
                 CleanupItem(
-                    path: tree.path("home/cache"), kind: .looseFiles, size: 16_000, ruleID: "cache", looseFileNames: ["a.tmp", "b.tmp"]),
+                    path: tree.path("home/cache"), kind: .looseFiles, size: 16_000, ruleID: "cache", looseFileNames: ["a.tmp", "b.tmp"],
+                    scanStarted: Date()),
                 CleanupItem(path: tree.path("home/cache2/c.tmp"), kind: .file, size: 8000, ruleID: "cache"),
             ], useTrash: false)
         let budget = ByteCount(tree.allocated("home/cache/b.tmp") + 1)
@@ -256,55 +262,101 @@ struct TrashAndJournalTests {
     }
 }
 
-@Suite("Cleanup execution: the plan's snapshot in time")
-struct PlanCreatedTests {
-    @Test("Loose files that appeared after the plan was made are left alone")
+@Suite("Cleanup execution: each item's scan start")
+struct ScanStartTests {
+    @Test("Scans record when they started, and so do the analyses and items made from them")
+    func scansRecordTheirStart() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/a.tmp", bytes: 1000)
+        let before = Date()
+        let scanned = try scan(tree.path("home"))
+        #expect(scanned.scanStarted >= before && scanned.scanStarted <= Date())
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let analysis = Analysis(findings: RuleEngine(rules: [rule]).evaluate(scanned), tree: scanned)
+        #expect(analysis.scanStarted == scanned.scanStarted)
+        let plan = CleanupPlan.make(findings: analysis.findings, scanStarted: analysis.scanStarted)
+        #expect(!plan.items.isEmpty)
+        #expect(plan.items.allSatisfy { $0.scanStarted == scanned.scanStarted })
+    }
+
+    @Test("A loose file created after the item's scan started stays; one from before is removed")
     func newLooseFilesSkipped() throws {
         let tree = try TempTree()
         try tree.file("home/cache/old.tmp", bytes: 1000)
         waitForClockTick()
-        // A file named in the plan but created again after it is a different file, so it stays too.
-        let plan = CleanupPlan(
-            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["new.tmp", "old.tmp"])],
-            useTrash: false)
+        let scanned = try scan(tree.path("home/cache"))
+        // A file named in the plan but created again after the scan is a different file, so it stays too.
+        let item = CleanupItem(
+            path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["new.tmp", "old.tmp"],
+            scanStarted: scanned.scanStarted)
         waitForClockTick()
         try tree.file("home/cache/new.tmp", bytes: 1000)
-        _ = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        _ = sandboxExecutor(tree).execute(CleanupPlan(items: [item], useTrash: false), context: .manual(confirmed: true), dryRun: false)
         #expect(!onDisk(tree.path("home/cache/old.tmp")))
         #expect(onDisk(tree.path("home/cache/new.tmp")))
     }
 
-    @Test("A plan without a creation date can't remove loose files")
-    func undatedPlanRefusesLooseFiles() throws {
+    @Test("A plan mixing items from two scans checks each item against its own scan's start")
+    func mixedScans() throws {
+        let tree = try TempTree()
+        try tree.file("home/early/old.tmp", bytes: 1000)
+        try tree.file("home/late/old.tmp", bytes: 1000)
+        waitForClockTick()
+        let early = try scan(tree.path("home/early"))
+        waitForClockTick()
+        // Created between the two scans: after the early scan started, before the late one.
+        try tree.file("home/early/between.tmp", bytes: 1000)
+        try tree.file("home/late/between.tmp", bytes: 1000)
+        waitForClockTick()
+        let late = try scan(tree.path("home/late"))
+        let names = ["between.tmp", "old.tmp"]
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(
+                    path: tree.path("home/early"), kind: .looseFiles, size: 2000, looseFileNames: names, scanStarted: early.scanStarted),
+                CleanupItem(
+                    path: tree.path("home/late"), kind: .looseFiles, size: 2000, looseFileNames: names, scanStarted: late.scanStarted),
+            ], useTrash: false)
+        _ = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(!onDisk(tree.path("home/early/old.tmp")))
+        #expect(onDisk(tree.path("home/early/between.tmp")), "the early scan never saw it")
+        #expect(!onDisk(tree.path("home/late/old.tmp")))
+        #expect(!onDisk(tree.path("home/late/between.tmp")), "the late scan saw it")
+    }
+
+    @Test("An item without a scan start can't remove loose files")
+    func undatedItemRefusesLooseFiles() throws {
         let tree = try TempTree()
         try tree.file("home/cache/old.tmp", bytes: 1000)
         let plan = CleanupPlan(
             items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["old.tmp"])],
-            useTrash: false, created: nil)
+            useTrash: false)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.skipped.first?.reason.contains("refresh") == true)
         #expect(onDisk(tree.path("home/cache/old.tmp")))
     }
 
-    @Test("Old suggestions decode without a creation date")
-    func decodesOldPlans() throws {
-        let json = #"{"items":[],"commands":[],"manualSteps":[],"useTrash":true}"#
+    @Test("Items saved before scan starts were recorded decode without one")
+    func decodesOldItems() throws {
+        let item = #"{"path":"/tmp/a","kind":"looseFiles","name":"a","size":1,"isRepository":false,"containsRepository":false}"#
+        let json = #"{"items":["# + item + #"],"commands":[],"manualSteps":[],"useTrash":true,"created":"2026-01-01T00:00:00Z"}"#
         let plan = try JSONDecoder.spaceKit.decode(CleanupPlan.self, from: Data(json.utf8))
-        #expect(plan.created == nil)
+        #expect(plan.items.first?.scanStarted == nil)
     }
 
-    @Test("Emptying the Trash leaves what was trashed after the plan was made")
+    @Test("Emptying the Trash leaves what was trashed after the scan started")
     func lateTrashSkipped() throws {
         let tree = try TempTree()
         try tree.file("home/.Trash/early/x", bytes: 1000)
         waitForClockTick()
-        var plan = CleanupPlan(useTrash: false)
+        let scanned = try scan(tree.path("home/.Trash"))
         waitForClockTick()
         try tree.file("home/.Trash/late/y", bytes: 1000)
-        plan.items = [
-            CleanupItem(path: tree.path("home/.Trash/early"), size: 1000),
-            CleanupItem(path: tree.path("home/.Trash/late"), size: 1000),
-        ]
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: tree.path("home/.Trash/early"), size: 1000, scanStarted: scanned.scanStarted),
+                CleanupItem(path: tree.path("home/.Trash/late"), size: 1000, scanStarted: scanned.scanStarted),
+            ], useTrash: false)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(!onDisk(tree.path("home/.Trash/early")))
         #expect(onDisk(tree.path("home/.Trash/late/y")))
@@ -451,6 +503,7 @@ struct HardLinkFreedBytesTests {
         try FileManager.default.linkItem(atPath: tree.path("home/cache/loose/plain.tmp"), toPath: tree.path("home/keep/plain.tmp"))
         try tree.file("home/cache/loose/own.tmp", bytes: 4_000)
         waitForClockTick()
+        let scanned = Date()
         let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
         let plan = CleanupPlan(
             items: [
@@ -458,7 +511,7 @@ struct HardLinkFreedBytesTests {
                 CleanupItem(path: tree.path("home/cache/single.bin"), kind: .file, size: 30_000, ruleID: "cache"),
                 CleanupItem(
                     path: tree.path("home/cache/loose"), kind: .looseFiles, size: 8_000, ruleID: "cache",
-                    looseFileNames: ["own.tmp", "plain.tmp"]),
+                    looseFileNames: ["own.tmp", "plain.tmp"], scanStarted: scanned),
             ], useTrash: false)
         let own = tree.allocated("home/cache/a/own.bin")
         let ownLoose = tree.allocated("home/cache/loose/own.tmp")

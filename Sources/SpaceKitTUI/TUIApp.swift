@@ -125,8 +125,6 @@ public final class TUIApp {
         var rootPath: String
         /// Bumped by every scan; results from an older scan are dropped.
         var generation = 0
-        /// When the current scan started. Plans made from it don't touch loose files changed after this.
-        var scanStarted = Date()
         var tree: ScanTree?
         var scanProgress: ScanProgress?
         var current: DirNode?
@@ -220,7 +218,6 @@ public final class TUIApp {
         state.analysisProgress?.cancel()
         let progress = ScanProgress()
         state.generation += 1
-        state.scanStarted = Date()
         state.scanProgress = progress
         state.tree = nil
         state.current = nil

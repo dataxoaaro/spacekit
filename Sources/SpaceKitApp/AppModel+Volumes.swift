@@ -51,14 +51,13 @@ extension AppModel {
         let options = trashScanOptions
         let path = trashPath
         let rules = library.rules
-        let started = Date()
         Task {
             let fresh = await Task.detached(priority: .userInitiated) { try? Scanner(options: options).scan(path) }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {
                 errorMessage = "SpaceKit can't read the Trash. Grant Full Disk Access, or empty it in Finder."
                 return
             }
-            let plan = Trash.emptyingPlan(fresh, rules: rules, created: started)
+            let plan = Trash.emptyingPlan(fresh, rules: rules)
             guard !plan.isEmpty else {
                 errorMessage = "The Trash is already empty."
                 return

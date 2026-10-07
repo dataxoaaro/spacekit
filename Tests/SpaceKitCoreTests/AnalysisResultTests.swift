@@ -67,9 +67,9 @@ struct AnalysisResultTests {
         let analyzer = StorageAnalyzer(library: RuleLibrary(rules: rules))
         let beforeScan = Date()
         let explore = try scan(tree.root)
-        #expect(explore.started >= beforeScan && explore.started <= Date())
+        #expect(explore.scanStarted >= beforeScan && explore.scanStarted <= Date())
         let reused = AnalysisResult(try analyzer.analyzeSync(reusing: explore), rules: rules, activeModelWindow: .days(90))
-        #expect(reused.scanStarted == explore.started)
+        #expect(reused.scanStarted == explore.scanStarted)
 
         let partial = try scan(tree.path("models"))
         let beforeAnalysis = Date()

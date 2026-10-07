@@ -9,7 +9,7 @@ extension TUIApp {
         let executor = context.executor
         let clean = TerminalText.sanitize
         var lines: [String] = []
-        var allowed = CleanupPlan(manualSteps: plan.manualSteps, useTrash: plan.useTrash, created: plan.created)
+        var allowed = CleanupPlan(manualSteps: plan.manualSteps, useTrash: plan.useTrash)
         var needConfirmation = 0
         var blocked = 0
         // Every reason the guard gave is listed with its own decision, because the first one raised isn't always the

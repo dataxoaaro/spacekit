@@ -7,7 +7,7 @@ extension CleanupExecutor {
         var journalMethod: JournalEntry.Method { self == .trash ? .trash : .delete }
     }
 
-    static let stalePlan = "This plan predates per-file checks; refresh it"
+    static let stalePlan = "This item was saved without what its scan saw; refresh the plan"
 
     func removeItem(_ item: CleanupItem, plan: CleanupPlan, context: CleanupContext, run: inout Run) -> CleanupOutcome {
         var st = stat()
@@ -20,15 +20,16 @@ extension CleanupExecutor {
         }
         let context = CleanupExecutor.context(context, trashing: removal == .trash)
 
-        // Loose files and Trash entries can appear after the preview; only what existed then may go.
-        var created: Date?
+        // Loose files and Trash entries can appear after the preview; only what existed when the item's own scan
+        // started may go.
+        var scanStarted: Date?
         if item.kind == .looseFiles || inTrash {
-            guard let planCreated = plan.created, item.kind != .looseFiles || item.looseFileNames != nil else {
+            guard let started = item.scanStarted, item.kind != .looseFiles || item.looseFileNames != nil else {
                 return .skipped(reason: CleanupExecutor.stalePlan)
             }
-            created = planCreated
-            if inTrash && item.kind != .looseFiles && CleanupExecutor.changed(st, after: planCreated) {
-                return .skipped(reason: "Moved to the Trash after this plan was made")
+            scanStarted = started
+            if inTrash && item.kind != .looseFiles && CleanupExecutor.changed(st, after: started) {
+                return .skipped(reason: "Moved to the Trash after it was scanned")
             }
         }
 
@@ -50,10 +51,10 @@ extension CleanupExecutor {
         }
         if let refused = check(size: item.size) { return refused }
 
-        if item.kind == .looseFiles, let created {
+        if item.kind == .looseFiles, let scanStarted {
             if run.dryRun { return .wouldRemove(bytes: item.size) }
             guard resolve(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
-            return removeLooseFiles(item, in: checkedDirectory, removal: removal, created: created, context: context, run: &run)
+            return removeLooseFiles(item, in: checkedDirectory, removal: removal, scanStarted: scanStarted, context: context, run: &run)
         }
 
         // Charge the budget and report what's there now, not what the scan saw.
@@ -109,7 +110,7 @@ extension CleanupExecutor {
     /// Removes the plain files directly inside the checked folder, leaving subfolders alone. Each file is checked
     /// by the guard, charged to the budget and journaled on its own, so a partial failure keeps an exact record.
     private func removeLooseFiles(
-        _ item: CleanupItem, in directory: String, removal: RemovalMethod, created: Date, context: CleanupContext, run: inout Run
+        _ item: CleanupItem, in directory: String, removal: RemovalMethod, scanStarted: Date, context: CleanupContext, run: inout Run
     ) -> CleanupOutcome {
         let names = item.looseFileNames ?? []
         let fd: Int32
@@ -130,7 +131,7 @@ extension CleanupExecutor {
         for name in names {
             var st = stat()
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
-            guard !CleanupExecutor.changed(st, after: created) else { continue }
+            guard !CleanupExecutor.changed(st, after: scanStarted) else { continue }
             let path = PathUtil.join(item.path, name)
             let verdict = CleanupExecutor.judge(path, checked: PathUtil.join(directory, name)) { candidate in
                 safety.evaluate(path: candidate, rule: rule, context: context)

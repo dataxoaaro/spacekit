@@ -30,10 +30,10 @@ struct FrontEndSupportTests {
         let other = Rule(id: "other", name: "Other", paths: ["~/Downloads"])
         #expect(Trash.rules(in: [other, rule], home: home).map(\.id) == ["system.trash"])
 
-        let created = Date()
-        let plan = Trash.emptyingPlan(try scan(Trash.path(home: home)), rules: [other, rule], created: created, home: home)
+        let scanned = try scan(Trash.path(home: home))
+        let plan = Trash.emptyingPlan(scanned, rules: [other, rule], home: home)
         #expect(!plan.useTrash)
-        #expect(plan.created == created)
+        #expect(plan.items.allSatisfy { $0.scanStarted == scanned.scanStarted })
         #expect(plan.items.map(\.kind) == [.directory, .looseFiles])
         #expect(plan.items.map(\.path) == [tree.path("home/.Trash/old project"), tree.path("home/.Trash")])
         #expect(plan.items.allSatisfy { $0.ruleID == "system.trash" })
@@ -46,7 +46,7 @@ struct FrontEndSupportTests {
         #expect(Spinner.frames.contains(Spinner.frame(-3)))
     }
 
-    @Test("An Explore entry becomes a cleanup item with its git facts; the smaller-files block can't")
+    @Test("An Explore entry becomes a cleanup item with its git facts and scan time; the smaller-files block can't")
     func diskItemConversion() throws {
         let tree = try TempTree()
         try tree.file("root/work/app/.git/HEAD", bytes: 100)
@@ -56,18 +56,19 @@ struct FrontEndSupportTests {
         let scanned = try scan(tree.path("root"), minFileSize: 20_000, markers: [".git"])
         let items = scanned.root.items
         let work = try #require(items.first { $0.name == "work" })
-        let converted = try #require(CleanupItem(work, markers: scanned.markers, ruleID: "r"))
+        let converted = try #require(CleanupItem(work, in: scanned, ruleID: "r"))
         #expect(converted.kind == .directory && converted.ruleID == "r")
+        #expect(converted.scanStarted == scanned.scanStarted)
         #expect(!converted.isRepository && converted.containsRepository)
         let appEntry = try #require(work.directory?.items.first { $0.name == "app" })
-        let app = try #require(CleanupItem(appEntry, markers: scanned.markers, ruleID: nil))
+        let app = try #require(CleanupItem(appEntry, in: scanned, ruleID: nil))
         #expect(app.isRepository)
-        #expect(CleanupItem(work, markers: nil, ruleID: nil)?.containsRepository == false)
+        #expect(work.directory?.repositoryFlags(nil).containsRepository == false)
         let fileEntry = try #require(items.first { $0.name == "big.bin" })
-        let file = try #require(CleanupItem(fileEntry, markers: scanned.markers, ruleID: nil))
+        let file = try #require(CleanupItem(fileEntry, in: scanned, ruleID: nil))
         #expect(file.kind == .file && file.path == tree.path("root/big.bin"))
         let others = try #require(items.first { if case .otherFiles = $0 { return true } else { return false } })
-        #expect(CleanupItem(others, markers: scanned.markers, ruleID: nil) == nil)
+        #expect(CleanupItem(others, in: scanned, ruleID: nil) == nil)
     }
 
     @Test("Finding facts list what applies, in order")

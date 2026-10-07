@@ -168,7 +168,7 @@ struct CleanupCommandTests {
                 FindingItem(path: tree.path("home/toolchains/stable"), kind: .directory, name: "shown/stable", size: 10),
                 FindingItem(path: tree.path("home/.ssh/keys"), kind: .directory, name: "keys", size: 10),
             ])
-        let plan = CleanupPlan.make(findings: [finding])
+        let plan = CleanupPlan.make(findings: [finding], scanStarted: Date())
         let toolchain = try #require(plan.commands.first { $0.itemPath == tree.path("home/toolchains/stable") })
         #expect(toolchain.arguments == ["swift", "stable", tree.path("home/toolchains/stable")])
         let report = sandboxExecutor(tree, rules: [items]).execute(plan, context: .manual(confirmed: true), dryRun: true)

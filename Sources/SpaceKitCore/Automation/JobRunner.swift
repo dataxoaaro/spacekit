@@ -8,7 +8,7 @@ public struct JobEvaluation: Sendable {
     /// Findings narrowed to items that pass the job's age conditions.
     public var eligible: [Finding]
     /// When the scan behind these findings started. Files changed after it weren't part of what was evaluated.
-    public var scanned: Date = Date()
+    public var scanStarted: Date
 
     public var matchedBytes: UInt64 { findings.reduce(0) { $0 &+ $1.size } }
     public var eligibleBytes: UInt64 { eligible.reduce(0) { $0 &+ $1.size } }
@@ -99,7 +99,6 @@ public struct JobRunner: Sendable {
     static func customRuleID(_ job: Job) -> String { "job:\(job.id)" }
 
     public func evaluate(_ job: Job, progress: ScanProgress = ScanProgress(), now: Date = Date()) throws -> JobEvaluation {
-        let scanned = Date()
         var (rules, _) = rules(for: job)
         if !job.paths.isEmpty {
             rules.append(
@@ -108,19 +107,19 @@ public struct JobRunner: Sendable {
                     paths: job.paths, granularity: job.granularity, safety: SafetySpec(level: .review),
                     action: ActionSpec(remove: true)))
         }
-        guard !rules.isEmpty else { return JobEvaluation(job: job, findings: [], eligible: []) }
+        guard !rules.isEmpty else { return JobEvaluation(job: job, findings: [], eligible: [], scanStarted: now) }
         let analysis = try context.analyzer.analyzeSync(rules: rules, progress: progress)
         let eligible = analysis.findings.compactMap { finding -> Finding? in
             let items = finding.eligibleItems(olderThan: job.when.olderThan, keepRecent: job.when.keepRecent, now: now)
             return items.isEmpty ? nil : Finding(rule: finding.rule, items: items)
         }
-        return JobEvaluation(job: job, findings: analysis.findings, eligible: eligible, scanned: scanned)
+        return JobEvaluation(job: job, findings: analysis.findings, eligible: eligible, scanStarted: analysis.scanStarted)
     }
 
     public func plan(for evaluation: JobEvaluation) -> CleanupPlan {
         var plan = CleanupPlan.make(
             findings: evaluation.eligible, trashPreference: context.trashPreference(for: evaluation.job.action),
-            created: evaluation.scanned)
+            scanStarted: evaluation.scanStarted)
         let customID = JobRunner.customRuleID(evaluation.job)
         for index in plan.items.indices where plan.items[index].ruleID == customID {
             plan.items[index].ruleID = nil

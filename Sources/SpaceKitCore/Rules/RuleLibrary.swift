@@ -296,7 +296,7 @@ public struct RuleLibrary: Sendable {
     /// executor's refusal say the same thing.
     static func untrustedRuleCommand(_ executable: String) -> String {
         "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
-            + "It runs only in a cleanup you start by hand, and only if you add it to safety.allowedCommands"
+            + "It runs only in manual runs, and only if you add it to safety.allowedCommands"
     }
 
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {

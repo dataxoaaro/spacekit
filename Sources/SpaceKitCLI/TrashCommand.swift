@@ -25,8 +25,6 @@ struct TrashCommand: ParsableCommand {
     @Flag(name: .long, help: "Machine-readable output.") var json = false
 
     func run() throws {
-        // Entries moved to the Trash after this weren't in the preview, so the executor leaves them.
-        let started = Date()
         let context = global.loadContext()
         let path = Trash.path()
         let tree = try Scanner(options: Trash.scanOptions(context.scanOptions)).scan(path)
@@ -42,7 +40,7 @@ struct TrashCommand: ParsableCommand {
         }
         // `--empty --json` always answers in the documented `{"plan": …}` shape, even with nothing to empty.
         guard status.bytes > 0 || json else { return }
-        let plan = Trash.emptyingPlan(tree, rules: context.library.rules, created: started)
+        let plan = Trash.emptyingPlan(tree, rules: context.library.rules)
         guard
             let report = try CleanupOutput.session(
                 plan, executor: context.executor, yes: yes, json: json, interactive: true, heading: "Empty the Trash",

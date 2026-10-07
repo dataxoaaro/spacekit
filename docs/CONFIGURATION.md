@@ -119,7 +119,7 @@ Items already in the Trash can only be deleted. Automatic runs delete them only 
 | Mode | What a scheduled run does |
 |---|---|
 | `observe` | Notifies you when the matched total is above `when.sizeAbove`. Removes nothing. |
-| `suggest` | Prepares a cleanup plan and notifies you. Approve it in the app (Automation → Waiting for your approval) or with `spacekit suggestions approve <id>`, which previews it; add `--yes` to run it. Approving evaluates the job again first and drops items that no longer meet its conditions. |
+| `suggest` | Prepares a cleanup plan and notifies you. Approve it in the app (Automation → Waiting for your approval) or with `spacekit suggestions approve <id>`, which previews it; add `--yes` to run it (and `--accept-warnings` for items with warnings). Approving evaluates the job again first and drops items that no longer meet its conditions. |
 | `automatic` | Cleans within the safety limits: 🟢 items only unless `includeReview`, inside the rule's locations, under `maxBytesPerRun`. Anything it removes that isn't 🟢 goes to the Trash. Notifies you whenever it removed something or left something undone. |
 
 **Notifications.** `automation.notifications: false` silences observe and suggest runs. Automatic runs notify whenever they removed something, or skipped or failed an item or tool command, whatever the setting, because nobody watched them run.
@@ -128,7 +128,7 @@ Jobs only run on schedule when the background agent is installed (`spacekit agen
 
 The agent uses the config and state folder of the command that installed it: `spacekit agent install --config ~/dotfiles/spacekit.yaml` writes that path (and `SPACEKIT_STATE_DIR`, if set) into the plist's environment. After changing `checkEvery` by hand, run `spacekit agent install` again; the app's Settings reinstall the agent for you.
 
-`spacekit jobs run <id>` previews what a job would do; `--yes` runs it now, confirming the warnings the preview showed; `--scheduled` runs it exactly as the agent would. Run Now in the app and `x` in the TUI evaluate the job first. When its conditions aren't met (`sizeAbove`, `olderThan`, …) nothing is cleaned: the check is recorded as a manual run and its result shown, as with `jobs run --yes`. Otherwise the cleanup is reviewed like any other, and the run is recorded against the job.
+`spacekit jobs run <id>` previews what a job would do; `--yes` runs it now, removing what the guard allows outright, and `--yes --accept-warnings` also removes the items whose warnings the preview showed; `--scheduled` runs it exactly as the agent would. Run Now in the app and `x` in the TUI evaluate the job first. When its conditions aren't met (`sizeAbove`, `olderThan`, …) nothing is cleaned: the check is recorded as a manual run and its result shown, as with `jobs run --yes`. Otherwise the cleanup is reviewed like any other, and the run is recorded against the job.
 
 Approving a suggestion (`spacekit suggestions approve <id> --yes`, or in the app) evaluates its job again, cleans what still qualifies and records a manual run of the job, so the job's last run moves to now. The suggestion is removed only when the cleanup removed something without problems; otherwise it stays so you can try again or dismiss it.
 

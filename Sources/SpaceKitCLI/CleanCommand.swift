@@ -17,7 +17,10 @@ struct CleanCommand: ParsableCommand {
             Removed items go to the Trash unless your config sets safety.trash: rules and the rule allows deletion,
             or you pass --permanent. With safety.trash: always, --permanent is refused. Paths you name go to the
             Trash unless you pass --permanent. Every item is checked by the safety guard; blocked items are listed
-            and skipped. The exit status is nonzero when anything failed or a warning was raised.
+            and skipped. On a terminal you're asked after the preview, and answering yes accepts its warnings. --yes
+            runs without asking, but only what the guard allows outright; items with warnings (paths no rule
+            recognises, review rules, repositories) also need --accept-warnings. The exit status is nonzero when
+            anything failed or a warning was raised.
             """
     )
 
@@ -32,8 +35,7 @@ struct CleanCommand: ParsableCommand {
     var keepRecent: Age?
     @Flag(name: .long, help: "Delete permanently instead of moving to the Trash.")
     var permanent = false
-    @Flag(name: [.short, .long], help: "Clean without asking (otherwise preview, then ask on a terminal).")
-    var yes = false
+    @OptionGroup var acknowledgement: AcknowledgementOptions
     @Flag(name: .long, help: "Machine-readable plan and result on stdout; the preview goes to stderr.")
     var json = false
 
@@ -73,7 +75,7 @@ struct CleanCommand: ParsableCommand {
         }
         guard
             let report = try CleanupOutput.session(
-                plan, executor: context.executor, yes: yes, json: json, interactive: true,
+                plan, executor: context.executor, acknowledgement: acknowledgement, json: json, interactive: true,
                 hint: "Preview only. Run again with --yes to clean.")
         else { return }
         try CleanupOutput.exitIfProblems(report)

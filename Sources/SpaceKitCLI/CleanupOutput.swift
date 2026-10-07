@@ -3,6 +3,20 @@ import Foundation
 import SpaceKitCore
 import SpaceKitTUI
 
+/// `--yes` and `--accept-warnings`, the go-ahead of every command that removes things.
+struct AcknowledgementOptions: ParsableArguments {
+    @Flag(
+        name: [.short, .long],
+        help: "Go ahead without asking. Only what the guard allows outright runs unless you add --accept-warnings.")
+    var yes = false
+    @Flag(name: .long, help: "With --yes, also remove the items whose warnings the preview printed.")
+    var acceptWarnings = false
+
+    func validate() throws {
+        if acceptWarnings && !yes { throw ValidationError("--accept-warnings goes with --yes.") }
+    }
+}
+
 /// How every command that removes things shows its plan and its result.
 enum CleanupOutput {
     /// The review as the preview prints it: every row with every one of the guard's reasons, so the warnings a
@@ -82,18 +96,19 @@ enum CleanupOutput {
         return lines
     }
 
-    /// Prints the review of `plan`, gets the go-ahead (`yes`, or a question when `interactive`) and runs it. Returns
-    /// the report, or `nil` when nothing ran.
+    /// Prints the review of `plan`, gets the go-ahead and runs it. Returns the report, or `nil` when nothing ran.
     ///
-    /// Warnings are accepted only here, after the preview printed them and the person agreed. With `json`, stdout
-    /// carries only JSON: the plan alone without `yes`, else the plan and the result; the preview then goes to stderr.
+    /// Warnings are accepted only here, after the preview printed them: by `--accept-warnings` next to `--yes`, or by
+    /// answering the question when `interactive`. `--yes` alone runs only what the guard allows outright. With `json`,
+    /// stdout carries only JSON: the plan alone without `--yes`, else the plan and the result; the preview then goes
+    /// to stderr.
     static func session(
-        _ plan: CleanupPlan, executor: CleanupExecutor, yes: Bool, json: Bool, interactive: Bool, heading: String = "Cleanup preview",
-        verb: String = "Clean", hint: String
+        _ plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool, interactive: Bool,
+        heading: String = "Cleanup preview", verb: String = "Clean", hint: String
     ) throws -> CleanupReport? {
         let review = CleanupReview(plan, executor: executor)
         let planJSON = json ? PlanJSON(review) : nil
-        if let planJSON, !yes {
+        if let planJSON, !acknowledgement.yes {
             try Output.json(RunJSON(plan: planJSON))
             return nil
         }
@@ -103,11 +118,26 @@ enum CleanupOutput {
             if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
             return nil
         }
-        guard yes || (interactive && Output.confirm("\n" + question(review, verb: verb))) else {
-            print("\n" + hint.dim)
+        let acceptingWarnings: Bool
+        if acknowledgement.yes {
+            acceptingWarnings = acknowledgement.acceptWarnings
+        } else if interactive && Output.confirm("\n" + question(review, verb: verb)) {
+            acceptingWarnings = true
+        } else {
+            let warnings = review.needsAcknowledgement ? " Items with warnings also need --accept-warnings." : ""
+            print("\n" + (hint + warnings).dim)
             return nil
         }
-        let report = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
+        if review.needsAcknowledgement && !acceptingWarnings {
+            let count = review.warningCount
+            let note = "\(count) item\(count == 1 ? "" : "s") with warnings left alone; add --accept-warnings to remove them too."
+            Output.emit([note.fg(ANSI.review)], toStandardError: json)
+            guard count < review.selectedItems.count + review.selectedCommands.count else {
+                if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
+                return nil
+            }
+        }
+        let report = executor.execute(review.acknowledge(acceptingWarnings: acceptingWarnings), dryRun: false)
         if let planJSON {
             try Output.json(RunJSON(plan: planJSON, result: ReportJSON(report)))
         } else {

@@ -244,13 +244,14 @@ struct JobsCommand: ParsableCommand {
             abstract: "Run a job now. Previews by default; --yes cleans; --scheduled behaves exactly like the agent would.",
             discussion: """
                 Without --scheduled the job cleans now, whatever its mode, with the checks of a cleanup you start yourself:
-                the preview lists what will go and any warnings, and --yes confirms them. The exit status is nonzero when
-                anything failed or a warning was raised.
+                the preview lists what will go and any warnings. --yes runs what the guard allows outright; items with
+                warnings also need --accept-warnings. The exit status is nonzero when anything failed or a warning was
+                raised.
                 """
         )
         @OptionGroup var global: GlobalOptions
         @Argument var id: String
-        @Flag(name: [.short, .long], help: "Clean now, accepting the warnings in the preview.") var yes = false
+        @OptionGroup var acknowledgement: AcknowledgementOptions
         @Flag(name: .long, help: "Follow the job's mode (observe/suggest/automatic) like a scheduled run.") var scheduled = false
 
         func run() throws {
@@ -265,12 +266,13 @@ struct JobsCommand: ParsableCommand {
             let evaluation = try ProgressReporter.run("Evaluating \(Output.safe(job.name))") { try runner.evaluate(job, progress: $0) }
             Output.emit(JobsCommand.summaryLines(job, evaluation))
             guard evaluation.isTriggered else {
-                if yes && !JobsCommand.record(.manual(evaluation, report: nil), runner: runner) { throw ExitCode(1) }
+                if acknowledgement.yes && !JobsCommand.record(.manual(evaluation, report: nil), runner: runner) { throw ExitCode(1) }
                 return
             }
             guard
                 let report = try CleanupOutput.session(
-                    runner.plan(for: evaluation), executor: runner.executor, yes: yes, json: false, interactive: false,
+                    runner.plan(for: evaluation), executor: runner.executor, acknowledgement: acknowledgement, json: false,
+                    interactive: false,
                     heading: "What this run removes",
                     hint: "Preview only. Run with --yes to clean now, or --scheduled to run it the way the agent would.")
             else { return }
@@ -393,13 +395,14 @@ struct SuggestionsCommand: ParsableCommand {
             abstract: "Preview a suggested cleanup; run it with --yes.",
             discussion: """
                 The job is evaluated again first: items used since the suggestion was made, or no longer matching the
-                job's age conditions, are dropped. The suggestion is kept unless the run removed something and nothing
-                failed. The exit status is nonzero when anything failed or a warning was raised.
+                job's age conditions, are dropped. --yes runs what the guard allows outright; items with warnings also
+                need --accept-warnings. The suggestion is kept unless the run removed something and nothing failed. The
+                exit status is nonzero when anything failed or a warning was raised.
                 """
         )
         @OptionGroup var global: GlobalOptions
         @Argument var id: String
-        @Flag(name: [.short, .long], help: "Run the cleanup, accepting the warnings in the preview.") var yes = false
+        @OptionGroup var acknowledgement: AcknowledgementOptions
         @Flag(name: .long, help: "Machine-readable plan and result on stdout; the preview goes to stderr.") var json = false
 
         func run() throws {
@@ -429,7 +432,8 @@ struct SuggestionsCommand: ParsableCommand {
             }
             guard
                 let report = try CleanupOutput.session(
-                    plan, executor: runner.executor, yes: yes, json: json, interactive: false, heading: "Suggested cleanup",
+                    plan, executor: runner.executor, acknowledgement: acknowledgement, json: json, interactive: false,
+                    heading: "Suggested cleanup",
                     hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes")
             else { return }
             let recorded = JobsCommand.record(.manual(evaluation, report: report), runner: runner)

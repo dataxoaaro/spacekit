@@ -106,3 +106,45 @@ struct ConfigUpdateTests {
         #expect(config.uniqueJobID("") == "job-2")
     }
 }
+
+@Suite("Config files reached through a symlink")
+struct ConfigSymlinkTests {
+    @Test("A config symlink whose target is missing is a config error, not the defaults")
+    func danglingLinkFailsClosed() throws {
+        let tree = try TempTree()
+        let file = tree.path("config/config.yaml")
+        try tree.directory("config")
+        try FileManager.default.createSymbolicLink(atPath: file, withDestinationPath: tree.path("dotfiles/config.yaml"))
+        let store = ConfigStore(file: file)
+        #expect(store.exists)
+        #expect(throws: ConfigError.self) { try store.load() }
+
+        let context = SpaceKitContext.load(paths: SpaceKitPaths(configFile: file, stateDirectory: tree.path("state")))
+        #expect(context.configError != nil)
+    }
+
+    @Test("config init never replaces a symlink")
+    func initKeepsLink() throws {
+        let tree = try TempTree()
+        let file = tree.path("config.yaml")
+        try FileManager.default.createSymbolicLink(atPath: file, withDestinationPath: tree.path("missing.yaml"))
+        let store = ConfigStore(file: file)
+        #expect(try store.initialize() == false)
+        #expect(throws: ConfigError.self) { try store.initialize(force: true) }
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: file)) == tree.path("missing.yaml"))
+    }
+
+    @Test("Saving through a config symlink writes the file it points to and keeps the link")
+    func saveKeepsLink() throws {
+        let tree = try TempTree()
+        let target = tree.path("dotfiles/config.yaml")
+        try tree.directory("dotfiles")
+        try "version: 1\n".write(toFile: target, atomically: true, encoding: .utf8)
+        let file = tree.path("config.yaml")
+        try FileManager.default.createSymbolicLink(atPath: file, withDestinationPath: target)
+
+        try ConfigStore(file: file).update { $0.ui.mapDepth = 3 }
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: file)) == target)
+        #expect(try ConfigStore(file: target).load().ui.mapDepth == 3)
+    }
+}

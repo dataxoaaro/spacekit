@@ -17,12 +17,28 @@ public struct ConfigStore: Sendable {
 
     public init(file: String) { self.file = file }
 
-    public var exists: Bool { FileManager.default.fileExists(atPath: file) }
+    /// True if anything is at the config path, including a symlink whose target is missing.
+    public var exists: Bool {
+        var st = stat()
+        return lstat(file, &st) == 0
+    }
 
-    /// Loads the config. A missing file yields the defaults.
+    var isSymlink: Bool {
+        var st = stat()
+        return lstat(file, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    /// Loads the config. A missing file yields the defaults. A file (or symlink) that is there but can't be read is
+    /// an error: the defaults would lack the person's protections.
     public func load() throws -> SpaceKitConfig {
         guard exists else { return SpaceKitConfig() }
-        let text = try String(contentsOfFile: file, encoding: .utf8)
+        let text: String
+        do {
+            text = try String(contentsOfFile: file, encoding: .utf8)
+        } catch {
+            let reason = isSymlink ? "is a symlink to a file that is missing or can't be read" : "can't be read"
+            throw ConfigError.invalid(file: file, message: "\(reason) (\(error.localizedDescription))")
+        }
         do {
             return try ConfigStore.parse(text)
         } catch {
@@ -66,13 +82,18 @@ public struct ConfigStore: Sendable {
             try? FileManager.default.removeItem(atPath: backup)
             try? FileManager.default.copyItem(atPath: file, toPath: backup)
         }
-        try LockedFile.write(Data(text.utf8), to: file)
+        // An atomic write replaces the path, so a symlinked config (dotfiles) is written where the link points.
+        let destination = isSymlink ? (PathUtil.realpath(file) ?? file) : file
+        try LockedFile.write(Data(text.utf8), to: destination)
     }
 
     /// Writes the commented starter config if no config exists.
     @discardableResult
     public func initialize(force: Bool = false) throws -> Bool {
         guard force || !exists else { return false }
+        if isSymlink {
+            throw ConfigError.invalid(file: file, message: "is a symlink; edit or remove it yourself, SpaceKit won't replace it")
+        }
         try FileManager.default.createDirectory(atPath: PathUtil.parent(file), withIntermediateDirectories: true)
         try LockedFile.write(Data(ConfigStore.template.utf8), to: file)
         return true

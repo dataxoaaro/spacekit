@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
         // The cleanup may have finished while the alert was open.
         guard model.isCleaning else { return .terminateNow }
-        model.quitWhenCleanupsFinish = true
+        model.quitWhenCleanupsAreDone()
         return .terminateLater
     }
 }
@@ -88,17 +88,20 @@ struct RootView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
         } detail: {
-            Group {
-                switch model.section {
-                case .explore: ExploreView()
-                case .dev: DevIntelligenceView()
-                case .ai: AIView()
-                case .automation: AutomationView()
-                case .history: HistoryView()
-                case .rules: RulesView()
+            VStack(spacing: 0) {
+                if let error = model.configError { ConfigErrorBanner(error: error) }
+                Group {
+                    switch model.section {
+                    case .explore: ExploreView()
+                    case .dev: DevIntelligenceView()
+                    case .ai: AIView()
+                    case .automation: AutomationView()
+                    case .history: HistoryView()
+                    case .rules: RulesView()
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(item: $model.pendingCleanup) { pending in
             CleanupSheet(pending: pending)
@@ -123,6 +126,29 @@ struct RootView: View {
             #endif
             if model.tree == nil && !model.showOnboarding { model.scan() }
         }
+    }
+}
+
+/// Stays above every section while the config file is invalid: cleaning is refused until it's fixed, and
+/// nothing else on screen would say why.
+struct ConfigErrorBanner: View {
+    @Environment(AppModel.self) private var model
+    let error: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "xmark.octagon.fill").foregroundStyle(Theme.critical)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("The config file is invalid, so SpaceKit won't clean anything.").font(.callout.weight(.semibold))
+                Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Fix it (spacekit config validate shows the problem), then Reload.").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open Config") { model.openConfigInEditor() }
+            Button("Reload") { model.reloadContext() }
+        }
+        .padding(10)
+        .background(Theme.critical.opacity(0.12))
     }
 }
 
@@ -258,7 +284,7 @@ struct CleanupListPopover: View {
                 .disabled(!model.cleanupList.contains { $0.kind == .directory })
                 Spacer()
                 Button("Review & Clean \(model.cleanupListBytes.formattedBytes)") {
-                    model.review(CleanupPlan(items: model.cleanupList, useTrash: true), title: "Clean \(model.cleanupList.count) items")
+                    model.review(model.manualPlan(model.cleanupList), title: "Clean \(model.cleanupList.count) items")
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

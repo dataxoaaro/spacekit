@@ -428,7 +428,7 @@ struct SuggestionsCommand: ParsableCommand {
             guard
                 let report = try CleanupOutput.session(
                     plan, executor: runner.executor, yes: yes, json: json, interactive: false, heading: "Suggested cleanup",
-                    hint: "Preview only. Approve with: spacekit suggestions approve \(suggestion.id) --yes")
+                    hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes")
             else { return }
             let recorded = JobsCommand.record(.manual(evaluation, report: report), runner: runner)
             if report.removedAnything && !report.hasProblems {

@@ -5,33 +5,6 @@ import SpaceKitCore
 extension AppModel {
     // MARK: Volumes and Trash
 
-    /// Keeps capacity live: every few seconds (one cheap system call per volume), and immediately when SpaceKit
-    /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder).
-    func startMonitoring() {
-        observers.append(
-            NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
-                [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.refreshVolumes()
-                    self.refreshTrash(resync: true)
-                    self.refreshSnapshots()
-                }
-            })
-        startCapacityLoop()
-        refreshSnapshots()
-    }
-
-    private func startCapacityLoop() {
-        capacityMonitor?.cancel()
-        capacityMonitor = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                self?.refreshVolumes()
-            }
-        }
-    }
-
     var trashPath: String { Trash.path() }
 
     private var trashScanOptions: ScanOptions { Trash.scanOptions(context.scanOptions) }

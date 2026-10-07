@@ -156,7 +156,7 @@ struct SafetyGuardTests {
             volumes: [
                 MountedVolume(
                     mountPoint: "/Users/tester/Library/Developer/CoreDevice/DeviceFS", device: "devices", fileSystem: "devicefs",
-                    deviceID: 99, isReadOnly: false, isBrowsable: false, isLocal: true)
+                    deviceID: 99, isBrowsable: false)
             ], firmlinks: [])
         let guardian = SafetyGuard(home: "/Users/tester", volumes: volumes, isRunningAsRoot: false)
         #expect(guardian.evaluate(path: "/Users/tester/Library/Developer/CoreDevice/DeviceFS", context: manual).isBlocked)

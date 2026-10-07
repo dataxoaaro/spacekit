@@ -350,7 +350,7 @@ struct SelectionInspector: View {
                     Text("\(directory.fileCount.formatted()) files").foregroundStyle(.secondary)
                 }
                 if let modified = item.modified {
-                    Text("Modified \(modified.shortRelative)").foregroundStyle(.secondary)
+                    Text("Modified \(modified.relativeDescription())").foregroundStyle(.secondary)
                 }
             }
             .font(.caption)

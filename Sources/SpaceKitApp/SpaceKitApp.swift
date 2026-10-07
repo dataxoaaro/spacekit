@@ -281,7 +281,7 @@ struct MenuBarContent: View {
             }
             Divider()
             if let next = model.jobRunner.nextRuns().first {
-                Label("Next: \(next.job.name), \(next.date.shortRelative)", systemImage: "clock").font(.callout)
+                Label("Next: \(next.job.name), \(next.date.relativeDescription())", systemImage: "clock").font(.callout)
             }
             if model.recovered90Days > 0 {
                 Label("Recovered \(model.recovered90Days.bytesText) in 3 months", systemImage: "arrow.uturn.backward.circle").font(.callout)

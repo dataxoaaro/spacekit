@@ -20,9 +20,10 @@ struct RulesView: View {
     var body: some View {
         HSplitView {
             List(selection: $selectedID) {
-                ForEach(groups, id: \.self) { group in
+                let grouped = Dictionary(grouping: rules, by: \.group)
+                ForEach(grouped.keys.sorted(), id: \.self) { group in
                     Section(group) {
-                        ForEach(rules.filter { $0.group == group }) { rule in
+                        ForEach(grouped[group] ?? []) { rule in
                             HStack {
                                 Image(systemName: Theme.symbol(for: rule.safety.level)).foregroundStyle(Theme.color(for: rule.safety.level))
                                 Text(rule.name)
@@ -61,11 +62,6 @@ struct RulesView: View {
                 Button("New Rule…", systemImage: "plus") { newRule() }
             }
         }
-    }
-
-    private var groups: [String] {
-        var seen = Set<String>()
-        return rules.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
     }
 
     private var libraryOverview: some View {

@@ -835,13 +835,18 @@ final class AppModel {
     }
 
     func chooseFolder() {
+        if let path = AppModel.askForFolder(prompt: "Scan") { scan(path) }
+    }
+
+    /// Asks for one folder (hidden ones shown) and returns its path, or `nil` if the person cancelled.
+    static func askForFolder(prompt: String? = nil) -> String? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
-        panel.prompt = "Scan"
-        if panel.runModal() == .OK, let url = panel.url { scan(url.path) }
+        if let prompt { panel.prompt = prompt }
+        return panel.runModal() == .OK ? panel.url?.path : nil
     }
 }
 
@@ -851,12 +856,9 @@ struct JobDraft: Identifiable {
     var job: Job
     /// The id of the job being edited, or nil for a new job.
     var originalID: String?
+}
 
-    init(job: Job, originalID: String? = nil) {
-        self.job = job
-        self.originalID = originalID
-    }
-
+extension JobDraft {
     /// A new job for folders chosen in Explore.
     init(paths: [String]) {
         let name = paths.count == 1 ? "Clean \(PathUtil.lastComponent(paths[0]))" : "Clean \(paths.count) folders"

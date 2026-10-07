@@ -136,18 +136,16 @@ struct StatTile: View {
     var tint: Color?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if let symbol { Image(systemName: symbol).foregroundStyle(tint ?? .secondary) }
-                Text(title).font(.subheadline).foregroundStyle(.secondary)
+        Card {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    if let symbol { Image(systemName: symbol).foregroundStyle(tint ?? .secondary) }
+                    Text(title).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Text(value).font(.system(size: 28, weight: .semibold)).contentTransition(.numericText())
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
             }
-            Text(value).font(.system(size: 28, weight: .semibold)).contentTransition(.numericText())
-            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.hairline))
     }
 }
 
@@ -218,10 +216,6 @@ struct FullDiskAccessBanner: View {
         .padding(12)
         .background(Theme.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
     }
-}
-
-extension Date {
-    var shortRelative: String { relativeDescription() }
 }
 
 /// Lays children out left to right, wrapping to new lines (for legends).

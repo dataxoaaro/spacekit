@@ -139,7 +139,7 @@ struct FindingCard: View {
                         }
                     }
                     if let recreatedBy = rule.recreatedBy { fact("Recreated by", recreatedBy) }
-                    if let used = finding.lastUsed { fact("Last used", used.shortRelative) }
+                    if let used = finding.lastUsed { fact("Last used", used.relativeDescription()) }
                     if finding.items.count > 1 || rule.isPattern {
                         fact(rule.isPattern ? "Projects" : "Items", "\(finding.items.count)")
                     }

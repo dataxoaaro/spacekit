@@ -153,15 +153,9 @@ struct DiskMapView: View {
 
     private func arcPath(_ arc: SunburstArc, center: CGPoint, inner: CGFloat, ring: CGFloat) -> Path {
         let r0 = inner + CGFloat(arc.ring - 1) * ring
-        let r1 = r0 + ring
         // Layout angles start at 12 o'clock; SwiftUI's start at 3 o'clock.
-        let start = Angle(radians: arc.startAngle - .pi / 2)
-        let end = Angle(radians: arc.endAngle - .pi / 2)
-        var path = Path()
-        path.addArc(center: center, radius: r1, startAngle: start, endAngle: end, clockwise: false)
-        path.addArc(center: center, radius: r0, startAngle: end, endAngle: start, clockwise: true)
-        path.closeSubpath()
-        return path
+        return annularSector(
+            center: center, inner: r0, outer: r0 + ring, start: .radians(arc.startAngle - .pi / 2), end: .radians(arc.endAngle - .pi / 2))
     }
 
     private func drawSunburst(_ context: inout GraphicsContext, size: CGSize) {
@@ -261,6 +255,15 @@ struct DiskMapView: View {
     }
 }
 
+/// A ring segment between two radii, from `start` to `end` clockwise on screen.
+private func annularSector(center: CGPoint, inner: CGFloat, outer: CGFloat, start: Angle, end: Angle) -> Path {
+    var path = Path()
+    path.addArc(center: center, radius: outer, startAngle: start, endAngle: end, clockwise: false)
+    path.addArc(center: center, radius: inner, startAngle: end, endAngle: start, clockwise: true)
+    path.closeSubpath()
+    return path
+}
+
 /// Progressive map while a scan runs: top-level folders grow as their sizes come in.
 struct LiveScanMap: View {
     let progress: ScanProgress
@@ -277,12 +280,7 @@ struct LiveScanMap: View {
                 var angle = -Double.pi / 2
                 for (index, child) in children.enumerated() where child.liveSize > 0 {
                     let sweep = Double(child.liveSize) / total * 2 * .pi
-                    var path = Path()
-                    path.addArc(
-                        center: center, radius: outer, startAngle: .radians(angle), endAngle: .radians(angle + sweep), clockwise: false)
-                    path.addArc(
-                        center: center, radius: inner, startAngle: .radians(angle + sweep), endAngle: .radians(angle), clockwise: true)
-                    path.closeSubpath()
+                    let path = annularSector(center: center, inner: inner, outer: outer, start: .radians(angle), end: .radians(angle + sweep))
                     context.fill(path, with: .color(Theme.categorical(index).opacity(0.85)))
                     context.stroke(path, with: .color(Theme.surface), lineWidth: 1)
                     angle += sweep

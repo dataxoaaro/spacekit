@@ -104,7 +104,7 @@ private struct SuggestionsSection: View {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(suggestion.jobName).font(.callout.weight(.semibold))
-                        Text("\(suggestion.plan.items.count) items · prepared \(suggestion.created.shortRelative)").font(.caption)
+                        Text("\(suggestion.plan.items.count) items · prepared \(suggestion.created.relativeDescription())").font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -166,7 +166,7 @@ struct JobCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 if let outcome = state?.lastOutcome {
-                    Text("Last run \(state?.lastRun?.shortRelative ?? ""): \(outcome)").font(.caption).foregroundStyle(.secondary)
+                    Text("Last run \(state?.lastRun?.relativeDescription() ?? ""): \(outcome)").font(.caption).foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
                 HStack {
@@ -378,14 +378,9 @@ struct JobEditor: View {
     }
 
     private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.showsHiddenFiles = true
-        if panel.runModal() == .OK, let url = panel.url {
-            newPath = PathUtil.abbreviate(url.path)
-            addPath()
-        }
+        guard let path = AppModel.askForFolder() else { return }
+        newPath = PathUtil.abbreviate(path)
+        addPath()
     }
 
     private func load() {

@@ -15,22 +15,15 @@ extension ScanTree {
     /// Updates the tree after `path` was removed from disk. Returns the bytes taken out of the tree.
     ///
     /// - Parameters:
-    ///   - looseFilesOnly: only the plain files directly inside `path` were removed.
+    ///   - looseFilesOnly: plain files directly inside `path` were removed. The cleanup may have skipped some
+    ///     of them, so the folder is re-read to see which are left.
     ///   - bytes: the removed size, if known. Needed for small files, which the tree only knows as a
     ///     per-folder total.
     @discardableResult
     public func applyRemoval(of path: String, looseFilesOnly: Bool = false, bytes hint: UInt64? = nil) -> UInt64 {
         if looseFilesOnly {
             guard let node = node(at: path) else { return 0 }
-            let bytes = node.directFileSize
-            let count = UInt64(node.directFileCount)
-            node.files = []
-            node.otherFilesSize = 0
-            node.otherFilesCount = 0
-            node.directFileSize = 0
-            node.directFileCount = 0
-            adjust(from: node, bytes: -Int64(bytes), files: -Int64(count), dirs: 0)
-            return bytes
+            return dropRemovedLooseFiles(of: node, at: path)
         }
         if let node = node(at: path), let parent = node.parent {
             detach(node, from: parent)
@@ -153,6 +146,36 @@ extension ScanTree {
             ancestor.subtreeNewestModified = max(ancestor.subtreeNewestModified, node.subtreeNewestModified)
             cursor = ancestor.parent
         }
+    }
+
+    /// Keeps only the direct files of `node` that are still on disk. Never grows the folder: files that
+    /// appeared since the scan aren't counted, and small files are capped at the folder's known total.
+    private func dropRemovedLooseFiles(of node: DirNode, at path: String) -> UInt64 {
+        // An unreadable folder is treated as emptied, matching what the cleanup reported.
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+        var remaining: [String: UInt64] = [:]
+        for name in names {
+            var st = stat()
+            guard lstat(PathUtil.join(path, name), &st) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
+            remaining[name] = UInt64(max(0, st.st_blocks)) * 512
+        }
+        let files = node.files.filter { remaining[$0.name] != nil }
+        let tracked = Set(node.files.map(\.name))
+        let small = remaining.filter { !tracked.contains($0.key) }
+        let otherSize = min(node.otherFilesSize, small.values.reduce(0, &+))
+        let otherCount = min(node.otherFilesCount, UInt32(small.count))
+        let directSize = files.reduce(0) { $0 &+ $1.size } &+ otherSize
+        let directCount = UInt32(files.count) + otherCount
+
+        let bytes = node.directFileSize - min(node.directFileSize, directSize)
+        let count = node.directFileCount - min(node.directFileCount, directCount)
+        node.files = files
+        node.otherFilesSize = otherSize
+        node.otherFilesCount = otherCount
+        node.directFileSize = directSize
+        node.directFileCount = directCount
+        adjust(from: node, bytes: -Int64(bytes), files: -Int64(count), dirs: 0)
+        return bytes
     }
 
     /// Removes a file from a folder's direct contents. Small files only exist as a total, so `hint` gives their size.

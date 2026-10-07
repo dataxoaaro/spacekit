@@ -134,6 +134,25 @@ struct TreeConsistencyTests {
         #expect(scanned.inconsistencies().isEmpty)
     }
 
+    @Test("Loose-file removal keeps the files the cleanup skipped", arguments: [UInt64(0), 50_000])
+    func partialLooseFiles(minFileSize: UInt64) throws {
+        let tree = try TempTree()
+        try tree.file("cache/big.bin", bytes: 200_000)
+        try tree.file("cache/kept-big.bin", bytes: 150_000)
+        try tree.file("cache/small.tmp", bytes: 5_000)
+        try tree.file("cache/kept-small.tmp", bytes: 8_000)
+        try tree.file("cache/sub/inner.bin", bytes: 100_000)
+        let scanned = try scan(tree.root, minFileSize: minFileSize)
+        let removed = tree.allocated("cache/big.bin") + tree.allocated("cache/small.tmp")
+        try FileManager.default.removeItem(atPath: tree.path("cache/big.bin"))
+        try FileManager.default.removeItem(atPath: tree.path("cache/small.tmp"))
+
+        let taken = scanned.applyRemoval(of: tree.path("cache"), looseFilesOnly: true)
+        #expect(taken == removed)
+        try expectMatchesRescan(scanned, root: tree.root, minFileSize: minFileSize, "partial loose files")
+        #expect(scanned.node(at: tree.path("cache"))?.directFileCount == 2)
+    }
+
     @Test("A fresh scan of a folder replaces its old contents")
     func splice() throws {
         let tree = try TempTree()

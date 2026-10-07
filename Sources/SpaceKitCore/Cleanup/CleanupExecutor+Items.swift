@@ -57,7 +57,9 @@ extension CleanupExecutor {
         }
 
         // Charge the budget and report what's there now, not what the scan saw.
-        let size = run.dryRun ? item.size : measuredSize(item.path, isFolder: isFolder, fallback: item.size)
+        let measured: Measured =
+            run.dryRun ? Measured(size: item.size, freed: item.size) : measure(item.path, isFolder: isFolder, fallback: item.size)
+        let size = measured.size
         if size != item.size, let refused = check(size: size) { return refused }
         if context.isAutomatic && size > run.budget { return overBudget() }
         if run.dryRun { return .wouldRemove(bytes: size) }
@@ -76,10 +78,10 @@ extension CleanupExecutor {
             run.charge(size)
             record(
                 entry(
-                    path: item.path, bytes: size, method: removal.journalMethod, ruleID: item.ruleID, context: context,
+                    path: item.path, bytes: measured.freed, method: removal.journalMethod, ruleID: item.ruleID, context: context,
                     trashedTo: trashedTo),
                 in: &run)
-            return .removed(bytes: size, trashedTo: trashedTo)
+            return .removed(bytes: measured.freed, trashedTo: trashedTo)
         } catch {
             return .failed(reason: error.localizedDescription)
         }
@@ -101,7 +103,7 @@ extension CleanupExecutor {
 
         let rule = item.ruleID.flatMap { rules[$0] }
         let confirmed = CleanupExecutor.isConfirmed(context)
-        var freed: UInt64 = 0
+        var totalFreed: UInt64 = 0
         var trashLocations: [String] = []
         var removedCount = 0
         var overBudgetCount = 0
@@ -116,6 +118,7 @@ extension CleanupExecutor {
             if checked != path { verdict = verdict.merging(safety.evaluate(path: checked, rule: rule, context: context)) }
             guard verdict.permits(confirmed: confirmed) else { continue }
             let size = FileSize.allocated(st)
+            let freed = CleanupExecutor.isLastLink(st) ? size : 0
             if context.isAutomatic && size > run.budget {
                 overBudgetCount += 1
                 continue
@@ -129,13 +132,13 @@ extension CleanupExecutor {
                     try SafeRemoval.verifyUnchanged(directory)
                     trashedTo = try trash(PathUtil.join(directory, name)) ?? trashDirectory
                 }
-                freed &+= size
+                totalFreed &+= freed
                 removedCount += 1
                 trashedTo.map { trashLocations.append($0) }
                 run.charge(size)
                 record(
                     entry(
-                        path: path, bytes: size, method: removal.journalMethod, ruleID: item.ruleID, context: context,
+                        path: path, bytes: freed, method: removal.journalMethod, ruleID: item.ruleID, context: context,
                         trashedTo: trashedTo),
                     in: &run)
             } catch {
@@ -153,7 +156,7 @@ extension CleanupExecutor {
         run.report.warnings += failures
         if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }
         if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
-        return .removed(bytes: freed, trashedTo: removal == .trash ? trashLocations.first.map(PathUtil.parent) : nil)
+        return .removed(bytes: totalFreed, trashedTo: removal == .trash ? trashLocations.first.map(PathUtil.parent) : nil)
     }
 
     /// How an item leaves its place. `nil`: it may not leave at all.
@@ -211,10 +214,31 @@ extension CleanupExecutor {
         .failed(reason: "\(directory) changed while it was being checked; nothing was removed")
     }
 
-    /// Allocated size now. Folders are rescanned; a symlink counts as itself.
-    func measuredSize(_ path: String, isFolder: Bool, fallback: UInt64) -> UInt64 {
-        guard isFolder else { return FileSize.allocated(atPath: path) ?? fallback }
-        return measure([path]) ?? fallback
+    /// What an item holds at removal time. `size` is all of it, charged to the budget; `freed` leaves out files
+    /// with another hard link outside the item, whose bytes stay on disk.
+    struct Measured {
+        var size: UInt64
+        var freed: UInt64
+    }
+
+    /// Measures an item now. Folders are rescanned; a symlink counts as itself.
+    func measure(_ path: String, isFolder: Bool, fallback: UInt64) -> Measured {
+        guard isFolder else {
+            var st = stat()
+            guard lstat(path, &st) == 0 else { return Measured(size: fallback, freed: fallback) }
+            let size = FileSize.allocated(st)
+            return Measured(size: size, freed: CleanupExecutor.isLastLink(st) ? size : 0)
+        }
+        var options = ScanOptions()
+        options.minFileSize = .max
+        guard let tree = try? Scanner(options: options).scan(roots: [path]) else { return Measured(size: fallback, freed: fallback) }
+        let size = tree.root.size
+        return Measured(size: size, freed: size - min(size, tree.bytesLinkedOutside()))
+    }
+
+    /// True unless `st` is a regular file with another hard link, which keeps its bytes on disk.
+    static func isLastLink(_ st: stat) -> Bool {
+        (st.st_mode & S_IFMT) != S_IFREG || st.st_nlink <= 1
     }
 
     /// Allocated size of folders, the way the scanner counts it. `nil` if none could be scanned.

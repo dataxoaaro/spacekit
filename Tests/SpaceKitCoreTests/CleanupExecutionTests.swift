@@ -445,3 +445,36 @@ struct CheckedLocationTests {
         #expect(confirmed.items.first?.outcome.isRemoved == true)
     }
 }
+
+@Suite("Cleanup execution: bytes a removal actually frees")
+struct HardLinkFreedBytesTests {
+    @Test("A file with another hard link outside the item frees nothing; the report and journal say so")
+    func linkedOutside() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/a/linked.bin", bytes: 40_000)
+        try tree.file("home/cache/a/own.bin", bytes: 8_000)
+        try tree.file("home/cache/single.bin", bytes: 30_000)
+        try tree.file("home/cache/loose/plain.tmp", bytes: 4_000)
+        try tree.directory("home/keep")
+        try FileManager.default.linkItem(atPath: tree.path("home/cache/a/linked.bin"), toPath: tree.path("home/keep/linked.bin"))
+        try FileManager.default.linkItem(atPath: tree.path("home/cache/single.bin"), toPath: tree.path("home/keep/single.bin"))
+        try FileManager.default.linkItem(atPath: tree.path("home/cache/loose/plain.tmp"), toPath: tree.path("home/keep/plain.tmp"))
+        try tree.file("home/cache/loose/own.tmp", bytes: 4_000)
+        waitForClockTick()
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: tree.path("home/cache/a"), size: 48_000, ruleID: "cache"),
+                CleanupItem(path: tree.path("home/cache/single.bin"), kind: .file, size: 30_000, ruleID: "cache"),
+                CleanupItem(
+                    path: tree.path("home/cache/loose"), kind: .looseFiles, size: 8_000, ruleID: "cache",
+                    looseFileNames: ["own.tmp", "plain.tmp"]),
+            ], useTrash: false)
+        let own = tree.allocated("home/cache/a/own.bin")
+        let ownLoose = tree.allocated("home/cache/loose/own.tmp")
+        let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.items.map(\.outcome.freedBytes) == [own, 0, ownLoose])
+        #expect(journalEntries(tree).reduce(UInt64(0)) { $0 + $1.bytes } == own + ownLoose)
+        #expect(onDisk(tree.path("home/keep/linked.bin")))
+    }
+}

@@ -195,6 +195,20 @@ public final class ScanTree: @unchecked Sendable {
     }
 }
 
+extension ScanTree {
+    /// Bytes of multiply-linked files that also have links outside this tree. Removing the tree doesn't free them.
+    func bytesLinkedOutside() -> UInt64 {
+        var total: UInt64 = 0
+        for group in hardLinks.values {
+            guard let link = group.links.first else { continue }
+            var st = stat()
+            guard lstat(PathUtil.join(link.node.path, link.name), &st) == 0 else { continue }
+            if Int(st.st_nlink) > group.links.count { total &+= group.size }
+        }
+        return total
+    }
+}
+
 /// Identifies a file whatever name it's reached by.
 struct HardLinkKey: Hashable, Sendable {
     let device: Int32

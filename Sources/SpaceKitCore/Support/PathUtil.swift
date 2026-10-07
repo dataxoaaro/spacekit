@@ -4,7 +4,19 @@ import Foundation
 public enum PathUtil {
     /// The real user's home directory, even when `HOME` points elsewhere.
     public static var home: String {
-        if let override = ProcessInfo.processInfo.environment["SPACEKIT_HOME"], !override.isEmpty {
+        resolveHome(environment: ProcessInfo.processInfo.environment, honorsOverride: honorsHomeOverride)
+    }
+
+    /// `SPACEKIT_HOME` points the guard's notion of home at a sandbox. A release build that honoured it
+    /// would strip every home protection from the real home, so only debug builds read it.
+    #if DEBUG
+        static let honorsHomeOverride = true
+    #else
+        static let honorsHomeOverride = false
+    #endif
+
+    static func resolveHome(environment: [String: String], honorsOverride: Bool) -> String {
+        if honorsOverride, let override = environment["SPACEKIT_HOME"], !override.isEmpty {
             return standardize(override)
         }
         return standardize(FileManager.default.homeDirectoryForCurrentUser.path)

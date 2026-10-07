@@ -207,21 +207,23 @@ public struct RuleEngine: Sendable {
         )
     }
 
-    static func childItems(of node: DirNode, markers: MarkerRegistry, excluding claimed: Set<String> = []) -> [FindingItem] {
+    static func childItems(of node: DirNode, markers: MarkerRegistry) -> [FindingItem] {
         var result: [FindingItem] = []
-        for child in node.children where child.size > 0 && !child.isSkipped && !claimed.contains(child.path) {
+        for child in node.children where child.size > 0 && !child.isSkipped {
             result.append(item(for: child, markers: markers))
         }
-        if node.directFileSize > 0 {
-            let date = node.newestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(node.newestModified)) : nil
-            result.append(
-                FindingItem(
-                    path: node.path, kind: .looseFiles, name: "Files in \(node.name)",
-                    size: node.directFileSize, fileCount: UInt64(node.directFileCount),
-                    lastModified: date, lastUsed: date
-                ))
-        }
+        if let loose = looseFilesItem(of: node) { result.append(loose) }
         return result
+    }
+
+    /// The plain files directly inside `node` as one item, or `nil` if there are none with any size.
+    static func looseFilesItem(of node: DirNode, path: String? = nil, excludingBytes excluded: UInt64 = 0) -> FindingItem? {
+        guard node.directFileSize > excluded else { return nil }
+        let date = node.newestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(node.newestModified)) : nil
+        return FindingItem(
+            path: path ?? node.path, kind: .looseFiles, name: "Files in \(node.name)",
+            size: node.directFileSize - excluded, fileCount: UInt64(node.directFileCount),
+            lastModified: date, lastUsed: date)
     }
 
     private func isExcluded(_ item: FindingItem, by rule: Rule) -> Bool {
@@ -300,46 +302,62 @@ public struct RuleEngine: Sendable {
 
     /// Makes sure no byte is claimed twice. If two rules claim the same path, the more specific rule wins.
     /// If an item contains another rule's item, the outer item is split into its children so the
-    /// inner item is reported (and cleaned) under its own rule.
+    /// inner item is reported (and cleaned) under its own rule. That includes another rule's loose files
+    /// or single files: the outer rule never gets a folder's loose files that someone else already claims.
     private func resolveOverlaps(_ claims: [Claim], tree: ScanTree) -> [Claim] {
         var best: [String: Claim] = [:]
         for claim in claims {
             if let existing = best[claim.item.id], existing.specificity >= claim.specificity { continue }
             best[claim.item.id] = claim
         }
-        let directoryPaths = best.values.filter { $0.item.kind == .directory }.map(\.item.path).sorted()
+        var wholeClaims = Set<String>()
+        var looseClaims = Set<String>()
+        /// Bytes of claimed single files, by the folder that holds them.
+        var fileClaims: [String: UInt64] = [:]
+        for claim in best.values {
+            switch claim.item.kind {
+            case .directory: wholeClaims.insert(claim.item.path)
+            case .looseFiles: looseClaims.insert(claim.item.path)
+            case .file: fileClaims[PathUtil.parent(claim.item.path), default: 0] &+= claim.item.size
+            }
+        }
+        // A loose-files claim takes bytes from its folder, so its folder path counts as claimed inside an ancestor.
+        let claimedPaths = best.values.map(\.item.path).sorted()
         func hasClaimInside(_ path: String) -> Bool {
             let prefix = path == "/" ? "/" : path + "/"
             var low = 0
-            var high = directoryPaths.count
+            var high = claimedPaths.count
             while low < high {
                 let mid = (low + high) / 2
-                if directoryPaths[mid] < prefix { low = mid + 1 } else { high = mid }
+                if claimedPaths[mid] < prefix { low = mid + 1 } else { high = mid }
             }
-            return low < directoryPaths.count && directoryPaths[low].hasPrefix(prefix)
+            return low < claimedPaths.count && claimedPaths[low].hasPrefix(prefix)
         }
-        let claimedSet = Set(directoryPaths)
+        func mustSplit(_ path: String) -> Bool { looseClaims.contains(path) || hasClaimInside(path) }
 
         var result: [Claim] = []
         for claim in best.values {
-            guard claim.item.kind == .directory, hasClaimInside(claim.item.path), let node = tree.node(at: claim.item.path) else {
+            guard claim.item.kind == .directory, mustSplit(claim.item.path), let node = tree.node(at: claim.item.path) else {
                 result.append(claim)
                 continue
             }
-            var stack = [node]
-            while let current = stack.popLast() {
-                for child in current.children where child.size > 0 && !claimedSet.contains(child.path) {
-                    if hasClaimInside(child.path) {
-                        stack.append(child)
+            var stack = [(node, claim.item.path)]
+            while let (current, currentPath) = stack.popLast() {
+                for child in current.children where child.size > 0 {
+                    let childPath = PathUtil.join(currentPath, child.name)
+                    if wholeClaims.contains(childPath) { continue }
+                    if mustSplit(childPath) {
+                        stack.append((child, childPath))
                     } else {
                         result.append(
                             Claim(
                                 rule: claim.rule, item: RuleEngine.item(for: child, markers: tree.markers), specificity: claim.specificity))
                     }
                 }
-                for item in RuleEngine.childItems(of: current, markers: tree.markers, excluding: Set(current.children.map(\.path))) {
-                    result.append(Claim(rule: claim.rule, item: item, specificity: claim.specificity))
-                }
+                guard !looseClaims.contains(currentPath),
+                    let loose = RuleEngine.looseFilesItem(of: current, path: currentPath, excludingBytes: fileClaims[currentPath] ?? 0)
+                else { continue }
+                result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
             }
         }
         return result

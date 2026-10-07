@@ -423,7 +423,7 @@ struct SuggestionsCommand: ParsableCommand {
                 Output.emit(
                     ["Nothing in this suggestion still matches the job's conditions. Dismiss it: " + dismiss], toStandardError: json)
                 if json {
-                    try Output.json(RunJSON(plan: PlanJSON(plan: plan, executor: runner.executor, context: .manual(confirmed: false))))
+                    try Output.json(RunJSON(plan: PlanJSON(CleanupReview(plan, executor: runner.executor))))
                 }
                 return
             }

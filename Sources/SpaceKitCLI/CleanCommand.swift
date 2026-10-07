@@ -65,7 +65,7 @@ struct CleanCommand: ParsableCommand {
 
         guard !plan.isEmpty || !plan.manualSteps.isEmpty else {
             if json {
-                try Output.json(RunJSON(plan: PlanJSON(plan: plan, executor: context.executor, context: .manual(confirmed: false))))
+                try Output.json(RunJSON(plan: PlanJSON(CleanupReview(plan, executor: context.executor))))
             } else {
                 print("Nothing to clean.")
             }
@@ -125,7 +125,7 @@ struct CleanCommand: ParsableCommand {
         let kind: FindingItem.Kind = isFolder ? .directory : .file
         let rule = index.rule(for: path)
         // Ask the guard before measuring, so `clean /` doesn't scan the whole disk just to refuse.
-        if context.safetyGuard.evaluate(path: path, rule: rule, context: .manual(confirmed: false)).isBlocked {
+        if context.safetyGuard.evaluate(path: path, rule: rule, context: .manual).isBlocked {
             return CleanupItem(path: path, kind: kind, size: 0, ruleID: rule?.id, scanStarted: scanStarted)
         }
         var options = context.scanOptions

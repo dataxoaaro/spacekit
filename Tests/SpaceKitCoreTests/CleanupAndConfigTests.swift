@@ -10,7 +10,7 @@ struct CleanupExecutorTests {
         let tree = try TempTree()
         try tree.file("home/Projects/app/build/out.o", bytes: 10_000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/app/build"), size: 10_000)], useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let report = manualRun(plan, with: sandboxExecutor(tree), dryRun: true)
         #expect(report.items.map(\.outcome) == [.wouldRemove(bytes: 10_000)])
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app/build/out.o")))
         #expect(Journal(file: tree.path("state/journal.jsonl")).entries().isEmpty)
@@ -23,7 +23,7 @@ struct CleanupExecutorTests {
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/app/build"), size: 10_000)], useTrash: false)
         // Reported and journaled sizes are measured at removal time: allocated blocks, not the plan's figure.
         let allocated = tree.allocated("home/Projects/app/build/out.o")
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.freedBytes == allocated)
         #expect(!FileManager.default.fileExists(atPath: tree.path("home/Projects/app/build")))
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app")))
@@ -43,7 +43,7 @@ struct CleanupExecutorTests {
             CleanupItem(path: tree.path("home"), size: 100),
         ]
         let plan = CleanupPlan(items: items, useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: false), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree), acceptingWarnings: false)
         #expect(report.freedBytes == 0)
         #expect(report.skipped.count == 2)
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app/notes.txt")))
@@ -63,7 +63,7 @@ struct CleanupExecutorTests {
         ]
         let allocated = tree.allocated("home/dd/a/x")
         let report = sandboxExecutor(tree, rules: [rule], budget: ByteCount(10_000))
-            .execute(CleanupPlan(items: items, useTrash: false), context: .automatic(AutomationContext(jobID: "j")), dryRun: false)
+            .execute(AutomaticPlan(CleanupPlan(items: items, useTrash: false), automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(report.freedBytes == allocated)
         #expect(report.skipped.count == 1)
     }
@@ -77,7 +77,7 @@ struct CleanupExecutorTests {
         let item = CleanupItem(
             path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"], scanStarted: Date())
         let plan = CleanupPlan(items: [item], useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.freedBytes > 0)
         #expect(!FileManager.default.fileExists(atPath: tree.path("home/cache/a.tmp")))
         #expect(FileManager.default.fileExists(atPath: tree.path("home/cache/sub/keep.bin")))
@@ -87,7 +87,7 @@ struct CleanupExecutorTests {
     func untrustedCommand() throws {
         let tree = try TempTree()
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "x", arguments: ["/bin/rm", "-rf", tree.root], estimatedBytes: 1)])
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         if case .skipped = report.commands.first?.outcome {} else { Issue.record("rm must not run") }
         #expect(FileManager.default.fileExists(atPath: tree.root))
     }

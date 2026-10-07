@@ -80,8 +80,10 @@
                     deleting.useTrash = false
                     let plan = deleting
                     Task {
-                        // Never confirmed: only items the guard allows outright are removed.
-                        _ = await model.execute(plan, confirmed: false, onProgress: { _, _, _ in })
+                        // Through the review like every manual run, accepting no warnings: nobody saw them, so only
+                        // items the guard allows outright are removed.
+                        let review = await model.cleanupReview(of: plan)
+                        _ = await model.execute(review.acknowledge(acceptingWarnings: false), onProgress: { _, _, _ in })
                         model.pendingCleanup = nil
                         let elapsed = Date().timeIntervalSince(started)
                         try? "cleanup applied in \(elapsed)s; analysing=\(model.isAnalysing)\n"

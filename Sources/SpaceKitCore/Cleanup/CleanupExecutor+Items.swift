@@ -9,7 +9,10 @@ extension CleanupExecutor {
 
     static let stalePlan = "This item was saved without what its scan saw; refresh the plan"
 
-    func removeItem(_ item: CleanupItem, plan: CleanupPlan, context: CleanupContext, run: inout Run) -> CleanupOutcome {
+    /// `accepted`: the warnings the person accepted for this item in the review.
+    func removeItem(
+        _ item: CleanupItem, plan: CleanupPlan, context: CleanupContext, accepted: Set<String>, run: inout Run
+    ) -> CleanupOutcome {
         var st = stat()
         guard lstat(item.path, &st) == 0 else { return .skipped(reason: "Already gone") }
         let isFolder = (st.st_mode & S_IFMT) == S_IFDIR
@@ -39,22 +42,19 @@ extension CleanupExecutor {
 
         let isRepository = item.isRepository || (isFolder && RepositoryProbe.isRepository(item.path))
         let containsRepository = item.containsRepository || (isFolder && RepositoryProbe.containsRepository(item.path))
-        let confirmed = CleanupExecutor.isConfirmed(context)
-        // What the preview showed: the plan's own facts. A warning beyond those was never confirmed.
-        let reviewed = verdict(for: item, context: context)
         func check(size: UInt64) -> CleanupOutcome? {
             let fresh = verdict(
                 for: item, size: size, isRepository: isRepository, containsRepository: containsRepository, context: context,
                 checkedDirectory: checkedDirectory)
-            guard fresh.permits(confirmed: confirmed) else { return CleanupExecutor.refusal(fresh) }
-            return CleanupExecutor.unreviewedWarnings(fresh, reviewed: reviewed)
+            return CleanupExecutor.refusal(fresh, accepted: accepted)
         }
         if let refused = check(size: item.size) { return refused }
 
         if item.kind == .looseFiles, let scanStarted {
             if run.dryRun { return .wouldRemove(bytes: item.size) }
             guard resolve(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
-            return removeLooseFiles(item, in: checkedDirectory, removal: removal, scanStarted: scanStarted, context: context, run: &run)
+            return removeLooseFiles(
+                item, in: checkedDirectory, removal: removal, scanStarted: scanStarted, context: context, accepted: accepted, run: &run)
         }
 
         // Charge the budget and report what's there now, not what the scan saw.
@@ -110,7 +110,8 @@ extension CleanupExecutor {
     /// Removes the plain files directly inside the checked folder, leaving subfolders alone. Each file is checked
     /// by the guard, charged to the budget and journaled on its own, so a partial failure keeps an exact record.
     private func removeLooseFiles(
-        _ item: CleanupItem, in directory: String, removal: RemovalMethod, scanStarted: Date, context: CleanupContext, run: inout Run
+        _ item: CleanupItem, in directory: String, removal: RemovalMethod, scanStarted: Date, context: CleanupContext,
+        accepted: Set<String>, run: inout Run
     ) -> CleanupOutcome {
         let names = item.looseFileNames ?? []
         let fd: Int32
@@ -122,7 +123,6 @@ extension CleanupExecutor {
         defer { close(fd) }
 
         let rule = item.ruleID.flatMap { rules[$0] }
-        let confirmed = CleanupExecutor.isConfirmed(context)
         var totalFreed: UInt64 = 0
         var trashLocations: [String] = []
         var removedCount = 0
@@ -136,7 +136,7 @@ extension CleanupExecutor {
             let verdict = CleanupExecutor.judge(path, checked: PathUtil.join(directory, name)) { candidate in
                 safety.evaluate(path: candidate, rule: rule, context: context)
             }
-            guard verdict.permits(confirmed: confirmed) else { continue }
+            guard CleanupExecutor.refusal(verdict, accepted: accepted) == nil else { continue }
             let size = FileSize.allocated(st)
             let freed = CleanupExecutor.isLastLink(st) ? size : 0
             if context.isAutomatic && size > run.budget {
@@ -213,25 +213,6 @@ extension CleanupExecutor {
     static func changed(_ st: stat, after date: Date) -> Bool {
         func time(_ ts: timespec) -> Date { Date(timeIntervalSince1970: Double(ts.tv_sec) + Double(ts.tv_nsec) / 1e9) }
         return time(st.st_mtimespec) > date || time(st.st_ctimespec) > date
-    }
-
-    /// Starts the skip reason of an item that gained a warning after the preview. Reports treat it as a problem,
-    /// because the person never saw that warning.
-    public static let changedSinceReview = "Changed since you reviewed it: "
-
-    /// Confirmation covers the warnings the person saw. A warning that is new at removal time (a repository that
-    /// appeared, a folder that grew past the volume-share limit) skips the item instead.
-    static func unreviewedWarnings(_ fresh: SafetyVerdict, reviewed: SafetyVerdict) -> CleanupOutcome? {
-        guard fresh.decision == .confirm else { return nil }
-        let seen = Set(reviewed.reasons.map(reasonKey))
-        let unseen = fresh.reasons.filter { !seen.contains(reasonKey($0)) }
-        guard !unseen.isEmpty else { return nil }
-        return .skipped(reason: changedSinceReview + unseen.joined(separator: "; "))
-    }
-
-    /// A reason without its numbers: a volume share shown as 12% in the preview is the same warning at 13%.
-    static func reasonKey(_ reason: String) -> String {
-        String(reason.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) })
     }
 
     static func changedWhileChecking(_ directory: String) -> CleanupOutcome {

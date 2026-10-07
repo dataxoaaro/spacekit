@@ -130,7 +130,7 @@ struct ConfigValueTests {
         #expect(context.configError?.contains("'sh'") == true)
         #expect(context.config.safety.allowedCommands.isEmpty)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("work/build"), size: 1000)], useTrash: false)
-        let report = context.executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: context.executor)
         #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
         #expect(onDisk(tree.path("work/build/x")))
     }

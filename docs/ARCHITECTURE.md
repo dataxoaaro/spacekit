@@ -32,7 +32,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
 | `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
 | `Safety/` | `SafetyGuard`, the single gate for removals, and `RuleScope` (where a rule applies, shared by the guard, `RuleIndex` and `RuleEngine` so they agree). See [SAFETY.md](SAFETY.md). |
-| `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `SafeRemoval` (deletion through directory handles under a checked folder, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove), `Journal`. |
+| `Cleanup/` | `CleanupPlan`, `CleanupReview` (the guard's verdict per row, unticked rows, totals and Trash wording; the only maker of a `ReviewedPlan`), `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `SafeRemoval` (deletion through directory handles under a checked folder, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
@@ -120,14 +120,21 @@ With local Time Machine snapshots on the disk, deleting files doesn't change `fr
 ## Cleanup pipeline
 
 ```
-Finding / selection ──► CleanupPlan ──► review (app sheet · TUI dialog · CLI preview)
-                                              │ person confirms
-                                              ▼
-                     CleanupExecutor: for each item ─► SafetyGuard (again) ─► budget ─► Trash / delete by handle ─► journal entry
-                                      for each command ─► gates + trusted? ─► run without shell ─► measure freed ─► journal entry
-                                              │
-                                              ▼
-                                           report ─► incremental UI update
+Finding / selection ──► CleanupPlan (each item carries its scan start)
+        │                    │
+        │                    ▼
+        │              CleanupReview: verdict per row · unticked rows · totals · Trash wording
+        │              rendered by the app sheet · TUI dialog · CLI preview, which ask
+        │                    │ one acknowledgement per plan (records the warnings shown per row)
+        ▼                    ▼
+JobRunner (automatic) ─► AutomaticPlan      ReviewedPlan
+                              └───────┬───────┘
+                                      ▼
+   CleanupExecutor: for each item ─► SafetyGuard (again; an unshown warning skips) ─► budget ─► Trash / delete by handle ─► journal entry
+                    for each command ─► gates + trusted? ─► run without shell ─► measure freed ─► journal entry
+                                      │
+                                      ▼
+                                   report ─► incremental UI update
 ```
 
 A verdict keeps each reason with the decision it calls for on its own (`SafetyVerdict.entries`), and every review labels each reason by that decision. A blocked item can also carry a reason that alone would only need confirmation, and that reason isn't shown as a block.
@@ -138,7 +145,7 @@ A verdict keeps each reason with the decision it calls for on its own (`SafetyVe
 
 1. records a cheap usage sample (at most every 6 hours);
 2. finds due jobs (`schedule.nextRun(after: lastRun ?? firstSeen) <= now`, so missed runs catch up after sleep). If job state can't be saved, no job runs, because every wake-up would otherwise repeat the same jobs;
-3. evaluates each job with a targeted scan, applies `when` conditions, and observes, suggests or cleans. Automatic runs use `CleanupContext.automatic`, which never confirms anything;
+3. evaluates each job with a targeted scan, applies `when` conditions, and observes, suggests or cleans. Automatic runs hand the executor an automatic plan, which acknowledges nothing;
 4. takes the weekly full snapshot for History.
 
 Job state, suggestions and config edits are read-modify-write under a lock file (`FileLock`), so the agent, the CLI and the app don't overwrite each other's changes.

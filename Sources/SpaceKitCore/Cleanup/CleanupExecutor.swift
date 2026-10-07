@@ -169,11 +169,22 @@ public struct CleanupExecutor: Sendable {
         }
     }
 
-    public func execute(
-        _ plan: CleanupPlan,
-        context: CleanupContext,
-        dryRun: Bool,
-        onProgress: (@Sendable (_ completed: Int, _ total: Int, _ current: String) -> Void)? = nil
+    public typealias ProgressHandler = @Sendable (_ completed: Int, _ total: Int, _ current: String) -> Void
+
+    /// Runs a plan a person reviewed and said go to. Each item and command is checked again first, and a warning
+    /// the review didn't show for that row skips it.
+    public func execute(_ reviewed: ReviewedPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
+        execute(reviewed.plan, context: .manual, accepted: reviewed.accepted, dryRun: dryRun, onProgress: onProgress)
+    }
+
+    /// Runs an automatic job's plan under the automation limits. Nobody acknowledged anything, so whatever needs
+    /// confirmation is skipped.
+    func execute(_ automatic: AutomaticPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
+        execute(automatic.plan, context: .automatic(automatic.automation), accepted: .none, dryRun: dryRun, onProgress: onProgress)
+    }
+
+    private func execute(
+        _ plan: CleanupPlan, context: CleanupContext, accepted: AcceptedWarnings, dryRun: Bool, onProgress: ProgressHandler?
     ) -> CleanupReport {
         var run = Run(report: CleanupReport(dryRun: dryRun), budget: context.isAutomatic ? maxBytesPerAutomaticRun : .max)
         let total = plan.items.count + plan.commands.count
@@ -182,13 +193,13 @@ public struct CleanupExecutor: Sendable {
         for item in plan.items {
             onProgress?(completed, total, item.path)
             completed += 1
-            let outcome = removeItem(item, plan: plan, context: context, run: &run)
+            let outcome = removeItem(item, plan: plan, context: context, accepted: accepted.items[item.id] ?? [], run: &run)
             run.report.items.append((item, outcome))
         }
         for command in plan.commands {
             onProgress?(completed, total, command.displayString)
             completed += 1
-            let (outcome, output) = runCommand(command, context: context, run: &run)
+            let (outcome, output) = runCommand(command, context: context, accepted: accepted.commands[command.id] ?? [], run: &run)
             run.report.commands.append((command, outcome, output))
         }
         onProgress?(total, total, "")
@@ -224,19 +235,35 @@ public struct CleanupExecutor: Sendable {
             automatic: context.isAutomatic, trashedTo: trashedTo)
     }
 
-    static func isConfirmed(_ context: CleanupContext) -> Bool {
-        if case .manual(let confirmed) = context { return confirmed }
-        return false
-    }
-
     static func jobID(_ context: CleanupContext) -> String? {
         if case .automatic(let automation) = context { return automation.jobID }
         return nil
     }
 
-    static func refusal(_ verdict: SafetyVerdict) -> CleanupOutcome {
-        let prefix = verdict.decision == .confirm ? "Needs confirmation: " : "Blocked: "
-        return .skipped(reason: prefix + verdict.reasons.joined(separator: "; "))
+    /// Why the run may not act on `verdict`, or `nil` when it may: allowed outright, or needing confirmation only for
+    /// warnings the person accepted for this row in the review. A warning they didn't see (a repository that appeared,
+    /// a folder that grew past the volume-share limit) skips the row.
+    static func refusal(_ verdict: SafetyVerdict, accepted: Set<String>) -> CleanupOutcome? {
+        let reasons = verdict.reasons.joined(separator: "; ")
+        switch verdict.decision {
+        case .allow:
+            return nil
+        case .block:
+            return .skipped(reason: "Blocked: " + reasons)
+        case .confirm:
+            guard !accepted.isEmpty else { return .skipped(reason: "Needs confirmation: " + reasons) }
+            let unseen = verdict.reasons.filter { !accepted.contains(reasonKey($0)) }
+            return unseen.isEmpty ? nil : .skipped(reason: changedSinceReview + unseen.joined(separator: "; "))
+        }
+    }
+
+    /// Starts the skip reason of a row that gained a warning after the review. Reports treat it as a problem, because the
+    /// person never saw that warning.
+    public static let changedSinceReview = "Changed since you reviewed it: "
+
+    /// A reason without its numbers: a volume share shown as 12% in the preview is the same warning at 13%.
+    static func reasonKey(_ reason: String) -> String {
+        String(reason.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) })
     }
 
     func overBudget() -> CleanupOutcome {

@@ -82,9 +82,8 @@ extension CleanupExecutor {
         }
     }
 
-    func runCommand(_ command: PlannedCommand, context: CleanupContext, run: inout Run) -> (CleanupOutcome, String) {
-        let verdict = verdict(for: command, context: context)
-        guard verdict.permits(confirmed: CleanupExecutor.isConfirmed(context)) else { return (CleanupExecutor.refusal(verdict), "") }
+    func runCommand(_ command: PlannedCommand, context: CleanupContext, accepted: Set<String>, run: inout Run) -> (CleanupOutcome, String) {
+        if let refused = CleanupExecutor.refusal(verdict(for: command, context: context), accepted: accepted) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
         let name = command.arguments[0]
         guard let executable = Shell.which(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }

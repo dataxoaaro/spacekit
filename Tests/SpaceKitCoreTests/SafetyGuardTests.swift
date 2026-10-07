@@ -7,7 +7,7 @@ import Testing
 @Suite("Safety guard")
 struct SafetyGuardTests {
     let guardian = testGuard()
-    let manual = CleanupContext.manual(confirmed: true)
+    let manual = CleanupContext.manual
     let automatic = CleanupContext.automatic(AutomationContext(jobID: "test"))
 
     @Test(
@@ -19,7 +19,6 @@ struct SafetyGuardTests {
     func wholeDiskAndTopLevel(path: String) {
         let verdict = guardian.evaluate(path: path, context: manual)
         #expect(verdict.isBlocked, "\(path) must be blocked")
-        #expect(!verdict.permits(confirmed: true))
     }
 
     @Test(
@@ -67,7 +66,7 @@ struct SafetyGuardTests {
     @Test("Repositories need confirmation by hand and are never removed automatically")
     func repositories() {
         let path = "/Users/tester/Projects/app"
-        let byHand = guardian.evaluate(path: path, context: .manual(confirmed: false), isRepository: true)
+        let byHand = guardian.evaluate(path: path, context: .manual, isRepository: true)
         #expect(byHand.decision == .confirm)
         #expect(guardian.evaluate(path: path, context: automatic, isRepository: true).isBlocked)
     }
@@ -103,7 +102,7 @@ struct SafetyGuardTests {
             id: "xcode.derived-data", name: "DerivedData", paths: ["~/Library/Developer/Xcode/DerivedData"],
             granularity: .children, safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
         let path = "/Users/tester/Library/Developer/Xcode/DerivedData/App-abc"
-        #expect(guardian.evaluate(path: path, rule: rule, context: .manual(confirmed: false)).decision == .allow)
+        #expect(guardian.evaluate(path: path, rule: rule, context: .manual).decision == .allow)
         #expect(guardian.evaluate(path: path, rule: rule, context: automatic).decision == .allow)
     }
 
@@ -124,7 +123,7 @@ struct SafetyGuardTests {
         #expect(guardian.evaluate(path: path, rule: rule, context: automatic).isBlocked)
         let optedIn = CleanupContext.automatic(AutomationContext(jobID: "a", allowReview: true))
         #expect(guardian.evaluate(path: path, rule: rule, context: optedIn).decision == .allow)
-        #expect(guardian.evaluate(path: path, rule: rule, context: .manual(confirmed: false)).decision == .confirm)
+        #expect(guardian.evaluate(path: path, rule: rule, context: .manual).decision == .confirm)
     }
 
     @Test("Automatic runs never remove unrecognised folders the job didn't list")
@@ -135,7 +134,7 @@ struct SafetyGuardTests {
     @Test("Personal folders: by hand with confirmation; automatically only under strict terms")
     func personalAreas() {
         let file = "/Users/tester/Downloads/installer.dmg"
-        #expect(guardian.evaluate(path: file, context: .manual(confirmed: false)).decision == .confirm)
+        #expect(guardian.evaluate(path: file, context: .manual).decision == .confirm)
         #expect(guardian.evaluate(path: file, context: automatic).isBlocked)
 
         let strict = CleanupContext.automatic(
@@ -180,7 +179,7 @@ struct VerdictEntryTests {
     func decisionPerReason() {
         let rule = Rule(id: "db", name: "Database", paths: ["~/db"], safety: SafetySpec(level: .protected))
         let verdict = testGuard().evaluate(
-            path: "/Users/tester/Projects/app", rule: rule, context: .manual(confirmed: false), isRepository: true)
+            path: "/Users/tester/Projects/app", rule: rule, context: .manual, isRepository: true)
         #expect(verdict.decision == .block)
         #expect(verdict.entries.first { $0.reason.contains("Don't touch") }?.decision == .block)
         #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
@@ -197,7 +196,7 @@ struct VerdictEntryTests {
         rule.isBuiltin = true
         let command = PlannedCommand(
             ruleID: "tools", arguments: ["swift", tree.path("home/tools/a")], estimatedBytes: 1, itemPath: tree.path("home/tools/a"))
-        let verdict = sandboxExecutor(tree, rules: [rule]).verdict(for: command, context: .manual(confirmed: false))
+        let verdict = sandboxExecutor(tree, rules: [rule]).verdict(for: command, context: .manual)
         #expect(verdict.decision == .block)
         #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
     }
@@ -207,7 +206,7 @@ struct VerdictEntryTests {
 /// so every protected list must match regardless of how the path is spelled.
 @Suite("Safety guard: case and Unicode spellings")
 struct SafetyGuardSpellingTests {
-    let manual = CleanupContext.manual(confirmed: true)
+    let manual = CleanupContext.manual
     let automatic = CleanupContext.automatic(AutomationContext(jobID: "test"))
 
     /// A sandbox home on disk holding the usual protected folders.
@@ -255,7 +254,7 @@ struct SafetyGuardSpellingTests {
     @Test("Personal folders are recognised in any case")
     func personalCase() {
         let file = "/Users/tester/downloads/installer.dmg"
-        #expect(testGuard().evaluate(path: file, context: .manual(confirmed: false)).reasons == ["This is personal data, not a cache"])
+        #expect(testGuard().evaluate(path: file, context: .manual).reasons == ["This is personal data, not a cache"])
         // A job listing `~/downloads` without an age limit must get the strict personal-folder treatment.
         let noAge = CleanupContext.automatic(AutomationContext(jobID: "dl", customPaths: ["~/downloads"], olderThan: nil, usesTrash: true))
         #expect(testGuard().evaluate(path: file, context: noAge).isBlocked)
@@ -291,7 +290,7 @@ struct SafetyGuardSpellingTests {
 
 @Suite("Safety guard: protected lists")
 struct SafetyGuardProtectedListTests {
-    let manual = CleanupContext.manual(confirmed: true)
+    let manual = CleanupContext.manual
 
     @Test(
         "Sealed roots are blocked, not only what's inside them",
@@ -358,19 +357,19 @@ struct SafetyGuardProtectedListTests {
         let guardian = testGuard()
         let path = "/Users/tester/Projects"
         let automatic = CleanupContext.automatic(AutomationContext(jobID: "a", customPaths: ["~/Projects"]))
-        let byHand = guardian.evaluate(path: path, context: .manual(confirmed: false), containsRepository: true)
+        let byHand = guardian.evaluate(path: path, context: .manual, containsRepository: true)
         #expect(byHand.decision == .confirm)
         #expect(byHand.reasons.contains("This folder contains git repositories"))
         #expect(guardian.evaluate(path: path, context: automatic, containsRepository: true).isBlocked)
 
         let safe = Rule(
             id: "dev.builds", name: "Builds", paths: ["~/Projects"], safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
-        #expect(guardian.evaluate(path: path, rule: safe, context: .manual(confirmed: false), containsRepository: true).decision == .allow)
+        #expect(guardian.evaluate(path: path, rule: safe, context: .manual, containsRepository: true).decision == .allow)
         #expect(guardian.evaluate(path: path, rule: safe, context: automatic, containsRepository: true).decision == .allow)
 
         let review = Rule(
             id: "dev.builds", name: "Builds", paths: ["~/Projects"], safety: SafetySpec(level: .review), action: ActionSpec(remove: true))
-        let reviewed = guardian.evaluate(path: path, rule: review, context: .manual(confirmed: false), containsRepository: true)
+        let reviewed = guardian.evaluate(path: path, rule: review, context: .manual, containsRepository: true)
         #expect(reviewed.reasons.contains("This folder contains git repositories"))
         let optedIn = CleanupContext.automatic(AutomationContext(jobID: "a", allowReview: true))
         #expect(guardian.evaluate(path: path, rule: review, context: optedIn, containsRepository: true).isBlocked)
@@ -394,7 +393,7 @@ struct SafetyGuardAutomationTests {
 
     @Test("By hand, an item over 10% of used space needs confirmation")
     func manualVolumeShare() {
-        let manual = CleanupContext.manual(confirmed: false)
+        let manual = CleanupContext.manual
         #expect(guardian.evaluate(path: path, size: 100, rule: safeRule, context: manual).decision == .allow)
         #expect(guardian.evaluate(path: path, size: 150, rule: safeRule, context: manual).decision == .confirm)
         #expect(guardian.evaluate(path: path, size: 300, rule: safeRule, context: manual).decision == .confirm)
@@ -440,7 +439,7 @@ struct SafetyGuardAutomationTests {
     @Test("A path is checked exactly as given: trailing spaces name a different item")
     func noTrimming() throws {
         let guardian = testGuard()
-        let manual = CleanupContext.manual(confirmed: false)
+        let manual = CleanupContext.manual
         #expect(guardian.evaluate(path: "/Users/tester/Documents", context: manual).isBlocked)
         let spaced = guardian.evaluate(path: "/Users/tester/Documents ", context: manual)
         #expect(spaced.decision == .confirm)
@@ -457,7 +456,7 @@ struct SafetyGuardAutomationTests {
             id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"]),
             safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
         let guardian = testGuard()
-        let manual = CleanupContext.manual(confirmed: false)
+        let manual = CleanupContext.manual
         #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: rule, context: manual).decision == .allow)
         let tool = guardian.evaluate(path: "/Users/tester/.vscode/extensions/ext/node_modules", rule: rule, context: manual)
         #expect(tool.decision == .confirm)
@@ -508,7 +507,7 @@ struct SafetyGuardAutomationTests {
         let rule = Rule(
             id: "c", name: "c", paths: [written], granularity: .children, safety: SafetySpec(level: .safe),
             action: ActionSpec(remove: true))
-        let manual = CleanupContext.manual(confirmed: false)
+        let manual = CleanupContext.manual
 
         #expect(guardian.evaluate(path: written + "/a", rule: rule, context: manual).decision == .allow)
         #expect(guardian.evaluate(path: written + "/a", rule: rule, context: automatic).decision == .allow)

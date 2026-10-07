@@ -18,7 +18,7 @@ struct AIModelRemovalTests {
     }
 
     func outcome(_ tree: TempTree, rule: Rule, plan: CleanupPlan, confirmed: Bool = true, root: Bool = false) -> CleanupOutcome? {
-        sandboxExecutor(tree, rules: [rule], root: root).execute(plan, context: .manual(confirmed: confirmed), dryRun: true)
+        manualRun(plan, with: sandboxExecutor(tree, rules: [rule], root: root), acceptingWarnings: confirmed, dryRun: true)
             .commands.first?.outcome
     }
 
@@ -136,7 +136,7 @@ struct AIModelRemovalTests {
         #expect(plan.items.map(\.kind).sorted { $0.rawValue < $1.rawValue } == [.directory, .looseFiles])
         #expect(plan.items.allSatisfy { $0.size > 0 })
 
-        let report = sandboxExecutor(tree, rules: [cache, models]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [cache, models]))
         #expect(report.removedAnything)
         #expect(onDisk(tree.path("home/tool/models/m.bin")))
         #expect(!onDisk(tree.path("home/tool/loose.log")))
@@ -157,7 +157,7 @@ struct AIModelRemovalTests {
         let plan = try #require(CleanupPlan.removing(remainder, useTrash: false, scanStarted: scanned.scanStarted))
         #expect(plan.totalBytes == remainder.size)
 
-        _ = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        _ = manualRun(plan, with: sandboxExecutor(tree, rules: [rule]))
         #expect(onDisk(tree.path("home/hf/hub/models--org--name/blob.bin")))
         #expect(!onDisk(tree.path("home/hf/hub/.locks")))
         #expect(!onDisk(tree.path("home/hf/token.cache")))

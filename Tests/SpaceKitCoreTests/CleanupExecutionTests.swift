@@ -46,7 +46,7 @@ struct AutomaticCleanupTests {
         let rule = cacheRule(tree, level: .review, paths: ["home/archives"])
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/archives/a"), size: 4000, ruleID: "cache")], useTrash: false)
         let report = sandboxExecutor(tree, rules: [rule])
-            .execute(plan, context: .automatic(AutomationContext(jobID: "j", allowReview: true)), dryRun: false)
+            .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j", allowReview: true)), dryRun: false)
         let outcome = try #require(report.items.first?.outcome)
         #expect(outcome.isRemoved)
         #expect(outcome.trashedTo != nil)
@@ -59,8 +59,8 @@ struct AutomaticCleanupTests {
         let tree = try TempTree()
         try tree.file("home/Scratch/old/x", bytes: 4000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Scratch/old"), size: 4000)], useTrash: false)
-        let context = CleanupContext.automatic(AutomationContext(jobID: "j", customPaths: [tree.path("home/Scratch")], usesTrash: false))
-        let report = sandboxExecutor(tree).execute(plan, context: context, dryRun: false)
+        let context = AutomationContext(jobID: "j", customPaths: [tree.path("home/Scratch")], usesTrash: false)
+        let report = sandboxExecutor(tree).execute(AutomaticPlan(plan, automation: context), dryRun: false)
         #expect(report.items.first?.outcome.trashedTo != nil)
         #expect(onDisk(tree.path("home/.Trash/old/x")))
     }
@@ -71,7 +71,8 @@ struct AutomaticCleanupTests {
         try tree.file("home/dd/a/x", bytes: 4000)
         let rule = cacheRule(tree, level: .safe, paths: ["home/dd"])
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/dd/a"), size: 4000, ruleID: "cache")], useTrash: false)
-        let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .automatic(AutomationContext(jobID: "j")), dryRun: false)
+        let report = sandboxExecutor(tree, rules: [rule])
+            .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.items.first?.outcome.trashedTo == nil)
         #expect(!onDisk(tree.path("home/dd/a")))
@@ -85,17 +86,17 @@ struct AutomaticCleanupTests {
         try tree.file("home/.Trash/older/y", bytes: 4000)
         let review = cacheRule(tree, id: "review", level: .review, paths: ["home/.Trash"])
         let safe = cacheRule(tree, id: "safe", level: .safe, paths: ["home/.Trash"])
-        let context = CleanupContext.automatic(AutomationContext(jobID: "j", allowReview: true))
+        let context = AutomationContext(jobID: "j", allowReview: true)
 
         let old = CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, ruleID: "review", scanStarted: Date())
         let reviewPlan = CleanupPlan(items: [old])
-        let skipped = sandboxExecutor(tree, rules: [review]).execute(reviewPlan, context: context, dryRun: false)
+        let skipped = sandboxExecutor(tree, rules: [review]).execute(AutomaticPlan(reviewPlan, automation: context), dryRun: false)
         #expect(skipped.skipped.count == 1)
         #expect(onDisk(tree.path("home/.Trash/old/x")))
 
         let older = CleanupItem(path: tree.path("home/.Trash/older"), size: 4000, ruleID: "safe", scanStarted: Date())
         let safePlan = CleanupPlan(items: [older])
-        let deleted = sandboxExecutor(tree, rules: [safe]).execute(safePlan, context: context, dryRun: false)
+        let deleted = sandboxExecutor(tree, rules: [safe]).execute(AutomaticPlan(safePlan, automation: context), dryRun: false)
         #expect(deleted.items.first?.outcome.isRemoved == true)
         #expect(!onDisk(tree.path("home/.Trash/older")))
         #expect(journalEntries(tree).map(\.method) == [.delete])
@@ -108,7 +109,7 @@ struct AutomaticCleanupTests {
         let rule = cacheRule(tree, level: .safe, paths: ["home/dd"])
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/dd/a"), size: 1, ruleID: "cache")], useTrash: false)
         let report = sandboxExecutor(tree, rules: [rule], budget: ByteCount(10_000))
-            .execute(plan, context: .automatic(AutomationContext(jobID: "j")), dryRun: false)
+            .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(report.skipped.count == 1)
         #expect(onDisk(tree.path("home/dd/a/x")))
     }
@@ -127,7 +128,7 @@ struct AutomaticCleanupTests {
                 CleanupItem(path: tree.path("home/dd/b"), size: 4000, ruleID: "cache"),
             ], useTrash: true)
         let report = sandboxExecutor(tree, rules: [rule])
-            .execute(plan, context: .automatic(AutomationContext(jobID: "j", allowReview: true)), dryRun: false)
+            .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j", allowReview: true)), dryRun: false)
         #expect(report.skipped.count == 2)
         #expect(onDisk(tree.path("home/dd/a/x")))
         #expect(onDisk(tree.path("home/dd/b/deep/er/y")))
@@ -141,7 +142,7 @@ struct TrashAndJournalTests {
         let tree = try TempTree()
         try tree.file("home/.Trash/old/x", bytes: 4000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.Trash/old"), size: 4000, scanStarted: Date())], useTrash: true)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.items.first?.outcome.trashedTo == nil)
         #expect(!onDisk(tree.path("home/.Trash/old")))
@@ -161,7 +162,7 @@ struct TrashAndJournalTests {
             ], useTrash: false)
         var executor = sandboxExecutor(tree, rules: [rule])
         executor.alwaysTrash = true
-        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: executor)
         #expect(report.items.map(\.outcome.isRemoved) == [true, true])
         #expect(onDisk(tree.path("home/.Trash/a/x")))
         #expect(!onDisk(tree.path("home/.Trash/old")))
@@ -173,7 +174,7 @@ struct TrashAndJournalTests {
         let tree = try TempTree()
         try tree.file("home/.Trash/old/x", bytes: 4000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/.TRASH/old"), size: 4000, scanStarted: Date())], useTrash: true)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.items.first?.outcome.trashedTo == nil)
         #expect(journalEntries(tree).map(\.method) == [.delete])
     }
@@ -190,7 +191,7 @@ struct TrashAndJournalTests {
             ], useTrash: false)
         let journal = Journal(file: tree.path("state/journal.jsonl"))
         let seen = Mutex<[Int]>([])
-        _ = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false) { completed, _, _ in
+        _ = manualRun(plan, with: sandboxExecutor(tree)) { completed, _, _ in
             let count = journal.entries().count
             seen.withLock { $0.append(count) }
             _ = completed
@@ -204,7 +205,7 @@ struct TrashAndJournalTests {
         try tree.file("home/Projects/a/build/x", bytes: 1000)
         try tree.directory("state/journal.jsonl")
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/a/build"), size: 1000)], useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.warnings.contains { $0.contains("journal") })
     }
@@ -221,7 +222,7 @@ struct TrashAndJournalTests {
                     path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"], scanStarted: Date())
             ],
             useTrash: true)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.trashedBytes > 0)
         #expect(report.deletedBytes == 0)
         let entries = journalEntries(tree)
@@ -253,7 +254,7 @@ struct TrashAndJournalTests {
             ], useTrash: false)
         let budget = ByteCount(tree.allocated("home/cache/b.tmp") + 1)
         let report = sandboxExecutor(tree, rules: [rule], budget: budget)
-            .execute(plan, context: .automatic(AutomationContext(jobID: "j")), dryRun: false)
+            .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(!onDisk(tree.path("home/cache/b.tmp")))
         #expect(onDisk(stuck))
         #expect(journalEntries(tree).map(\.path) == [tree.path("home/cache/b.tmp")])
@@ -291,7 +292,7 @@ struct ScanStartTests {
             scanStarted: scanned.scanStarted)
         waitForClockTick()
         try tree.file("home/cache/new.tmp", bytes: 1000)
-        _ = sandboxExecutor(tree).execute(CleanupPlan(items: [item], useTrash: false), context: .manual(confirmed: true), dryRun: false)
+        _ = manualRun(CleanupPlan(items: [item], useTrash: false), with: sandboxExecutor(tree))
         #expect(!onDisk(tree.path("home/cache/old.tmp")))
         #expect(onDisk(tree.path("home/cache/new.tmp")))
     }
@@ -317,7 +318,7 @@ struct ScanStartTests {
                 CleanupItem(
                     path: tree.path("home/late"), kind: .looseFiles, size: 2000, looseFileNames: names, scanStarted: late.scanStarted),
             ], useTrash: false)
-        _ = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        _ = manualRun(plan, with: sandboxExecutor(tree))
         #expect(!onDisk(tree.path("home/early/old.tmp")))
         #expect(onDisk(tree.path("home/early/between.tmp")), "the early scan never saw it")
         #expect(!onDisk(tree.path("home/late/old.tmp")))
@@ -331,7 +332,7 @@ struct ScanStartTests {
         let plan = CleanupPlan(
             items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["old.tmp"])],
             useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.skipped.first?.reason.contains("refresh") == true)
         #expect(onDisk(tree.path("home/cache/old.tmp")))
     }
@@ -357,7 +358,7 @@ struct ScanStartTests {
                 CleanupItem(path: tree.path("home/.Trash/early"), size: 1000, scanStarted: scanned.scanStarted),
                 CleanupItem(path: tree.path("home/.Trash/late"), size: 1000, scanStarted: scanned.scanStarted),
             ], useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(!onDisk(tree.path("home/.Trash/early")))
         #expect(onDisk(tree.path("home/.Trash/late/y")))
         #expect(report.skipped.count == 1)
@@ -371,7 +372,7 @@ struct ExecutionMechanicsTests {
         let tree = try TempTree()
         try tree.file("home/Projects/a/build/x", bytes: 1000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/a/build"), size: 1000)], useTrash: false)
-        let report = sandboxExecutor(tree, configError: "config.yaml: bad").execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, configError: "config.yaml: bad"))
         #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
         #expect(onDisk(tree.path("home/Projects/a/build/x")))
     }
@@ -388,7 +389,7 @@ struct ExecutionMechanicsTests {
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("work/build"), size: 1000)], useTrash: false)
         var executor = context.executor
         executor.trash = sandboxTrash(home: tree.root)
-        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: executor)
         #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
         #expect(onDisk(tree.path("work/build/x")))
     }
@@ -401,7 +402,7 @@ struct ExecutionMechanicsTests {
         try FileManager.default.createSymbolicLink(
             atPath: tree.path("home/Projects/links/l"), withDestinationPath: tree.path("home/Projects/target"))
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/links/l"), size: 0)], useTrash: false)
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(!onDisk(tree.path("home/Projects/links/l")))
         #expect(onDisk(tree.path("home/Projects/target/keep")))
@@ -450,7 +451,7 @@ struct CheckedLocationTests {
         try tree.file("home/Protected/target/keep", bytes: 1_000)
         try tree.file("home/Harmless/target/x", bytes: 1_000)
         let link = tree.path("home/link")
-        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/Protected"))
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/Harmless"))
         var executor = sandboxExecutor(tree, protectedPaths: [tree.path("home/Protected")])
         let calls = CallCounter()
         let harmless = tree.path("home/Harmless")
@@ -464,7 +465,11 @@ struct CheckedLocationTests {
             return resolved
         }
         let plan = CleanupPlan(items: [CleanupItem(path: link + "/target", size: 1_000)], useTrash: false)
-        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        // The person reviews while the link points somewhere harmless; it points at the protected folder again by the run.
+        let reviewed = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
+        CheckedLocationTests.point(link, at: protected)
+        let report = executor.execute(reviewed, dryRun: false)
+        #expect(report.items.count == 1)
         #expect(!report.items.contains { $0.outcome.isRemoved })
         #expect(onDisk(tree.path("home/Protected/target/keep")))
     }
@@ -474,16 +479,18 @@ struct CheckedLocationTests {
         let tree = try TempTree()
         try tree.file("home/Projects/old/x", bytes: 1_000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000)], useTrash: false)
+        let executor = sandboxExecutor(tree)
+        let reviewed = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
         try tree.directory("home/Projects/old/.git")
-        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = executor.execute(reviewed, dryRun: false)
         #expect(report.skipped.first?.reason.hasPrefix("Changed since you reviewed it: ") == true)
         #expect(report.skipped.first?.reason.contains("git repository") == true)
         #expect(onDisk(tree.path("home/Projects/old/x")))
 
-        // The same warning shown in the preview (the plan recorded it) is what the person confirmed.
-        var reviewed = plan
-        reviewed.items[0].isRepository = true
-        let confirmed = sandboxExecutor(tree).execute(reviewed, context: .manual(confirmed: true), dryRun: false)
+        // The same warning shown in the review (the plan recorded the repository) is one the person accepted.
+        var known = plan
+        known.items[0].isRepository = true
+        let confirmed = manualRun(known, with: executor)
         #expect(confirmed.items.first?.outcome.isRemoved == true)
     }
 }
@@ -515,7 +522,7 @@ struct HardLinkFreedBytesTests {
             ], useTrash: false)
         let own = tree.allocated("home/cache/a/own.bin")
         let ownLoose = tree.allocated("home/cache/loose/own.tmp")
-        let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [rule]))
         #expect(report.items.map(\.outcome.freedBytes) == [own, 0, ownLoose])
         #expect(journalEntries(tree).reduce(UInt64(0)) { $0 + $1.bytes } == own + ownLoose)
         #expect(onDisk(tree.path("home/keep/linked.bin")))

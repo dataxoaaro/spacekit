@@ -2,8 +2,9 @@ import Foundation
 
 /// Who is asking to remove something, and under what terms.
 public enum CleanupContext: Sendable {
-    /// A person picked this in the app, the TUI or the CLI. `confirmed` means they acknowledged a warning.
-    case manual(confirmed: Bool)
+    /// A person picked this in the app, the TUI or the CLI. Whether they acknowledged a warning is up to the review
+    /// (`CleanupReview`), not the guard.
+    case manual
     /// A scheduled job is running unattended.
     case automatic(AutomationContext)
 
@@ -58,11 +59,6 @@ public struct SafetyVerdict: Sendable, Equatable {
     public static let allow = SafetyVerdict(decision: .allow, reasons: [])
 
     public var isBlocked: Bool { decision == .block }
-
-    /// True if the operation may go ahead given whether the person confirmed.
-    public func permits(confirmed: Bool) -> Bool {
-        decision == .allow || (decision == .confirm && confirmed)
-    }
 
     /// Adds `reason`. A reason raised again keeps the stronger of its decisions.
     mutating func raise(_ decision: Decision, _ reason: String) {

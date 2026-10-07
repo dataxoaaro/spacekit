@@ -104,7 +104,7 @@ struct LooseFileNameTests {
         let plan = CleanupPlan.make(findings: findings, trashPreference: false, scanStarted: result.scanStarted)
         #expect(plan.items.first { $0.kind == .looseFiles }?.looseFileNames == ["small.tmp"])
 
-        let report = sandboxExecutor(tree, rules: [outer, inner]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [outer, inner]))
         #expect(report.removedAnything)
         #expect(onDisk(tree.path("home/cache/big.log")))
         #expect(!onDisk(tree.path("home/cache/small.tmp")))
@@ -118,7 +118,7 @@ struct LooseFileNameTests {
         let plan = CleanupPlan(
             items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1_000, ruleID: "cache", scanStarted: Date())],
             useTrash: false)
-        let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [rule]))
         #expect(report.skipped.first?.reason.contains("refresh") == true)
         #expect(onDisk(tree.path("home/cache/a.tmp")))
     }

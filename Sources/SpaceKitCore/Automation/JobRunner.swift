@@ -70,6 +70,18 @@ extension CleanupReport {
     }
 }
 
+/// A plan an automatic job runs on its own, under its automation context. Only `JobRunner` makes one: it is the
+/// executor's only input besides a `ReviewedPlan`.
+struct AutomaticPlan: Sendable {
+    let plan: CleanupPlan
+    let automation: AutomationContext
+
+    init(_ plan: CleanupPlan, automation: AutomationContext) {
+        self.plan = plan
+        self.automation = automation
+    }
+}
+
 /// Evaluates and runs jobs. Used by the background agent (`spacekit agent run`), the CLI and the app.
 public struct JobRunner: Sendable {
     public var context: SpaceKitContext
@@ -135,21 +147,15 @@ public struct JobRunner: Sendable {
             olderThan: job.when.olderThan, usesTrash: context.trashPreference(for: job.action) ?? true)
     }
 
-    /// Runs one job according to its mode. `manual` runs (from the app or `spacekit jobs run --yes`) clean
-    /// immediately regardless of mode, because a person asked for it. Pass `confirmed: true` only after that
-    /// person has seen and accepted the guard's warnings; otherwise items that need confirmation are skipped.
-    public func run(_ job: Job, manual: Bool = false, confirmed: Bool = false, dryRun: Bool = false, now: Date = Date()) -> JobRunResult {
+    /// Runs one job according to its mode, the way the agent does. A person running a job by hand reviews its plan
+    /// instead (`CleanupReview`) and records the run with `record`.
+    public func run(_ job: Job, dryRun: Bool = false, now: Date = Date()) -> JobRunResult {
         var result: JobRunResult
         do {
             let evaluation = try evaluate(job, now: now)
-            let action: JobRunResult.Action
-            if !evaluation.isTriggered {
-                action = .notTriggered(evaluation.triggerSummary)
-            } else if manual {
-                action = .cleaned(executor.execute(plan(for: evaluation), context: .manual(confirmed: confirmed), dryRun: dryRun))
-            } else {
-                action = scheduledAction(job, evaluation: evaluation, dryRun: dryRun, now: now)
-            }
+            let action: JobRunResult.Action =
+                evaluation.isTriggered
+                ? scheduledAction(job, evaluation: evaluation, dryRun: dryRun, now: now) : .notTriggered(evaluation.triggerSummary)
             result = JobRunResult(job: job, date: now, evaluation: evaluation, action: action)
         } catch {
             result = JobRunResult(job: job, date: now, evaluation: nil, action: .failed(error.localizedDescription))
@@ -191,7 +197,7 @@ public struct JobRunner: Sendable {
             }
             return .suggested(suggestion)
         case .automatic:
-            let report = executor.execute(plan(for: evaluation), context: .automatic(automationContext(for: job)), dryRun: dryRun)
+            let report = executor.execute(AutomaticPlan(plan(for: evaluation), automation: automationContext(for: job)), dryRun: dryRun)
             // Removals happen without anyone watching, so they are always announced, whatever the setting.
             let notes = report.problemNotes
             if !dryRun && (report.freedBytes > 0 || !notes.isEmpty) {

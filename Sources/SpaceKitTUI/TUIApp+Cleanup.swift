@@ -2,79 +2,55 @@ import Foundation
 import SpaceKitCore
 
 extension TUIApp {
-    /// Shows what the guard thinks of each item and command and asks before doing anything. The footer, always
-    /// on screen, counts what will be removed and says whether it goes to the Trash; `y` works only once the
-    /// whole list has been shown.
+    /// Shows the review of `plan`: every item and command with all of the guard's reasons. The footer, always on
+    /// screen, counts what will be removed and says where it goes. `y` works only once the whole list has been shown,
+    /// so pressing it acknowledges every warning listed.
     func confirmCleanup(_ plan: CleanupPlan, title: String, job: JobEvaluation? = nil) {
-        let executor = context.executor
+        let review = CleanupReview(plan, executor: context.executor)
         let clean = TerminalText.sanitize
         var lines: [String] = []
-        var allowed = CleanupPlan(manualSteps: plan.manualSteps, useTrash: plan.useTrash)
-        var needConfirmation = 0
-        var blocked = 0
         // Every reason the guard gave is listed with its own decision, because the first one raised isn't always the
         // one that decided: a git repository (confirm) can also sit in a protected folder (block).
-        func add(_ verdict: SafetyVerdict, _ text: String) -> Bool {
-            var line: String = verdict.decision.mark + " " + text
-            switch verdict.decision {
-            case .allow: break
-            case .confirm: needConfirmation += 1
-            case .block:
-                blocked += 1
-                line += "  " + "blocked".fg(verdict.decision.color)
-            }
-            lines.append(line)
-            guard verdict.decision != .allow else { return true }
-            for entry in verdict.entries {
-                let reason: String = clean(entry.reason).fg(entry.decision.color)
-                lines.append("    " + entry.decision.mark + " " + reason)
-            }
-            return verdict.decision == .confirm
+        func add(_ verdict: SafetyVerdict, _ text: String) {
+            let blocked = verdict.isBlocked ? "  " + "blocked".fg(verdict.decision.color) : ""
+            lines.append(verdict.decision.mark + " " + text + blocked)
+            guard verdict.decision != .allow else { return }
+            lines += verdict.entries.map { "    " + $0.decision.mark + " " + clean($0.reason).fg($0.decision.color) }
         }
-        for item in plan.itemsLargestFirst {
-            let verdict = executor.verdict(for: item, context: .manual(confirmed: false))
-            let size = ANSI.pad(ByteCount.format(item.size), to: 9, alignRight: true)
-            if add(verdict, "\(size)  \(clean(PathUtil.abbreviate(item.path)))") { allowed.items.append(item) }
+        for row in review.items {
+            let size = ANSI.pad(ByteCount.format(row.subject.size), to: 9, alignRight: true)
+            add(row.verdict, "\(size)  \(clean(PathUtil.abbreviate(row.subject.path)))")
         }
-        for command in plan.commands {
-            let verdict = executor.verdict(for: command, context: .manual(confirmed: false))
-            let text =
-                "$ ".fg(ANSI.accent) + clean(command.displayString) + "  " + "frees up to \(ByteCount.format(command.estimatedBytes))".dim
-            if add(verdict, text) { allowed.commands.append(command) }
+        for row in review.commands {
+            let command = row.subject
+            let estimate = "frees up to \(ByteCount.format(command.estimatedBytes))".dim
+            add(row.verdict, "$ ".fg(ANSI.accent) + clean(command.displayString) + "  " + estimate)
         }
-        for step in plan.manualSteps { lines.append("→ ".dim + clean(step)) }
+        for step in review.manualSteps { lines.append("→ ".dim + clean(step)) }
         let title = clean(title)
-        guard !allowed.isEmpty else {
+        guard !review.isEmpty else {
             state.modal = Modal(title: title, lines: lines, footer: ["Nothing here can be removed.".bold])
             return
         }
         state.modal = Modal(
-            title: title, lines: lines,
-            footer: cleanupFooter(allowed, needConfirmation: needConfirmation, blocked: blocked),
-            onConfirm: { [unowned self] in self.execute(allowed, job: job) }, confirmLabel: "y clean · n cancel")
+            title: title, lines: lines, footer: cleanupFooter(review),
+            onConfirm: { [unowned self] in self.execute(review.acknowledge(acceptingWarnings: true), job: job) },
+            confirmLabel: "y clean · n cancel")
     }
 
-    private func cleanupFooter(_ allowed: CleanupPlan, needConfirmation: Int, blocked: Int) -> [String] {
-        let count = allowed.items.count + allowed.commands.count
-        var counts = "\(count) to clean"
-        if needConfirmation > 0 { counts += " · " + "\(needConfirmation) need your confirmation (!)".fg(ANSI.review) }
-        if blocked > 0 { counts += " · " + "\(blocked) blocked".fg(ANSI.protected) }
+    private func cleanupFooter(_ review: CleanupReview) -> [String] {
+        var counts = "\(review.selectedItems.count + review.selectedCommands.count) to clean"
+        if review.warningCount > 0 { counts += " · " + "\(review.warningCount) need your confirmation (!)".fg(ANSI.review) }
+        if review.blockedCount > 0 { counts += " · " + "\(review.blockedCount) blocked".fg(ANSI.protected) }
         var footer = [counts]
-        if !allowed.items.isEmpty {
-            let size = ByteCount.format(allowed.items.reduce(0) { $0 &+ $1.size })
-            footer.append(
-                allowed.useTrash
-                    ? "\(size) will be moved to the Trash.".bold
-                    : "\(size) will be deleted permanently, not moved to the Trash.".bold.fg(ANSI.protected))
+        if let disposal = review.disposalSummary {
+            footer.append(review.disposal == .moveToTrash ? disposal.bold : disposal.bold.fg(ANSI.protected))
         }
-        if !allowed.commands.isEmpty {
-            let commands = allowed.commands.count
-            footer.append("\(commands) tool command\(commands == 1 ? "" : "s") will run; each removes only what its tool knows is unused.")
-        }
+        if let commands = review.commandSummary { footer.append(commands) }
         return footer
     }
 
-    func execute(_ plan: CleanupPlan, job: JobEvaluation? = nil) {
+    func execute(_ plan: ReviewedPlan, job: JobEvaluation? = nil) {
         guard state.activity == nil else {
             flash("Busy: \(state.activity?.text ?? "")")
             return
@@ -85,8 +61,7 @@ extension TUIApp {
         terminal.holdTerminationSignals(true)
         let (executor, inbox) = (context.executor, inbox)
         Thread.detachNewThread {
-            // The person saw every item and warning in the preview and pressed y.
-            let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+            let report = executor.execute(plan, dryRun: false)
             inbox.post(.cleaned(report, job))
         }
     }

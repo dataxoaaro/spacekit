@@ -49,22 +49,23 @@ struct RunnerFixture {
 
 @Suite("Job runner")
 struct JobRunnerTests {
-    @Test("Manual runs don't confirm warnings on the person's behalf")
+    @Test("A job's plan run by hand goes through the review: its warnings run only once the person accepts them")
     func manualRunsNeedConfirmation() throws {
         var fixture = try RunnerFixture()
         try fixture.tree.file("home/models/a/weights.bin", bytes: 4096)
         fixture.rules = [fixture.rule("models", "home/models", level: .review)]
         let job = Job(id: "models", name: "Models", rules: ["models"], action: .delete)
+        let runner = fixture.runner
+        let review = CleanupReview(runner.plan(for: try runner.evaluate(job)), executor: runner.executor)
+        #expect(review.needsAcknowledgement)
 
-        let unconfirmed = fixture.runner.run(job, manual: true)
-        guard case .cleaned(let report) = unconfirmed.action else { Issue.record("expected a cleanup"); return }
-        #expect(report.freedBytes == 0)
-        #expect(report.skipped.count == 1)
+        let unconfirmed = runner.executor.execute(review.acknowledge(acceptingWarnings: false), dryRun: false)
+        #expect(unconfirmed.freedBytes == 0)
+        #expect(unconfirmed.skipped.count == 1)
         #expect(FileManager.default.fileExists(atPath: fixture.tree.path("home/models/a")))
 
-        let confirmed = fixture.runner.run(job, manual: true, confirmed: true)
-        guard case .cleaned(let after) = confirmed.action else { Issue.record("expected a cleanup"); return }
-        #expect(after.freedBytes > 0)
+        let confirmed = runner.executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
+        #expect(confirmed.freedBytes > 0)
         #expect(!FileManager.default.fileExists(atPath: fixture.tree.path("home/models/a")))
     }
 

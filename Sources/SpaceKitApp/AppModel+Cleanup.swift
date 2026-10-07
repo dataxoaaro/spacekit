@@ -40,42 +40,32 @@ extension AppModel {
     /// `finding` is one of the current analysis's findings; its items carry that analysis's scan start time, which is
     /// the Explore scan's unless the analysis scanned the rule locations itself.
     func reviewFinding(_ finding: Finding, items: [FindingItem]? = nil) {
-        guard let analysis else { return }
+        guard let analysis = analysis else { return }
         let plan = CleanupPlan.make(
             findings: [finding], trashPreference: context.trashPreference(for: .rule), scanStarted: analysis.scanStarted
         ) { items ?? $0.items }
         review(plan, title: "Clean \(finding.rule.name)")
     }
 
-    /// The guard's verdict on everything in a plan, as the review sheet shows it before anything runs.
-    struct PlanVerdicts: Sendable {
-        var items: [(item: CleanupItem, verdict: SafetyVerdict)]
-        var commands: [(command: PlannedCommand, verdict: SafetyVerdict)]
-    }
-
-    func verdicts(for plan: CleanupPlan) async -> PlanVerdicts {
+    /// The review the sheet shows before anything runs. The guard's checks can touch the disk, so they run off the
+    /// main actor.
+    func cleanupReview(of plan: CleanupPlan) async -> CleanupReview {
         let executor = context.executor
-        return await Task.detached(priority: .userInitiated) {
-            PlanVerdicts(
-                items: plan.itemsLargestFirst.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
-                commands: plan.commands.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) })
-        }.value
+        return await Task.detached(priority: .userInitiated) { CleanupReview(plan, executor: executor) }.value
     }
 
     var isCleaning: Bool { runningCleanups > 0 }
 
     /// Runs a reviewed plan, then `completion` (bookkeeping such as job state) before the app may quit.
-    /// Pass `confirmed: true` only when the person acknowledged every warning the review showed; otherwise items and
-    /// commands that need confirmation are skipped.
     func execute(
-        _ plan: CleanupPlan, confirmed: Bool, completion: (@MainActor (CleanupReport) -> Void)? = nil,
+        _ plan: ReviewedPlan, completion: (@MainActor (CleanupReport) -> Void)? = nil,
         onProgress: @escaping @Sendable (Int, Int, String) -> Void
     ) async -> CleanupReport {
         beginCleanup()
         defer { endCleanup() }
         let executor = context.executor
         let report = await Task.detached(priority: .userInitiated) {
-            executor.execute(plan, context: .manual(confirmed: confirmed), dryRun: false, onProgress: onProgress)
+            executor.execute(plan, dryRun: false, onProgress: onProgress)
         }.value
         completion?(report)
         Task {

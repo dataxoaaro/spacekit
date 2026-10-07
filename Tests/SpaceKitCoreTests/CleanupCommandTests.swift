@@ -39,7 +39,7 @@ struct CleanupCommandTests {
             let arguments = [executable, "-f", victim]
             let tool = rule(tree, origin: .user, command: arguments)
             let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
-            let report = sandboxExecutor(tree, rules: [tool], allowed: ["rm"]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+            let report = manualRun(plan, with: sandboxExecutor(tree, rules: [tool], allowed: ["rm"]))
             #expect(isSkipped(outcome(report), mentioning: "name"), "\(executable)")
             #expect(onDisk(victim))
         }
@@ -63,14 +63,14 @@ struct CleanupCommandTests {
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
         let user = rule(tree, origin: .user, command: arguments)
         let builtin = rule(tree, origin: .builtin, command: arguments)
-        let refused = sandboxExecutor(tree, rules: [user]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let refused = manualRun(plan, with: sandboxExecutor(tree, rules: [user]), dryRun: true)
         #expect(isSkipped(outcome(refused), mentioning: "allowedCommands"))
         // Validation warns with the words the executor refuses with.
         let warning = RuleLibrary.issues(for: user).first { $0.severity == .warning }?.message ?? ""
         #expect(isSkipped(outcome(refused), mentioning: warning))
-        let trusted = sandboxExecutor(tree, rules: [builtin]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let trusted = manualRun(plan, with: sandboxExecutor(tree, rules: [builtin]), dryRun: true)
         #expect(wouldRun(outcome(trusted)))
-        let allowed = sandboxExecutor(tree, rules: [user], allowed: ["xcrun"]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let allowed = manualRun(plan, with: sandboxExecutor(tree, rules: [user], allowed: ["xcrun"]), dryRun: true)
         #expect(wouldRun(outcome(allowed)))
     }
 
@@ -79,12 +79,12 @@ struct CleanupCommandTests {
         let tree = try TempTree()
         let arguments = ["xcrun", "--version"]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
-        let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
+        let automatic = AutomationContext(jobID: "j")
         let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["xcrun"])
-        #expect(isSkipped(outcome(user.execute(plan, context: automatic, dryRun: true)), mentioning: "automatic"))
-        #expect(wouldRun(outcome(user.execute(plan, context: .manual(confirmed: true), dryRun: true))))
+        #expect(isSkipped(outcome(user.execute(AutomaticPlan(plan, automation: automatic), dryRun: true)), mentioning: "automatic"))
+        #expect(wouldRun(outcome(manualRun(plan, with: user, dryRun: true))))
         let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)])
-        #expect(wouldRun(outcome(builtin.execute(plan, context: automatic, dryRun: true))))
+        #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: automatic), dryRun: true))))
     }
 
     @Test("Code launchers stay refused even when the executor is told they're allowed")
@@ -93,14 +93,14 @@ struct CleanupCommandTests {
         for arguments in [["sh", "-c", "true"], ["python3.12", "-c", "pass"], ["env", "true"]] {
             let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
             let executor = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: [arguments[0]])
-            let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: true)
+            let report = manualRun(plan, with: executor, dryRun: true)
             #expect(isSkipped(outcome(report), mentioning: "can't be allowed"), "\(arguments)")
         }
         // swift is both a code launcher and on the built-in trusted list: built-in rules keep using it.
         let swift = ["swift", "--version"]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: swift, estimatedBytes: 1)])
         let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
-        #expect(wouldRun(outcome(builtin.execute(plan, context: .automatic(AutomationContext(jobID: "j")), dryRun: true))))
+        #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: true))))
     }
 
     @Test("A command whose rule is gone, or that no longer matches its rule, is refused")
@@ -113,7 +113,7 @@ struct CleanupCommandTests {
             PlannedCommand(ruleID: "tool", arguments: ["swift", "build"], estimatedBytes: 1),
             PlannedCommand(ruleID: "items", arguments: ["swift", "x"], estimatedBytes: 1),
         ])
-        let report = sandboxExecutor(tree, rules: [builtin, itemRule]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [builtin, itemRule]), dryRun: true)
         #expect(report.commands.count == 3)
         #expect(report.commands.allSatisfy { isSkipped($0.outcome) })
     }
@@ -124,10 +124,9 @@ struct CleanupCommandTests {
         let arguments = ["swift", "--version"]
         let builtin = rule(tree, origin: .builtin, command: arguments)
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
-        let asRoot = sandboxExecutor(tree, rules: [builtin], root: true).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let asRoot = manualRun(plan, with: sandboxExecutor(tree, rules: [builtin], root: true), dryRun: true)
         #expect(isSkipped(outcome(asRoot), mentioning: "root"))
-        let badConfig = sandboxExecutor(tree, rules: [builtin], configError: "bad")
-            .execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let badConfig = manualRun(plan, with: sandboxExecutor(tree, rules: [builtin], configError: "bad"), dryRun: true)
         #expect(isSkipped(outcome(badConfig), mentioning: "Config file is invalid"))
     }
 
@@ -138,8 +137,8 @@ struct CleanupCommandTests {
         let review = rule(tree, level: .review, origin: .builtin, command: arguments)
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
         let executor = sandboxExecutor(tree, rules: [review])
-        #expect(isSkipped(outcome(executor.execute(plan, context: .manual(confirmed: false), dryRun: true))))
-        #expect(wouldRun(outcome(executor.execute(plan, context: .manual(confirmed: true), dryRun: true))))
+        #expect(isSkipped(outcome(manualRun(plan, with: executor, acceptingWarnings: false, dryRun: true))))
+        #expect(wouldRun(outcome(manualRun(plan, with: executor, dryRun: true))))
     }
 
     @Test("Automatic runs don't start commands beyond the byte budget")
@@ -148,11 +147,13 @@ struct CleanupCommandTests {
         let arguments = ["swift", "--version"]
         let builtin = rule(tree, origin: .builtin, command: arguments)
         let big = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 20_000)])
-        let context = CleanupContext.automatic(AutomationContext(jobID: "j"))
-        let over = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(10_000)).execute(big, context: context, dryRun: true)
+        let context = AutomationContext(jobID: "j")
+        let over = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(10_000))
+            .execute(AutomaticPlan(big, automation: context), dryRun: true)
         #expect(isSkipped(outcome(over), mentioning: "budget"))
         let small = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 0)])
-        let exhausted = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(0)).execute(small, context: context, dryRun: true)
+        let exhausted = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(0))
+            .execute(AutomaticPlan(small, automation: context), dryRun: true)
         #expect(isSkipped(outcome(exhausted), mentioning: "budget"))
     }
 
@@ -171,7 +172,7 @@ struct CleanupCommandTests {
         let plan = CleanupPlan.make(findings: [finding], scanStarted: Date())
         let toolchain = try #require(plan.commands.first { $0.itemPath == tree.path("home/toolchains/stable") })
         #expect(toolchain.arguments == ["swift", "stable", tree.path("home/toolchains/stable")])
-        let report = sandboxExecutor(tree, rules: [items]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [items]), dryRun: true)
         for (command, outcome, _) in report.commands {
             if command.itemPath == tree.path("home/.ssh/keys") {
                 #expect(isSkipped(outcome, mentioning: "Blocked"))
@@ -189,7 +190,7 @@ struct CleanupCommandTests {
         let tool = rule(tree, origin: .user, command: arguments)
         let plan = CleanupPlan(
             commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 64_000, measurePaths: [tree.path("home/cache")])])
-        let report = sandboxExecutor(tree, rules: [tool], allowed: ["rm"]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        let report = manualRun(plan, with: sandboxExecutor(tree, rules: [tool], allowed: ["rm"]))
         let freed = try #require(outcome(report)?.freedBytes)
         #expect(freed >= 64_000)
         #expect(!onDisk(target))

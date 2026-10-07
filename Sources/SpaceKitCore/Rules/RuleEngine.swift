@@ -25,7 +25,7 @@ public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
     /// For pattern matches, the enclosing project folder.
     public var project: String?
 
-    public var id: String { kind == .looseFiles ? path + "/*" : path }
+    public var id: String { kind == .looseFiles ? CleanupItem.looseFilesPath(in: path) : path }
 
     public init(
         path: String, kind: Kind, name: String, size: UInt64, fileCount: UInt64 = 0, lastModified: Date? = nil,
@@ -73,7 +73,7 @@ public struct Finding: Sendable, Identifiable {
     /// Items a cleanup with these conditions would touch.
     public func eligibleItems(olderThan: Age? = nil, keepRecent: Age? = nil, now: Date = Date()) -> [FindingItem] {
         let keep =
-            keepRecent ?? (rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) ? rule.policy?.keepRecent ?? .days(14) : nil)
+            keepRecent ?? (rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) ? rule.policy?.keepRecent ?? Job.defaultActiveProjectsWindow : nil)
         return items.filter { item in
             guard let used = item.lastUsed else { return olderThan == nil && keep == nil }
             let idle = now.timeIntervalSince(used)
@@ -186,7 +186,7 @@ public struct RuleEngine: Sendable {
         let date = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
         return [
             FindingItem(
-                path: path, kind: .file, name: name, size: UInt64(max(0, st.st_blocks)) * 512, fileCount: 1,
+                path: path, kind: .file, name: name, size: FileSize.allocated(st), fileCount: 1,
                 lastModified: date, lastUsed: date)
         ]
     }

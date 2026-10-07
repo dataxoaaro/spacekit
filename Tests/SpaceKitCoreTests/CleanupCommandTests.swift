@@ -15,6 +15,7 @@ struct CleanupCommandTests {
             id: id, name: id, paths: paths.map { tree.path($0) }, granularity: .children, safety: SafetySpec(level: level),
             action: ActionSpec(command: command, itemCommand: itemCommand))
         rule.source = tree.path(origin == .builtin ? "builtin-rules/tools.yaml" : "user-rules/tools.yaml")
+        rule.isBuiltin = origin == .builtin
         return rule
     }
 

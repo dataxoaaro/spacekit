@@ -59,9 +59,7 @@ enum SafeRemoval {
         comparisonKey(a) == comparisonKey(b)
     }
 
-    static func comparisonKey(_ path: String) -> String {
-        path.precomposedStringWithCanonicalMapping.lowercased()
-    }
+    static func comparisonKey(_ path: String) -> String { PathUtil.comparisonKey(path) }
 
     static func posixError(_ path: String) -> Error {
         let code = errno

@@ -162,8 +162,8 @@ struct RuleLoadingTests {
         let user = issues(["brew", "cleanup"])
         #expect(user.count == 1)
         #expect(user.first?.severity == .warning && user.first?.message.contains("safety.allowedCommands") == true)
-        #expect(RuleLibrary.isBareExecutableName("brew"))
-        #expect(!RuleLibrary.isBareExecutableName("/opt/homebrew/bin/brew"))
+        #expect(Shell.isBareName("brew"))
+        #expect(!Shell.isBareName("/opt/homebrew/bin/brew"))
     }
 
     @Test("Unknown AI layouts are flagged")

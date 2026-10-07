@@ -56,7 +56,7 @@ extension CleanupExecutor {
             return
         }
         if extraAllowedCommands.contains(executable) { return }
-        if isBuiltin(rule) {
+        if rule.isBuiltin {
             if !RuleLibrary.trustedCommands.contains(executable) {
                 verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
             }
@@ -65,14 +65,6 @@ extension CleanupExecutor {
                 .block,
                 "'\(executable)' comes from a rule outside SpaceKit's built-in library; add it to safety.allowedCommands to allow it")
         }
-    }
-
-    /// True for rules loaded from the built-in rule directory.
-    func isBuiltin(_ rule: Rule) -> Bool {
-        guard let directory = builtinRulesDirectory, let source = rule.source else { return false }
-        let base = PathUtil.realpath(directory) ?? PathUtil.standardize(directory)
-        let file = PathUtil.realpath(source) ?? PathUtil.standardize(source)
-        return PathUtil.isStrictAncestor(base, of: file)
     }
 
     func runCommand(_ command: PlannedCommand, context: CleanupContext, run: inout Run) -> (CleanupOutcome, String) {

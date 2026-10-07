@@ -26,7 +26,7 @@ public struct ConfigStore: Sendable {
         do {
             return try ConfigStore.parse(text)
         } catch {
-            throw ConfigError.invalid(file: file, message: RuleLibrary.describe(error))
+            throw ConfigError.invalid(file: file, message: DecodingErrorText.describe(error))
         }
     }
 
@@ -193,7 +193,7 @@ public struct SpaceKitContext: Sendable {
     }
 
     public var safetyGuard: SafetyGuard {
-        SafetyGuard(userProtectedPaths: config.safety.protectedPaths, protectedRules: library.rules)
+        SafetyGuard(userProtectedPaths: config.safety.protectedPaths, protectedRules: library.rules, patternRoots: config.scan.devRoots)
     }
 
     public var executor: CleanupExecutor {
@@ -213,5 +213,4 @@ public struct SpaceKitContext: Sendable {
         }
     }
 
-    public var notifier: Notifier? { config.automation.notifications ? AppleScriptNotifier() : nil }
 }

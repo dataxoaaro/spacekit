@@ -41,7 +41,7 @@ struct ConfigValueTests {
     func retentionAges() throws {
         let minutes = "jobs:\n  - name: x\n    rules: [a]\n    when:\n      olderThan: 6m\n"
         let error = #expect(throws: (any Error).self) { try ConfigStore.parse(minutes) }
-        #expect("\(error.map(RuleLibrary.describe) ?? "")".contains("6mo"))
+        #expect("\(error.map(DecodingErrorText.describe) ?? "")".contains("6mo"))
         #expect(throws: (any Error).self) { try ConfigStore.parse("jobs:\n  - name: x\n    rules: [a]\n    when:\n      keepRecent: 12h\n") }
         #expect(throws: (any Error).self) { try ConfigStore.parse("jobs:\n  - name: x\n    rules: [a]\n    when:\n      keepRecent: 0\n") }
         let config = try ConfigStore.parse("jobs:\n  - name: x\n    rules: [a]\n    when:\n      olderThan: 6mo\n      keepRecent: 36h\n")

@@ -14,7 +14,6 @@ func sandboxExecutor(
     var executor = CleanupExecutor(
         safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules, extraAllowedCommands: allowed,
         maxBytesPerAutomaticRun: budget.bytes, configError: configError)
-    executor.builtinRulesDirectory = tree.path("builtin-rules")
     executor.trash = { path in
         let trash = home + "/.Trash"
         try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)

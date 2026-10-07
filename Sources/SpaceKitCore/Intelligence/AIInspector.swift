@@ -178,7 +178,7 @@ public enum AIInspector {
     private static func unreferencedBlobs(in blobs: String, referenced: [String: Int], ruleID: String) -> AIModel? {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: blobs) else { return nil }
         let paths = names.map { blobs + "/" + $0 }.filter { referenced[$0] == nil && !$0.hasSuffix("-partial") }.sorted()
-        let size = paths.reduce(UInt64(0)) { $0 &+ allocatedSize($1) }
+        let size = paths.reduce(UInt64(0)) { $0 &+ (FileSize.allocated(atPath: $1) ?? 0) }
         guard size > 0 else { return nil }
         return AIModel(name: "Unreferenced blobs", kind: .orphaned, size: size, lastUsed: nil, paths: paths, removeCommand: nil, ruleID: ruleID)
     }
@@ -273,11 +273,5 @@ public enum AIInspector {
         guard lstat(path, &st) == 0 else { return nil }
         let newest = max(st.st_atimespec.tv_sec, st.st_mtimespec.tv_sec)
         return Date(timeIntervalSince1970: TimeInterval(newest))
-    }
-
-    private static func allocatedSize(_ path: String) -> UInt64 {
-        var st = stat()
-        guard lstat(path, &st) == 0 else { return 0 }
-        return UInt64(max(0, st.st_blocks)) * 512
     }
 }

@@ -92,8 +92,6 @@ public struct CleanupExecutor: Sendable {
     /// Set when the config file exists but couldn't be read. Every removal and command is then refused, because
     /// the defaults in use lack the person's protected paths, allowed commands and disabled rules.
     public var configError: String?
-    /// Where the built-in rule library lives; only its rules get `RuleLibrary.trustedCommands`.
-    var builtinRulesDirectory: String? = RuleLibrary.builtinDirectory
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
 

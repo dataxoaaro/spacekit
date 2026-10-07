@@ -40,12 +40,6 @@ public struct RuleLibrary: Sendable {
         "orb", "podman", "colima", "swift", "deno",
     ]
 
-    /// A program name SpaceKit may look up on its search path: no folder part, no `..`, no substitution.
-    /// A path would bypass the name-based allowlist, so rule commands must use bare names.
-    public static func isBareExecutableName(_ name: String) -> Bool {
-        !name.isEmpty && !name.contains("/") && !name.contains("..") && !name.contains("{")
-    }
-
     /// Loads the built-in rules and every `*.yaml` / `*.yml` in `directories`.
     ///
     /// A user rule with the id of an earlier rule replaces it, so a built-in rule can be customised by copying
@@ -277,7 +271,7 @@ public struct RuleLibrary: Sendable {
     }
 
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
-        guard let executable = command.first, isBareExecutableName(executable) else {
+        guard let executable = command.first, Shell.isBareName(executable) else {
             return [(.error, "command must start with a bare program name such as brew, without / or .. or {name}; got '\(command.first ?? "")'")]
         }
         var issues: [(RuleIssue.Severity, String)] = []

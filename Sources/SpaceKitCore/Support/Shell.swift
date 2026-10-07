@@ -22,8 +22,9 @@ public enum Shell {
     }
 
     /// True for a tool name without any path: `docker`, not `/usr/bin/docker` or `../docker`.
+    /// A path would bypass the name-based allowlist, and a `{…}` placeholder would let an item name pick the program.
     public static func isBareName(_ name: String) -> Bool {
-        !name.isEmpty && name != "." && name != ".." && !name.contains("/")
+        !name.isEmpty && !name.contains("/") && !name.contains("..") && !name.contains("{")
     }
 
     /// Finds a tool by bare name in `searchPath`. Paths are refused. The containing directory is canonicalized,

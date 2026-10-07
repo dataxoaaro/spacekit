@@ -40,11 +40,7 @@ final class TempTree {
     }
 
     /// Allocated size the way the scanner measures it.
-    func allocated(_ relative: String) -> UInt64 {
-        var st = stat()
-        guard lstat(path(relative), &st) == 0 else { return 0 }
-        return UInt64(st.st_blocks) * 512
-    }
+    func allocated(_ relative: String) -> UInt64 { FileSize.allocated(atPath: path(relative)) ?? 0 }
 }
 
 func scan(_ path: String, minFileSize: UInt64 = 0, markers: [String] = [], configure: (inout ScanOptions) -> Void = { _ in }) throws

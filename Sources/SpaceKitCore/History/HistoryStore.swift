@@ -60,8 +60,10 @@ public struct HistoryStore: Sendable {
                 available: capacity.available, purgeable: capacity.purgeable))
     }
 
-    /// Records a full breakdown from an analysis.
+    /// Records a full breakdown from an analysis. A stopped analysis is missing whatever its scan didn't reach,
+    /// so it isn't recorded.
     public func recordSnapshot(analysis: Analysis, now: Date = Date()) throws {
+        guard !analysis.tree.stats.cancelled else { return }
         let capacity = analysis.tree.capacity ?? VolumeCapacity.of(path: "/")
         var groups: [String: UInt64] = [:]
         for group in analysis.groups { groups[group.name] = group.size }

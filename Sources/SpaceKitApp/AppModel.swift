@@ -66,9 +66,11 @@ final class AppModel {
     var hovered: MapItem?
     var backStack: [DirNode] = []
     private(set) var categories: [CategorySlice] = []
-    private(set) var ruleIndex: RuleIndex {
+    /// Labels folders until an analysis exists.
+    private var libraryIndex: RuleIndex {
         didSet { ruleCache.removeAll() }
     }
+    var ruleIndex: RuleIndex { analysisResult?.ruleIndex ?? libraryIndex }
     var visualization: UISettings.Visualization
     var colorMode: UISettings.ColorMode
     var mapDepth: Int
@@ -81,9 +83,13 @@ final class AppModel {
     @ObservationIgnored private var treeWriters: [CheckedContinuation<Void, Never>] = []
 
     // MARK: Intelligence
-    private(set) var analysis: Analysis?
+    /// The latest analysis with its AI report and rule index.
+    private(set) var analysisResult: AnalysisResult? {
+        didSet { ruleCache.removeAll() }
+    }
+    var analysis: Analysis? { analysisResult?.analysis }
+    var aiReport: AIReport? { analysisResult?.aiReport }
     private(set) var analysisProgress: ScanProgress?
-    private(set) var aiReport: AIReport?
     @ObservationIgnored private var analysisRequests = RequestGeneration()
 
     // MARK: Cleanup
@@ -139,7 +145,7 @@ final class AppModel {
         let context = SpaceKitContext.load()
         self.context = context
         scanPath = PathUtil.expand(context.config.scan.defaultPath)
-        ruleIndex = RuleIndex(rules: context.library.rules)
+        libraryIndex = RuleIndex(rules: context.library.rules)
         visualization = context.config.ui.visualization
         colorMode = context.config.ui.colorBy
         mapDepth = context.config.ui.mapDepth
@@ -184,7 +190,8 @@ final class AppModel {
     func reloadContext() {
         rulesIncludingDisabledCache = nil
         context = SpaceKitContext.load(paths: context.paths)
-        ruleIndex = RuleIndex(rules: context.library.rules, findings: analysis?.findings ?? [])
+        libraryIndex = RuleIndex(rules: context.library.rules)
+        analysisResult?.reindex(rules: context.library.rules)
         if let error = context.configError { errorMessage = "Config problem: \(error)" }
         refreshAutomation()
     }
@@ -286,8 +293,7 @@ final class AppModel {
         focus = tree.root
         scanProgress = nil
         progressSnapshot = nil
-        analysis = nil
-        aiReport = nil
+        analysisResult = nil
         categories = CategoryBreakdown.compute(tree: tree)
         refreshVolumes()
         refreshTrash(resync: false)
@@ -345,11 +351,15 @@ final class AppModel {
         let analyzer = context.analyzer
         let tree = self.tree
         let window = context.config.automation.activeModelWindow
+        let rules = context.library.rules
         let history = context.history
         Task {
-            let analysis: Analysis
+            let result: AnalysisResult
             do {
-                analysis = try await self.readingTrees { try await analyzer.analyze(reusing: tree, progress: progress) }
+                result = try await self.readingTrees {
+                    let analysis = try await analyzer.analyze(reusing: tree, progress: progress)
+                    return AnalysisResult(analysis, rules: rules, activeModelWindow: window)
+                }
             } catch {
                 guard self.analysisRequests.isCurrent(generation) else { return }
                 self.analysisProgress = nil
@@ -358,16 +368,13 @@ final class AppModel {
             }
             guard self.analysisRequests.isCurrent(generation) else { return }
             self.analysisProgress = nil
-            self.analysis = analysis
-            self.aiReport = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: window)
-            self.ruleIndex = RuleIndex(rules: self.context.library.rules, findings: analysis.findings)
+            self.analysisResult = result
+            let analysis = result.analysis
             if let tree = self.tree, tree.covers(PathUtil.home) {
                 self.categories = CategoryBreakdown.compute(tree: tree, findings: analysis.findings)
             }
-            if !analysis.tree.stats.cancelled {
-                try? history.recordSnapshot(analysis: analysis)
-                self.refreshHistory()
-            }
+            try? history.recordSnapshot(analysis: analysis)
+            self.refreshHistory()
         }
     }
 
@@ -388,21 +395,8 @@ final class AppModel {
     /// Shrinks the trees and findings in place after a cleanup: trashed items move into the Trash folder (they
     /// still use space until it's emptied), the AI report and category totals update only if they were affected.
     func applyToTreesAndFindings(_ removals: [Removal]) {
-        var exploreChanged = false
-        if let tree {
-            for removal in removals where removal.apply(to: tree) { exploreChanged = true }
-        }
-
-        // Findings (and the analysis tree, if it's a separate scan).
-        var touched = Set<String>()
-        if var updated = analysis {
-            if updated.tree !== tree {
-                for removal in removals { removal.apply(to: updated.tree) }
-            }
-            touched = updated.apply(removals)
-            if !touched.isEmpty { analysis = updated }
-        }
-        if !touched.isEmpty { rebuildAIReportIfNeeded(touchedRules: touched) }
+        let exploreChanged = tree.map { Removal.apply(removals, to: $0) } ?? false
+        if var result = analysisResult, !result.apply(removals, exploreTree: tree).isEmpty { analysisResult = result }
 
         // Categories: subtract instead of recomputing.
         if exploreChanged {
@@ -416,27 +410,13 @@ final class AppModel {
         let rules = ruleIDs.compactMap { library.rule(id: $0) }
         guard !rules.isEmpty, analysis != nil else { return }
         refreshingRules.formUnion(ruleIDs)
-        let analyzer = context.analyzer
+        let context = self.context
         Task {
-            let fresh = try? await analyzer.analyze(rules: rules)
+            let fresh = try? await context.analyzer.analyze(rules: rules)
             refreshingRules.subtract(ruleIDs)
-            guard let fresh, var updated = analysis else { return }
-            updated.replaceFindings(for: ruleIDs, with: fresh.findings)
-            analysis = updated
-            // The targeted scan only covers these rules, so merge its AI models into the existing report.
-            if ruleIDs.contains(where: { library.rule(id: $0)?.ai != nil }), let current = aiReport {
-                let partial = AIInspector.report(findings: fresh.findings, tree: fresh.tree, activeWindow: current.activeWindow)
-                aiReport = current.replacingModels(from: ruleIDs, with: partial)
-            }
+            guard let fresh else { return }
+            analysisResult?.merge(context.result(of: fresh), for: ruleIDs)
         }
-    }
-
-    /// Rebuilds the AI report from the (already updated) analysis tree, if an AI rule was affected.
-    private func rebuildAIReportIfNeeded(touchedRules: Set<String>) {
-        guard let analysis, touchedRules.contains(where: { library.rule(id: $0)?.ai != nil }) else { return }
-        aiReport = AIInspector.report(
-            findings: analysis.findings, tree: analysis.tree,
-            activeWindow: context.config.automation.activeModelWindow)
     }
 
     func trashMeasured(_ bytes: UInt64?) {

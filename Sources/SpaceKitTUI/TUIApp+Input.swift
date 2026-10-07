@@ -202,8 +202,7 @@ extension TUIApp {
                 flash("Already analysing")
                 return
             }
-            state.analysis = nil
-            state.aiReport = nil
+            state.result = nil
             startAnalysis()
             return
         }

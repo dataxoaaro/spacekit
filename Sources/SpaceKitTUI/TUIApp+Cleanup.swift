@@ -94,12 +94,7 @@ extension TUIApp {
         } else {
             applyRemovals(removals)
         }
-        let commandRules = Set(
-            report.commands.compactMap { entry -> String? in
-                if case .removed = entry.outcome { return entry.command.ruleID }
-                return nil
-            })
-        refreshFindings(ruleIDs: commandRules)
+        refreshFindings(ruleIDs: report.rulesToReevaluate)
         var lines = reportLines(report)
         if let job {
             if let problem = record(job, report: report) { lines.append(problem.fg(ANSI.protected)) }
@@ -148,7 +143,7 @@ extension TUIApp {
         let previous = state.current
         let currentPath = previous?.path
         if let tree = state.tree {
-            for removal in removals { removal.apply(to: tree) }
+            Removal.apply(removals, to: tree)
             // Folders above the current one may have been removed; their nodes are gone, so go by path.
             let current = currentPath.map { nearestNode(to: $0, in: tree) } ?? tree.root
             state.current = current
@@ -158,25 +153,7 @@ extension TUIApp {
                 state.explore.selection = min(state.explore.selection, max(0, current.items.count - 1))
             }
         }
-        if var analysis = state.analysis {
-            if analysis.tree !== state.tree {
-                for removal in removals { removal.apply(to: analysis.tree) }
-            }
-            if !analysis.apply(removals).isEmpty {
-                state.analysis = analysis
-                state.aiReport = AIInspector.report(
-                    findings: analysis.findings, tree: analysis.tree, activeWindow: context.config.automation.activeModelWindow)
-                state.ruleIndex = RuleIndex(rules: context.library.rules, findings: analysis.findings)
-            }
-        }
-    }
-
-    func mergeRefreshed(_ fresh: AnalysisResult, ruleIDs: Set<String>) {
-        guard var analysis = state.analysis else { return }
-        analysis.replaceFindings(for: ruleIDs, with: fresh.analysis.findings)
-        state.analysis = analysis
-        state.ruleIndex = RuleIndex(rules: context.library.rules, findings: analysis.findings)
-        if let current = state.aiReport { state.aiReport = current.replacingModels(from: ruleIDs, with: fresh.aiReport) }
+        state.result?.apply(removals, exploreTree: state.tree)
     }
 
     func nearestNode(to path: String, in tree: ScanTree) -> DirNode {

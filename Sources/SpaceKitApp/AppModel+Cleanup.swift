@@ -84,12 +84,7 @@ extension AppModel {
         applyToTreesAndFindings(removals)
 
         // Tool commands free space their own way; re-evaluate just those rules.
-        let commandRules = Set(
-            report.commands.compactMap { entry -> String? in
-                if case .removed = entry.outcome { return entry.command.ruleID }
-                return nil
-            })
-        if !commandRules.isEmpty { refreshFindings(ruleIDs: commandRules) }
+        refreshFindings(ruleIDs: report.rulesToReevaluate)
 
         // Navigation and selection.
         let removedPaths = Set(removals.filter { $0.kind != .looseFiles }.map(\.path))

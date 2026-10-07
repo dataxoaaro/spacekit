@@ -43,6 +43,18 @@ public struct Removal: Sendable, Hashable {
     func covers(_ path: String) -> Bool {
         kind != .looseFiles && PathUtil.isAncestorOrEqual(self.path, of: path)
     }
+
+    /// True if this removal took part of `item` (but not all of it). A loose-files item only holds the plain
+    /// files directly in its folder, so only a removed file in that folder takes part of it.
+    func isInside(_ item: FindingItem) -> Bool {
+        switch (item.kind, kind) {
+        case (.file, _): return false
+        case (.looseFiles, .file): return PathUtil.parent(path) == item.path
+        case (.looseFiles, _): return false
+        case (.directory, .looseFiles): return PathUtil.isAncestorOrEqual(item.path, of: path)
+        case (.directory, _): return PathUtil.isStrictAncestor(item.path, of: path)
+        }
+    }
 }
 
 extension Analysis {
@@ -65,15 +77,9 @@ extension Analysis {
                     continue
                 }
                 // Something inside this item went away: shrink it.
-                for removal in removals where item.kind != .file {
-                    let inside =
-                        removal.kind == .looseFiles
-                        ? (item.kind == .directory && PathUtil.isAncestorOrEqual(item.path, of: removal.path))
-                        : PathUtil.isStrictAncestor(item.path, of: removal.path)
-                    if inside {
-                        item.size -= min(item.size, removal.bytes)
-                        changed = true
-                    }
+                for removal in removals where removal.isInside(item) {
+                    item.size -= min(item.size, removal.bytes)
+                    changed = true
                 }
                 if item.size > 0 { items.append(item) } else { changed = true }
             }
@@ -95,21 +101,7 @@ extension Analysis {
 extension CategoryBreakdown {
     /// The category `compute(tree:findings:)` would attribute `path` to.
     public static func category(for path: String, findings: [Finding], home: String = PathUtil.home) -> StorageCategory {
-        var current = path
-        while !current.isEmpty {
-            for finding in findings where finding.items.contains(where: { $0.kind == .directory && $0.path == current }) {
-                switch finding.rule.topCategory {
-                case "developer": return .developer
-                case "ai": return .ai
-                case "cache": return .caches
-                default: break
-                }
-            }
-            if let category = builtinLocations(home: home).first(where: { $0.0 == current })?.1 { return category }
-            if current == "/" { break }
-            current = PathUtil.parent(current)
-        }
-        return .other
+        nearestCategory(for: path, in: locations(home: home, findings: findings)) ?? .other
     }
 
     /// Subtracts removed bytes from the matching categories instead of recomputing the whole breakdown.
@@ -117,9 +109,10 @@ extension CategoryBreakdown {
         _ removals: [Removal], from slices: [CategorySlice], findings: [Finding],
         home: String = PathUtil.home
     ) -> [CategorySlice] {
+        let locations = locations(home: home, findings: findings)
         var result = slices
         for removal in removals {
-            let category = category(for: removal.path, findings: findings, home: home)
+            let category = nearestCategory(for: removal.path, in: locations) ?? .other
             if let index = result.firstIndex(where: { $0.category == category }) {
                 result[index].size -= min(result[index].size, removal.bytes)
             }

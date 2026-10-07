@@ -100,61 +100,91 @@ public enum AIInspector {
     // MARK: Ollama
 
     /// Reads Ollama's manifests (`models/manifests/<registry>/<namespace>/<model>/<tag>`) to size each model
-    /// from the blobs it references. Blobs no manifest references are reported as orphaned.
+    /// from the blobs it references. A blob several tags share is counted once, in a separate "Shared layers"
+    /// entry, so the tool's total matches the disk. Blobs no manifest references are reported as orphaned,
+    /// but only when every manifest could be read: otherwise an unreadable manifest's blobs would look unused.
     static func ollamaModels(finding: Finding) -> [AIModel] {
-        var models: [AIModel] = []
-        for root in finding.items.map(\.path) where root.hasSuffix("models") || FileManager.default.fileExists(atPath: root + "/manifests")
-        {
-            let manifests = root + "/manifests"
-            let blobs = root + "/blobs"
-            var referenced = Set<String>()
-            guard let enumerator = FileManager.default.enumerator(atPath: manifests) else { continue }
-            while let relative = enumerator.nextObject() as? String {
-                let file = manifests + "/" + relative
-                guard let data = FileManager.default.contents(atPath: file),
-                    let manifest = try? JSONDecoder().decode(OllamaManifest.self, from: data)
-                else { continue }
-                let parts = relative.split(separator: "/").map(String.init)
-                guard parts.count >= 3 else { continue }
-                let tag = parts[parts.count - 1]
-                let model = parts[parts.count - 2]
-                let namespace = parts[parts.count - 3]
-                let registry = parts.count >= 4 ? parts[parts.count - 4] : "registry.ollama.ai"
-                var name = namespace == "library" ? model : "\(namespace)/\(model)"
-                if registry != "registry.ollama.ai" { name = "\(registry)/\(name)" }
-                name += ":" + tag
+        finding.items.map(\.path)
+            .filter { $0.hasSuffix("models") || FileManager.default.fileExists(atPath: $0 + "/manifests") }
+            .flatMap { ollamaModels(root: $0, ruleID: finding.rule.id) }
+    }
 
-                var size: UInt64 = 0
-                var paths: [String] = []
-                var lastUsed: Date?
-                for layer in manifest.layers + [manifest.config].compactMap({ $0 }) {
-                    let blob = blobs + "/" + layer.digest.replacingOccurrences(of: ":", with: "-")
-                    referenced.insert(blob)
-                    size &+= UInt64(max(0, layer.size))
-                    paths.append(blob)
-                    if let accessed = accessDate(blob), accessed > (lastUsed ?? .distantPast) { lastUsed = accessed }
-                }
-                models.append(
-                    AIModel(
-                        name: name, kind: .model, size: size, lastUsed: lastUsed, paths: paths,
-                        removeCommand: ["ollama", "rm", name], ruleID: finding.rule.id))
+    private static func ollamaModels(root: String, ruleID: String) -> [AIModel] {
+        let manifests = root + "/manifests"
+        let blobs = root + "/blobs"
+        guard let enumerator = FileManager.default.enumerator(atPath: manifests) else { return [] }
+        var tags: [(name: String, layers: [(blob: String, size: UInt64)])] = []
+        var references: [String: Int] = [:]
+        var everyManifestRead = true
+        while let relative = enumerator.nextObject() as? String {
+            if enumerator.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { continue }
+            if PathUtil.lastComponent(relative).hasPrefix(".") { continue }
+            guard let data = FileManager.default.contents(atPath: manifests + "/" + relative),
+                let manifest = try? JSONDecoder().decode(OllamaManifest.self, from: data)
+            else {
+                everyManifestRead = false
+                continue
             }
-            if let blobNames = try? FileManager.default.contentsOfDirectory(atPath: blobs) {
-                var orphanSize: UInt64 = 0
-                var orphanPaths: [String] = []
-                for blob in blobNames.map({ blobs + "/" + $0 }) where !referenced.contains(blob) && !blob.hasSuffix("-partial") {
-                    orphanSize &+= allocatedSize(blob)
-                    orphanPaths.append(blob)
-                }
-                if orphanSize > 0 {
-                    models.append(
-                        AIModel(
-                            name: "Unreferenced blobs", kind: .orphaned, size: orphanSize, lastUsed: nil,
-                            paths: orphanPaths, removeCommand: nil, ruleID: finding.rule.id))
-                }
+            var layers: [(blob: String, size: UInt64)] = []
+            for layer in manifest.layers + [manifest.config].compactMap({ $0 }) {
+                let blob = blobs + "/" + layer.digest.replacingOccurrences(of: ":", with: "-")
+                guard !layers.contains(where: { $0.blob == blob }) else { continue }
+                layers.append((blob, UInt64(max(0, layer.size))))
+                references[blob, default: 0] += 1
             }
+            guard let name = ollamaModelName(relative) else { continue }
+            tags.append((name, layers))
+        }
+
+        var models: [AIModel] = []
+        var shared: [String: UInt64] = [:]
+        for tag in tags {
+            var size: UInt64 = 0
+            for layer in tag.layers {
+                if references[layer.blob, default: 0] > 1 { shared[layer.blob] = layer.size } else { size &+= layer.size }
+            }
+            let blobPaths = tag.layers.map(\.blob)
+            models.append(
+                AIModel(
+                    name: tag.name, kind: .model, size: size, lastUsed: newestAccess(blobPaths), paths: blobPaths,
+                    removeCommand: ["ollama", "rm", tag.name], ruleID: ruleID))
+        }
+        if !shared.isEmpty {
+            // No paths or command: removing shared blobs directly would break the models that use them.
+            models.append(
+                AIModel(
+                    name: "Shared layers", kind: .model, size: shared.values.reduce(0, &+), lastUsed: newestAccess(Array(shared.keys)),
+                    paths: [], removeCommand: nil, ruleID: ruleID))
+        }
+        if everyManifestRead, let orphans = unreferencedBlobs(in: blobs, referenced: references, ruleID: ruleID) {
+            models.append(orphans)
         }
         return models
+    }
+
+    /// `registry.ollama.ai/library/llama3/8b` → `llama3:8b`; other namespaces and registries stay in the name.
+    private static func ollamaModelName(_ relative: String) -> String? {
+        let parts = relative.split(separator: "/").map(String.init)
+        guard parts.count >= 3 else { return nil }
+        let tag = parts[parts.count - 1]
+        let model = parts[parts.count - 2]
+        let namespace = parts[parts.count - 3]
+        let registry = parts.count >= 4 ? parts[parts.count - 4] : "registry.ollama.ai"
+        var name = namespace == "library" ? model : "\(namespace)/\(model)"
+        if registry != "registry.ollama.ai" { name = "\(registry)/\(name)" }
+        return name + ":" + tag
+    }
+
+    private static func unreferencedBlobs(in blobs: String, referenced: [String: Int], ruleID: String) -> AIModel? {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: blobs) else { return nil }
+        let paths = names.map { blobs + "/" + $0 }.filter { referenced[$0] == nil && !$0.hasSuffix("-partial") }.sorted()
+        let size = paths.reduce(UInt64(0)) { $0 &+ allocatedSize($1) }
+        guard size > 0 else { return nil }
+        return AIModel(name: "Unreferenced blobs", kind: .orphaned, size: size, lastUsed: nil, paths: paths, removeCommand: nil, ruleID: ruleID)
+    }
+
+    private static func newestAccess(_ paths: [String]) -> Date? {
+        paths.compactMap(accessDate).max()
     }
 
     private struct OllamaManifest: Decodable {

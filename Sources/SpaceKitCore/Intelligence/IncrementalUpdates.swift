@@ -43,6 +43,18 @@ public struct Removal: Sendable, Hashable {
     func covers(_ path: String) -> Bool {
         kind != .looseFiles && PathUtil.isAncestorOrEqual(self.path, of: path)
     }
+
+    /// True if this removal took part of `item` (but not all of it). A loose-files item only holds the plain
+    /// files directly in its folder, so only a removed file in that folder takes part of it.
+    func isInside(_ item: FindingItem) -> Bool {
+        switch (item.kind, kind) {
+        case (.file, _): return false
+        case (.looseFiles, .file): return PathUtil.parent(path) == item.path
+        case (.looseFiles, _): return false
+        case (.directory, .looseFiles): return PathUtil.isAncestorOrEqual(item.path, of: path)
+        case (.directory, _): return PathUtil.isStrictAncestor(item.path, of: path)
+        }
+    }
 }
 
 extension Analysis {
@@ -65,15 +77,9 @@ extension Analysis {
                     continue
                 }
                 // Something inside this item went away: shrink it.
-                for removal in removals where item.kind != .file {
-                    let inside =
-                        removal.kind == .looseFiles
-                        ? (item.kind == .directory && PathUtil.isAncestorOrEqual(item.path, of: removal.path))
-                        : PathUtil.isStrictAncestor(item.path, of: removal.path)
-                    if inside {
-                        item.size -= min(item.size, removal.bytes)
-                        changed = true
-                    }
+                for removal in removals where removal.isInside(item) {
+                    item.size -= min(item.size, removal.bytes)
+                    changed = true
                 }
                 if item.size > 0 { items.append(item) } else { changed = true }
             }

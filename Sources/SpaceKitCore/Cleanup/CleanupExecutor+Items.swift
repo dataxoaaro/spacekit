@@ -151,6 +151,7 @@ extension CleanupExecutor {
             return .skipped(reason: budgetNote ?? "None of the files from the reviewed plan are left")
         }
         run.report.warnings += failures
+        if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }
         if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
         return .removed(bytes: freed, trashedTo: removal == .trash ? trashLocations.first.map(PathUtil.parent) : nil)
     }

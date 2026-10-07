@@ -235,6 +235,8 @@ struct TrashAndJournalTests {
             #expect(entry.method == .trash)
             #expect(entry.trashedTo.map(onDisk) == true)
         }
+        // The report says where each went, so a scan tree can show them in the Trash.
+        #expect(report.trashedLooseFiles[tree.path("home/cache")]?.sorted() == entries.compactMap(\.trashedTo).sorted())
     }
 
     @Test("A partly failed loose-file removal journals what went and charges the budget")

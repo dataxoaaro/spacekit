@@ -57,7 +57,7 @@ struct CleanCommand: ParsableCommand {
 
         var plan = try rulePlan(rules, context: context, created: started)
         if !paths.isEmpty {
-            let index = RuleIndex(rules: context.library.rules)
+            let index = context.ruleIndex
             plan.items += try paths.map { try pathItem($0, context: context, index: index) }
             // A path someone names isn't covered by a rule's permission to delete.
             plan.useTrash = !permanent

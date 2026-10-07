@@ -176,7 +176,7 @@ public final class TUIApp {
 
     public init(context: SpaceKitContext, path: String?) {
         let root = PathUtil.expand(path ?? context.config.scan.defaultPath)
-        state = State(rootPath: root, libraryIndex: RuleIndex(rules: context.library.rules))
+        state = State(rootPath: root, libraryIndex: context.ruleIndex)
         self.context = context
     }
 

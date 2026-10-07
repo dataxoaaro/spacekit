@@ -2,7 +2,7 @@
 
 A **storage rule** is a small YAML description of one kind of data on a Mac: where it lives, what it is, how risky it is to remove, and how to clean it. Rules are SpaceKit's knowledge base. The app, the TUI, the CLI and the automation engine all read the same rules.
 
-Built-in rules live in [`rules/`](../rules). Your own rules go in `~/.config/spacekit/rules/` (or any folder listed under `rules.directories` in your config). A rule in your folder with the same `id` as a built-in rule replaces it, within limits (see [Your own rules and overrides](#your-own-rules-and-overrides)).
+Built-in rules live in [`rules/`](../rules). Debug builds (`swift run`) read them from the source checkout. A release binary reads the copy shipped with it: `make install` puts them in `share/spacekit/rules` under the install prefix, and the app carries its own. A release binary built some other way (`swift build -c release`) needs `SPACEKIT_RULES_DIR` pointed at a rule folder, or a `rules` folder beside the binary. Your own rules go in `~/.config/spacekit/rules/` (or any folder listed under `rules.directories` in your config). A rule in your folder with the same `id` as a built-in rule replaces it, within limits (see [Your own rules and overrides](#your-own-rules-and-overrides)).
 
 ```sh
 spacekit rules list                 # everything SpaceKit knows about
@@ -165,6 +165,8 @@ Rules load from the built-in library first, then from each of your rule folders.
 - A replacement **can't lower the safety level** of the built-in rule it replaces (`review` → `safe`, for example). It may raise it. To stop using a built-in rule, add its id to `rules.disabled` instead.
 
 `rules.disabled` turns rules off, except `protected` rules: those stay active, with a warning.
+
+**Rule files must be yours.** Rules decide what SpaceKit removes and which tools it runs, and the background agent reads them unattended. A rule file is loaded only if it is owned by you or root, isn't writable by group or others, and isn't in a folder that group or others can write to without the sticky bit. Any other rule file is reported as an error (`not loaded: …`) and none of its rules load. The same applies to the built-in library and the config file (see [CONFIGURATION.md](CONFIGURATION.md#invalid-config)).
 
 **Invalid rules are not loaded.** A rule with any error (no `path` or `match`, a path that is too broad, an action on a protected rule, a command that isn't a bare program name, shell syntax in a command) is reported and left out, so it neither cleans nor protects anything. A file with a value SpaceKit can't read, such as an unknown safety level or schedule, doesn't parse and loads none of its rules. Run `spacekit rules validate` without arguments to check every loaded rule, including whether your overrides were accepted; it exits with status 1 when there are errors.
 

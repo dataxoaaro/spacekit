@@ -32,7 +32,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
 | `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
 | `Safety/` | `SafetyGuard`, the single gate for removals. See [SAFETY.md](SAFETY.md). |
-| `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal), `SafeRemoval` (removal through a checked directory handle), `Journal`. |
+| `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal), `SafeRemoval` (deletion through directory handles under a checked folder, never by path), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
@@ -46,7 +46,7 @@ The scanner is the hot path. Its job is to turn millions of directory entries in
 - **Parallel work-stealing.** Worker threads share a LIFO stack of directories. Each worker keeps one child for itself and shares the rest, so the stack stays shallow and lock traffic low. Directory listing on APFS is bound by kernel locks rather than CPU. Measured on an M-series Mac (185k folders): 1 thread 5.8s, 4 threads 2.7s, 6 threads 2.7s, 24 threads 5.4s. Hence the default of about 6 threads (`scan.threads`). A 207 GB home folder with 1.8M files scans in about 13s (release build).
 - **Compact memory.** Folders are objects; files are kept individually only when at least `scan.minFileSize` (1 MB by default). Smaller files are folded into per-folder totals. Swift `String`s are created only for folders and tracked files. Marker files (`package.json`, `Cargo.toml`, `.git`, …) are recognised by comparing raw bytes and stored as a 64-bit mask per folder, which is what lets pattern rules work without keeping every file name.
 - **Correct sizes.** Allocated bytes (what the disk spends, not logical length); hard links counted once (pnpm stores, Time Machine); symlinks never followed; autofs triggers never opened.
-- **Hard links are attributed deterministically.** While the scan runs, a multiply-linked file's bytes go to the first link a worker reaches, so live totals stay right. When the workers finish, the bytes move to the link in the folder whose path sorts first (then by file name), so the same disk always gives the same tree whatever the thread timing. The other links stay in their folders' file counts with no bytes.
+- **Hard links are attributed deterministically.** While the scan runs, a multiply-linked file's bytes go to the first link a worker reaches, so live totals stay right. When the workers finish, the bytes move to the link in the folder whose path sorts first (then by file name), so the same disk always gives the same tree whatever the thread timing. The other links stay in their folders' file counts with no bytes. The tree keeps each multiply-linked file's group of links after the scan, so later updates know where the bytes go.
 - **The whole disk, once.** Scanning `/` crosses into every volume of the startup disk's APFS container (System, Data, VM swap, Preboot, Update) and skips data-volume paths that are also reachable through firmlinks (`/Users` ≡ `/System/Volumes/Data/Users`), using `/usr/share/firmlinks`. Other disks and virtual file systems are skipped. What the scan can't see is reported as *Hidden & Purgeable* (`used − scanned`).
 - **Progressive results.** Folders down to `liveDepth` keep an atomic running total, and each folder is published (`isListed`, release/acquire) as soon as it's listed, so the app and TUI draw the map while the scan runs.
 - **After the scan**, one non-recursive bottom-up pass computes totals, newest dates and subtree markers, and sorts children by size. After that the tree changes only through `applyRemoval`, `applyMove` and `splice`, which update every ancestor so views stay correct without rescanning.
@@ -84,8 +84,8 @@ After a cleanup, the app and the TUI do **not** re-scan or re-analyse:
 
 | What changed | What updates |
 |---|---|
-| Items removed from disk | `ScanTree.applyRemoval` shrinks the Explore tree (and the analysis tree, if separate) in place. Small files, which the tree only knows as a per-folder total, are removed using the size the executor measured. For loose files ("Files in …"), the folder is read again, because the executor may have skipped some of them. |
-| Items moved to the Trash | `ScanTree.applyMove` re-attaches them under `~/.Trash`, so totals stay true: trashed data still uses the disk. Afterwards the app re-scans the Trash and splices it in (`ScanTree.splice`), which also picks up a Trash emptied in Finder whenever SpaceKit becomes active. |
+| Items removed from disk | `ScanTree.applyRemoval` shrinks the Explore tree (and the analysis tree, if separate) in place. Small files, which the tree only knows as a per-folder total, are removed using the size the executor measured. For loose files ("Files in …"), the folder is read again, because the executor may have skipped some of them. Removing the link that holds a hard-linked file's bytes hands them to the surviving link a rescan would credit. |
+| Items moved to the Trash | `ScanTree.applyMove` re-attaches them under `~/.Trash`, so totals stay true: trashed data still uses the disk. Loose files moved to the Trash reappear under the Trash node where each one landed (the report's `trashedLooseFiles`). Afterwards the app re-scans the Trash and splices it in (`ScanTree.splice`), which also picks up a Trash emptied in Finder whenever SpaceKit becomes active. |
 | Findings | `Analysis.apply(_:)` drops removed items, shrinks items that lost something inside, and removes empty findings. Only the cards for touched rules change. |
 | Tool commands (`brew cleanup`, `docker builder prune`) | Only those rules are re-evaluated, with a targeted scan of their own locations (`refreshFindings`). The card shows a small spinner meanwhile. |
 | AI report | Rebuilt only if an AI rule was touched. Partial re-scans are merged into the existing report (`AIReport.replacingModels`), so other tools keep their models. |
@@ -101,7 +101,7 @@ Render-time work is cached too. Each folder's sorted item list and each path's r
 
 ### Proving it
 
-`ScanTree.inconsistencies()` checks every folder's invariants (its files add up to its direct total, and its total equals direct files plus children). [`TreeConsistencyTests`](../Tests/SpaceKitCoreTests/TreeConsistencyTests.swift) runs randomized sequences of deletions, loose-file removals and moves to a Trash folder, with large and small files. After every step it compares every folder's size in the incrementally updated tree with a full rescan of the disk.
+`ScanTree.inconsistencies()` checks every folder's invariants (its files add up to its direct total, and its total equals direct files plus children). [`TreeConsistencyTests`](../Tests/SpaceKitCoreTests/TreeConsistencyTests.swift) runs randomized sequences of deletions, loose-file removals and moves to a Trash folder, with large and small files and hard links across folders. After every step it compares every folder's size in the incrementally updated tree with a full rescan of the disk.
 
 ## Free space
 
@@ -122,12 +122,14 @@ With local Time Machine snapshots on the disk, deleting files doesn't change `fr
 Finding / selection ──► CleanupPlan ──► review (app sheet · TUI dialog · CLI preview)
                                               │ person confirms
                                               ▼
-                     CleanupExecutor: for each item ─► SafetyGuard (again) ─► budget ─► Trash / removefileat ─► journal entry
+                     CleanupExecutor: for each item ─► SafetyGuard (again) ─► budget ─► Trash / delete by handle ─► journal entry
                                       for each command ─► gates + trusted? ─► run without shell ─► measure freed ─► journal entry
                                               │
                                               ▼
                                            report ─► incremental UI update
 ```
+
+A verdict keeps each reason with the decision it calls for on its own (`SafetyVerdict.entries`), and every review labels each reason by that decision. A blocked item can also carry a reason that alone would only need confirmation, and that reason isn't shown as a block.
 
 ## Automation
 

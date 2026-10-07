@@ -12,8 +12,8 @@ extension TUIApp {
         var allowed = CleanupPlan(manualSteps: plan.manualSteps, useTrash: plan.useTrash, created: plan.created)
         var needConfirmation = 0
         var blocked = 0
-        // Every reason the guard gave is listed, because the first one raised isn't always the one that decided:
-        // a git repository (confirm) can also sit in a protected folder (block).
+        // Every reason the guard gave is listed with its own decision, because the first one raised isn't always the
+        // one that decided: a git repository (confirm) can also sit in a protected folder (block).
         func add(_ verdict: SafetyVerdict, _ text: String) -> Bool {
             let color = verdict.decision.color
             switch verdict.decision {
@@ -27,7 +27,10 @@ extension TUIApp {
                 blocked += 1
                 lines.append(verdict.decision.mark + " " + text + "  " + "blocked".fg(color))
             }
-            lines += verdict.reasons.map { "    · " + clean($0).fg(color) }
+            for entry in verdict.entries {
+                let reason: String = clean(entry.reason).fg(entry.decision.color)
+                lines.append("    " + entry.decision.mark + " " + reason)
+            }
             return verdict.decision == .confirm
         }
         for item in plan.itemsLargestFirst {

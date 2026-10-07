@@ -149,7 +149,7 @@ final class AppModel {
         let context = SpaceKitContext.load()
         self.context = context
         scanPath = PathUtil.expand(context.config.scan.defaultPath)
-        libraryIndex = RuleIndex(rules: context.library.rules)
+        libraryIndex = context.ruleIndex
         visualization = context.config.ui.visualization
         colorMode = context.config.ui.colorBy
         mapDepth = context.config.ui.mapDepth
@@ -219,7 +219,7 @@ final class AppModel {
     func reloadContext() {
         rulesIncludingDisabledCache = nil
         context = SpaceKitContext.load(paths: context.paths)
-        libraryIndex = RuleIndex(rules: context.library.rules)
+        libraryIndex = context.ruleIndex
         analysisResult?.reindex(rules: context.library.rules)
         if let error = context.configError { errorMessage = "Config problem: \(error)" }
         refreshAutomation()
@@ -385,13 +385,14 @@ final class AppModel {
         let tree = self.tree
         let window = context.config.automation.activeModelWindow
         let rules = context.library.rules
+        let patternRoots = context.config.scan.devRoots
         let history = context.history
         Task {
             let result: AnalysisResult
             do {
                 result = try await self.readingTrees {
                     let analysis = try await analyzer.analyze(reusing: tree, progress: progress)
-                    return AnalysisResult(analysis, rules: rules, activeModelWindow: window)
+                    return AnalysisResult(analysis, rules: rules, activeModelWindow: window, patternRoots: patternRoots)
                 }
             } catch {
                 guard self.analysisGeneration == generation else { return }

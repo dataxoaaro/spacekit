@@ -34,7 +34,7 @@ struct ScanCommand: ParsableCommand {
         if allFiles { options.minFileSize = 0 }
         let minimum = minSize?.bytes ?? 0
         let tree = try ProgressReporter.run("Scanning") { try Scanner(options: options).scan(path, progress: $0) }
-        let index = RuleIndex(rules: context.library.rules)
+        let index = context.ruleIndex
 
         if json {
             try Output.json(ScanJSON(tree: tree, depth: depth, top: top, minSize: minimum))

@@ -160,7 +160,8 @@ struct ConfigCommand: ParsableCommand {
         func run() throws {
             var paths = global.paths
             if let file { paths.configFile = PathUtil.expandArgument(file) }
-            guard FileManager.default.fileExists(atPath: paths.configFile) else {
+            // A symlink to a missing file is there (and invalid), not absent.
+            guard ConfigStore(file: paths.configFile).exists else {
                 throw ValidationError("No config at \(Output.safe(paths.configFile)). Create one with `spacekit config init`.")
             }
             // Load it the way every command would, so its own rule folders and disabled rules apply.

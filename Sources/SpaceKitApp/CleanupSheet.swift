@@ -262,15 +262,17 @@ struct CommandRow: View {
     }
 }
 
-/// The guard's reasons for a verdict: a lock for what's blocked, a warning for what needs confirmation.
+/// The guard's reasons for a verdict, each marked by its own decision: a lock for a reason that blocks, a warning
+/// for one that needs confirmation (a blocked item can have both).
 struct VerdictReasons: View {
     let verdict: SafetyVerdict
 
     var body: some View {
-        ForEach(verdict.reasons, id: \.self) { reason in
-            Label(reason, systemImage: verdict.isBlocked ? "lock.fill" : "exclamationmark.triangle.fill")
+        ForEach(verdict.entries, id: \.reason) { (entry: SafetyVerdict.Entry) in
+            let blocks: Bool = entry.decision == .block
+            Label(entry.reason, systemImage: blocks ? "lock.fill" : "exclamationmark.triangle.fill")
                 .font(.caption)
-                .foregroundStyle(verdict.isBlocked ? Theme.critical : Theme.warning)
+                .foregroundStyle(blocks ? Theme.critical : Theme.warning)
         }
     }
 }

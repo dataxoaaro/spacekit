@@ -152,7 +152,8 @@ public struct SpaceKitContext: Sendable {
     public var paths: SpaceKitPaths
     public var config: SpaceKitConfig
     public var library: RuleLibrary
-    /// Set when the config file exists but couldn't be read; defaults are used instead.
+    /// Set when the config file exists but couldn't be read. Read-only features use the defaults instead; the
+    /// executor refuses every removal and command until the file is fixed.
     public var configError: String?
 
     public init(paths: SpaceKitPaths, config: SpaceKitConfig, library: RuleLibrary, configError: String? = nil) {
@@ -199,7 +200,7 @@ public struct SpaceKitContext: Sendable {
         CleanupExecutor(
             safety: safetyGuard, journal: journal, rules: library.rules,
             extraAllowedCommands: Set(config.safety.allowedCommands),
-            maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes)
+            maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes, configError: configError)
     }
 
     /// `true` to force the Trash, `nil` to follow rules.

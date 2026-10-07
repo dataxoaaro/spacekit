@@ -14,11 +14,10 @@ public struct JournalEntry: Codable, Sendable, Identifiable {
     public var automatic: Bool
     /// Where a trashed item went, so it can be put back.
     public var trashedTo: String?
-    public var note: String?
 
     public init(
         date: Date = Date(), path: String, bytes: UInt64, method: Method, ruleID: String? = nil, jobID: String? = nil,
-        automatic: Bool, trashedTo: String? = nil, note: String? = nil
+        automatic: Bool, trashedTo: String? = nil
     ) {
         self.id = UUID()
         self.date = date
@@ -29,7 +28,6 @@ public struct JournalEntry: Codable, Sendable, Identifiable {
         self.jobID = jobID
         self.automatic = automatic
         self.trashedTo = trashedTo
-        self.note = note
     }
 }
 
@@ -60,7 +58,7 @@ public struct Journal: Sendable {
     }
 
     /// Bytes recovered since a date.
-    public func recovered(since: Date? = nil, automaticOnly: Bool = false) -> UInt64 {
-        entries(since: since).filter { !automaticOnly || $0.automatic }.reduce(0) { $0 &+ $1.bytes }
+    public func recovered(since: Date? = nil) -> UInt64 {
+        entries(since: since).reduce(0) { $0 &+ $1.bytes }
     }
 }

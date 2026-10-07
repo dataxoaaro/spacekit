@@ -13,11 +13,20 @@ struct TrashCommand: ParsableCommand {
             """
     )
 
+    struct Status: Encodable {
+        var path: String
+        var bytes: UInt64
+        var files: UInt64
+    }
+
     @OptionGroup var global: GlobalOptions
     @Flag(name: .long, help: "Empty the Trash (preview unless --yes).") var empty = false
     @Flag(name: [.short, .long], help: "Delete without asking.") var yes = false
+    @Flag(name: .long, help: "Machine-readable output.") var json = false
 
     func run() throws {
+        // Entries moved to the Trash after this weren't in the preview, so the executor leaves them.
+        let started = Date()
         let context = global.loadContext()
         let path = PathUtil.home + "/.Trash"
         var options = context.scanOptions
@@ -27,14 +36,14 @@ struct TrashCommand: ParsableCommand {
             Output.warn("Can't read the Trash. Give your terminal Full Disk Access (see `spacekit doctor`), or empty it in Finder.")
             throw ExitCode.failure
         }
-        Output.print("Trash: ".bold + ByteCount.format(tree.root.size).bold + "  \(tree.root.fileCount.formatted()) files".dim)
-        guard empty else {
-            if tree.root.size > 0 { Output.print("Empty it with: ".dim + "spacekit trash --empty".bold) }
+        let status = Status(path: path, bytes: tree.root.size, files: tree.root.fileCount)
+        if !json { print("Trash: ".bold + ByteCount.format(status.bytes).bold + "  \(status.files.formatted()) files".dim) }
+        guard empty, status.bytes > 0 else {
+            if json { try Output.json(status) } else if status.bytes > 0 { print("Empty it with: ".dim + "spacekit trash --empty".bold) }
             return
         }
-        guard tree.root.size > 0 else { return }
         let rule = context.library.rules.first { $0.paths.contains { PathUtil.expand($0) == path } }
-        var plan = CleanupPlan(useTrash: false)
+        var plan = CleanupPlan(useTrash: false, created: started)
         plan.items = tree.root.children.filter { $0.size > 0 }.map {
             CleanupItem(path: $0.path, kind: .directory, name: $0.name, size: $0.size, ruleID: rule?.id)
         }
@@ -42,19 +51,16 @@ struct TrashCommand: ParsableCommand {
             plan.items.append(
                 CleanupItem(path: path, kind: .looseFiles, name: "Files in the Trash", size: tree.root.directFileSize, ruleID: rule?.id))
         }
-        let proceed = yes || Output.confirm("Permanently delete \(ByteCount.format(tree.root.size)) in the Trash?")
-        guard proceed else {
-            Output.print("Nothing deleted. Run with --yes to empty the Trash.".dim)
-            return
+        guard
+            let report = try CleanupOutput.session(
+                plan, executor: context.executor, yes: yes, json: json, interactive: true, heading: "Empty the Trash",
+                verb: "Delete", hint: "Nothing deleted. Run with --yes to empty the Trash.")
+        else { return }
+        if !json, let capacity = VolumeCapacity.of(path: "/"), capacity.purgeable > 1_000_000_000,
+            !LocalSnapshots.list(volume: "/").isEmpty
+        {
+            print("Local Time Machine snapshots still reference these files; the space shows as purgeable until macOS releases it.".dim)
         }
-        let report = context.executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
-        Output.print(report.summary.bold.fg(ANSI.safe))
-        for (item, reason) in report.skipped + report.failures {
-            Output.print("  skipped ".dim + PathUtil.abbreviate(item.path) + ": " + reason.dim)
-        }
-        if let capacity = VolumeCapacity.of(path: "/"), capacity.purgeable > 1_000_000_000, !LocalSnapshots.list(volume: "/").isEmpty {
-            Output.print(
-                "Local Time Machine snapshots still reference these files; the space shows as purgeable until macOS releases it.".dim)
-        }
+        try CleanupOutput.exitIfProblems(report)
     }
 }

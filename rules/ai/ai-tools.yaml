@@ -1,0 +1,126 @@
+# AI coding tools: Claude Code and Claude desktop, Codex CLI, Gemini CLI.
+# Schema: docs/RULES.md
+#
+# Credentials of these tools (~/.codex/auth.json) are protected in protected/credentials.yaml.
+# Cursor's caches and chat history are in developer/editors.yaml.
+group: AI coding tools
+category: ai.sessions
+
+rules:
+  # Claude
+
+  - id: ai.claude.sessions
+    name: Claude Code session transcripts
+    description: Conversation transcripts, one folder per project, used by claude --resume and --continue. Claude Code itself deletes transcripts older than its cleanupPeriodDays setting (30 days by default).
+    path: ~/.claude/projects
+    granularity: children
+    recreatedBy: Not recreated (conversation history)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Claude
+      layout: cache
+
+  - id: ai.claude.file-history
+    name: Claude Code file checkpoints
+    description: Copies of files Claude Code edited, kept per session so you can rewind changes. Only useful while you might still rewind that session.
+    path: ~/.claude/file-history
+    granularity: children
+    recreatedBy: Not recreated (checkpoints of past sessions)
+    safety: review
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Claude
+      layout: cache
+
+  - id: ai.claude.mcp-logs
+    name: Claude Code MCP logs
+    description: Logs Claude Code writes for MCP servers, one folder per project.
+    category: ai.cache
+    path: ~/Library/Caches/claude-cli-nodejs
+    granularity: children
+    recreatedBy: Claude Code
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Claude
+      layout: cache
+
+  - id: ai.claude.desktop-cache
+    name: Claude desktop caches and logs
+    description: Chromium caches and logs of the Claude desktop app. Recreated as you use it; quit the app first.
+    category: ai.cache
+    path:
+      - ~/Library/Application Support/Claude/Cache
+      - ~/Library/Application Support/Claude/Code Cache
+      - ~/Library/Application Support/Claude/GPUCache
+      - ~/Library/Caches/com.anthropic.claudefordesktop
+      - ~/Library/Logs/Claude
+    recreatedBy: Claude desktop
+    safety: safe
+    action: remove
+    ai:
+      tool: Claude
+      layout: cache
+
+  # Codex
+
+  - id: ai.codex.sessions
+    name: Codex session transcripts
+    description: Codex CLI session rollouts, organised by date, used by codex resume. Not recreated once removed.
+    path: ~/.codex/sessions
+    granularity: children
+    recreatedBy: Not recreated (conversation history)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Codex
+      layout: cache
+
+  - id: ai.codex.logs
+    name: Codex logs
+    description: Log files written by the Codex CLI.
+    category: ai.cache
+    path: ~/.codex/log
+    recreatedBy: Codex CLI
+    safety: safe
+    action: remove
+    ai:
+      tool: Codex
+      layout: cache
+
+  # Gemini CLI
+
+  - id: ai.gemini.tmp
+    name: Gemini CLI project data
+    description: Per-project logs, saved chats and checkpoints of Gemini CLI, one folder per project. Saved chats and checkpoints are lost when removed.
+    path: ~/.gemini/tmp
+    granularity: children
+    recreatedBy: Gemini CLI (saved chats are not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Gemini CLI
+      layout: cache

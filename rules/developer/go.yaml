@@ -1,0 +1,41 @@
+# Go: build cache, module cache and tool caches.
+# Schema: docs/RULES.md
+group: Go
+category: developer.cache
+
+rules:
+  - id: go.build-cache
+    name: Go build cache
+    description: Compiled packages and test results cached by the go command. Rebuilt as needed; the next builds are slower.
+    category: developer.build
+    path: ~/Library/Caches/go-build
+    recreatedBy: go build / go test
+    safety: safe
+    policy:
+      type: size
+      threshold: 10GB
+      schedule: monthly
+      mode: automatic
+    action:
+      command: [go, clean, -cache]
+    docs: https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching
+
+  - id: go.module-cache
+    name: Go module cache
+    description: Downloaded module sources for every Go project. Everything is downloaded again on the next build, and offline builds fail until it is.
+    path: ~/go/pkg/mod
+    recreatedBy: go mod download / go build
+    safety: review
+    action:
+      command: [go, clean, -modcache]
+    docs: https://go.dev/ref/mod#module-cache
+
+  - id: go.tool-caches
+    name: gopls and golangci-lint caches
+    description: Analysis caches of the gopls language server and golangci-lint. Rebuilt on the next run.
+    path:
+      - ~/Library/Caches/gopls
+      - ~/Library/Caches/golangci-lint
+    recreatedBy: gopls / golangci-lint
+    safety: safe
+    action: remove

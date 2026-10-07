@@ -1,0 +1,205 @@
+# Java, Kotlin, Gradle, Maven, SDKMAN and JetBrains IDEs.
+# Schema: docs/RULES.md
+group: Java & Gradle
+category: developer.cache
+
+rules:
+  # Project artifacts
+
+  - id: gradle.build
+    name: Gradle build folders
+    description: Build output of Gradle modules (build, plus .cxx for Android native code). Rebuilt by the next Gradle build.
+    category: developer.build
+    match:
+      names: [build, .cxx]
+      sibling: [build.gradle, build.gradle.kts]
+    recreatedBy: gradle build
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: weekly
+      mode: suggest
+    action: remove
+
+  - id: gradle.project-cache
+    name: Gradle project .gradle folders
+    description: Per-project Gradle state such as file hashes and configuration cache. Recreated by the next build.
+    category: developer.build
+    match:
+      names: [.gradle]
+      sibling: [settings.gradle, settings.gradle.kts, build.gradle, build.gradle.kts]
+    recreatedBy: gradle
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  - id: maven.target
+    name: Maven target folders
+    description: Build output of Maven projects. Rebuilt by the next mvn package or install.
+    category: developer.build
+    match:
+      names: [target]
+      sibling: [pom.xml]
+    recreatedBy: mvn package
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  # Gradle home
+
+  - id: gradle.caches
+    name: Gradle caches
+    description: Downloaded dependencies, transformed artifacts and the local build cache for all Gradle projects. Stop running builds first (gradle --stop); everything is downloaded again on the next build.
+    path: ~/.gradle/caches
+    recreatedBy: gradle build
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: size
+      threshold: 15GB
+      schedule: monthly
+      mode: suggest
+    action: remove
+    docs: https://docs.gradle.org/current/userguide/directory_layout.html
+
+  - id: gradle.wrapper-dists
+    name: Gradle wrapper distributions
+    description: Gradle distributions downloaded by gradlew, one folder per version. Versions your projects no longer use are dead weight.
+    category: developer.toolchains
+    path: ~/.gradle/wrapper/dists
+    granularity: children
+    recreatedBy: ./gradlew, on the next run
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: gradle.daemon
+    name: Gradle daemon logs
+    description: Gradle daemon logs and registries, one folder per Gradle version.
+    category: developer.logs
+    path: ~/.gradle/daemon
+    granularity: children
+    recreatedBy: The Gradle daemon
+    safety: safe
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: monthly
+      mode: automatic
+    action: remove
+
+  - id: gradle.jdks
+    name: Gradle-provisioned JDKs
+    description: JDKs Gradle downloaded through toolchain auto-provisioning. Downloaded again when a build needs them.
+    category: developer.toolchains
+    path: ~/.gradle/jdks
+    granularity: children
+    recreatedBy: Gradle toolchain provisioning
+    safety: review
+    action: remove
+
+  # Maven, Kotlin/Native, SDKMAN
+
+  - id: maven.repository
+    name: Maven local repository
+    description: Dependencies downloaded by Maven, plus anything you published locally with mvn install, which can't be downloaded again.
+    path: ~/.m2/repository
+    recreatedBy: mvn install / Gradle builds using mavenLocal()
+    safety: review
+    action: remove
+
+  - id: kotlin.konan
+    name: Kotlin/Native toolchain
+    description: Kotlin/Native compilers, LLVM and platform libraries downloaded for Kotlin Multiplatform builds. Downloaded again on the next native build.
+    category: developer.toolchains
+    path: ~/.konan
+    granularity: children
+    recreatedBy: Kotlin/Native builds
+    safety: review
+    action: remove
+
+  - id: sdkman.candidates
+    name: SDKMAN versions
+    description: JDKs and other SDKs installed with SDKMAN, one folder per version. Removing the version marked current breaks that tool until you switch.
+    category: developer.toolchains
+    path: ~/.sdkman/candidates/*
+    granularity: children
+    recreatedBy: sdk install
+    safety: review
+    action: remove
+
+  - id: sdkman.archives
+    name: SDKMAN downloads
+    description: Archives SDKMAN downloaded while installing SDKs.
+    path:
+      - ~/.sdkman/archives
+      - ~/.sdkman/tmp
+    recreatedBy: sdk install
+    safety: safe
+    action: remove
+
+  # JetBrains IDEs
+
+  - id: jetbrains.caches
+    name: JetBrains IDE caches
+    description: Indexes and caches of JetBrains IDEs, one folder per IDE version. Old versions are pure waste; the current one is rebuilt by re-indexing.
+    group: JetBrains
+    path: ~/Library/Caches/JetBrains
+    granularity: children
+    recreatedBy: The IDE (re-indexing)
+    safety: safe
+    policy:
+      type: age
+      olderThan: 60d
+      mode: suggest
+    action: remove
+
+  - id: jetbrains.logs
+    name: JetBrains IDE logs
+    description: Logs of JetBrains IDEs, one folder per IDE version.
+    group: JetBrains
+    category: developer.logs
+    path: ~/Library/Logs/JetBrains
+    granularity: children
+    recreatedBy: The IDE
+    safety: safe
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: monthly
+      mode: automatic
+    action: remove
+
+  - id: jetbrains.old-configs
+    name: JetBrains IDE settings and plugins
+    description: Settings and plugins per IDE version. Folders for versions you no longer run can go; the current version's folder holds your settings.
+    group: JetBrains
+    category: developer.config
+    path: ~/Library/Application Support/JetBrains
+    granularity: children
+    exclusions:
+      - ~/Library/Application Support/JetBrains/Toolbox
+    recreatedBy: The IDE (settings are not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 180d
+      mode: suggest
+    action: remove

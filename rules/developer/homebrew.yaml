@@ -1,0 +1,32 @@
+# Homebrew.
+# Schema: docs/RULES.md
+group: Homebrew
+category: developer.cache
+
+rules:
+  - id: homebrew.cache
+    name: Homebrew cache
+    description: Bottles, casks and source archives Homebrew downloaded. brew cleanup --prune=all empties it and also removes outdated versions of installed packages.
+    path: ~/Library/Caches/Homebrew
+    recreatedBy: brew install / brew upgrade
+    safety: safe
+    policy:
+      type: schedule
+      schedule: monthly
+      mode: suggest
+    action:
+      command: [brew, cleanup, --prune=all]
+    docs: https://docs.brew.sh/Manpage
+
+  - id: homebrew.cellar
+    name: Homebrew packages (old versions)
+    description: Everything Homebrew has installed. The size shown is the whole Cellar; brew cleanup removes only versions left behind by upgrades, which you'd need to roll back.
+    category: developer.packages
+    path:
+      - /opt/homebrew/Cellar
+      - /usr/local/Cellar
+    recreatedBy: brew install
+    safety: review
+    action:
+      command: [brew, cleanup]
+    docs: https://docs.brew.sh/Manpage

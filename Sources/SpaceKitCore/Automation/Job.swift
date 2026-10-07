@@ -1,0 +1,271 @@
+import Foundation
+
+/// A scheduled cleanup ("Automation" in the app, `jobs:` in the config).
+public struct Job: Codable, Sendable, Identifiable, Hashable {
+    public enum Mode: String, Codable, Sendable, CaseIterable {
+        /// Tell me when this gets large.
+        case observe
+        /// Prepare a cleanup, but ask me first.
+        case suggest
+        /// Clean according to my rules (within the safety limits).
+        case automatic
+
+        public var title: String {
+            switch self {
+            case .observe: return "Observe"
+            case .suggest: return "Suggest"
+            case .automatic: return "Automatic"
+            }
+        }
+
+        public var explanation: String {
+            switch self {
+            case .observe: return "Notify me when it grows past the threshold."
+            case .suggest: return "Prepare a cleanup and ask before removing anything."
+            case .automatic: return "Clean on schedule. Regenerable items only, unless review items are included."
+            }
+        }
+    }
+
+    public enum Action: String, Codable, Sendable, CaseIterable {
+        /// Move to the Trash.
+        case trash
+        /// Delete permanently (only honoured for regenerable items in automatic runs).
+        case delete
+        /// Follow each rule's `safety.trash`.
+        case rule
+    }
+
+    public struct Conditions: Codable, Sendable, Hashable {
+        /// Only act when the matched total exceeds this.
+        public var sizeAbove: ByteCount?
+        /// Only touch items unused for at least this long.
+        public var olderThan: Age?
+        /// Never touch items used within this window ("keep projects used within 14 days").
+        public var keepRecent: Age?
+
+        public init(sizeAbove: ByteCount? = nil, olderThan: Age? = nil, keepRecent: Age? = nil) {
+            self.sizeAbove = sizeAbove
+            self.olderThan = olderThan
+            self.keepRecent = keepRecent
+        }
+
+        public var isEmpty: Bool { sizeAbove == nil && olderThan == nil && keepRecent == nil }
+    }
+
+    public var id: String
+    public var name: String
+    public var enabled: Bool
+    /// Rule ids this job cleans.
+    public var rules: [String]
+    /// Your own folders to clean (in addition to rules).
+    public var paths: [String]
+    /// For `paths`: clean each entry inside the folder (`children`) or the folder itself (`whole`).
+    public var granularity: Granularity
+    public var mode: Mode
+    public var schedule: Schedule
+    public var when: Conditions
+    public var action: Action
+    /// Allow 🟡 review items in automatic mode.
+    public var includeReview: Bool
+
+    public init(
+        id: String, name: String, enabled: Bool = true, rules: [String] = [], paths: [String] = [],
+        granularity: Granularity = .children, mode: Mode = .suggest, schedule: Schedule = .weekly,
+        when: Conditions = Conditions(), action: Action = .trash, includeReview: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.enabled = enabled
+        self.rules = rules
+        self.paths = paths
+        self.granularity = granularity
+        self.mode = mode
+        self.schedule = schedule
+        self.when = when
+        self.action = action
+        self.includeReview = includeReview
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, enabled, rules, paths, granularity, mode, schedule, when, action, includeReview }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? Rule.slug(name)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        rules = try c.decodeIfPresent([String].self, forKey: .rules) ?? []
+        paths = try c.decodeIfPresent([String].self, forKey: .paths) ?? []
+        granularity = try c.decodeIfPresent(Granularity.self, forKey: .granularity) ?? .children
+        mode = try c.decodeIfPresent(Mode.self, forKey: .mode) ?? .suggest
+        schedule = try c.decodeIfPresent(Schedule.self, forKey: .schedule) ?? .weekly
+        when = try c.decodeIfPresent(Conditions.self, forKey: .when) ?? Conditions()
+        action = try c.decodeIfPresent(Action.self, forKey: .action) ?? .trash
+        includeReview = try c.decodeIfPresent(Bool.self, forKey: .includeReview) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(enabled, forKey: .enabled)
+        if !rules.isEmpty { try c.encode(rules, forKey: .rules) }
+        if !paths.isEmpty {
+            try c.encode(paths, forKey: .paths)
+            try c.encode(granularity, forKey: .granularity)
+        }
+        try c.encode(mode, forKey: .mode)
+        try c.encode(schedule, forKey: .schedule)
+        if !when.isEmpty { try c.encode(when, forKey: .when) }
+        try c.encode(action, forKey: .action)
+        if includeReview { try c.encode(includeReview, forKey: .includeReview) }
+    }
+
+    /// Summary like "Clean when > 30 GB · keep items used within 14 days".
+    public var conditionSummary: String {
+        var parts: [String] = []
+        if let size = when.sizeAbove { parts.append("Clean when > \(size)") }
+        if let age = when.olderThan { parts.append("Untouched for \(Int(age.days)) days") }
+        if let keep = when.keepRecent { parts.append("Keep items used within \(Int(keep.days)) days") }
+        return parts.isEmpty ? "Cleans everything matched, on schedule" : parts.joined(separator: " · ")
+    }
+
+    /// A job pre-filled from a rule's suggested policy.
+    public static func suggested(for rule: Rule) -> Job {
+        let policy = rule.policy
+        let schedule = policy?.schedule.flatMap(Schedule.parse) ?? .weekly
+        let mode = policy?.mode.flatMap(Mode.init(rawValue:)) ?? (rule.safety.level == .safe ? .automatic : .suggest)
+        var keep = policy?.keepRecent
+        if keep == nil && rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) { keep = .days(14) }
+        return Job(
+            id: rule.id, name: rule.name, rules: [rule.id], mode: mode, schedule: schedule,
+            when: Conditions(sizeAbove: policy?.threshold, olderThan: policy?.olderThan, keepRecent: keep),
+            action: .trash, includeReview: false)
+    }
+}
+
+public enum Weekday: String, Codable, Sendable, CaseIterable {
+    case sunday, monday, tuesday, wednesday, thursday, friday, saturday
+
+    /// `Calendar` weekday number (Sunday = 1).
+    public var number: Int { Weekday.allCases.firstIndex(of: self)! + 1 }
+    public var title: String { rawValue.capitalized }
+}
+
+/// When a job runs. YAML accepts `weekly`, `daily at 03:00`, or an object `{every: weekly, weekday: sunday, at: "03:00"}`.
+public struct Schedule: Codable, Sendable, Hashable, CustomStringConvertible {
+    public enum Frequency: String, Codable, Sendable, CaseIterable { case hourly, daily, weekly, monthly }
+
+    public var every: Frequency
+    /// `HH:mm`, local time.
+    public var at: String
+    public var weekday: Weekday?
+    /// Day of month (1–28) for monthly schedules.
+    public var day: Int?
+
+    public init(every: Frequency, at: String = "03:00", weekday: Weekday? = nil, day: Int? = nil) {
+        self.every = every
+        self.at = at
+        self.weekday = weekday
+        self.day = day
+    }
+
+    public static let daily = Schedule(every: .daily)
+    public static let weekly = Schedule(every: .weekly, weekday: .sunday)
+    public static let monthly = Schedule(every: .monthly, day: 1)
+
+    public static func parse(_ text: String) -> Schedule? {
+        let words = text.lowercased().split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).filter {
+            $0 != "at" && $0 != "on" && $0 != "every"
+        }
+        var schedule: Schedule?
+        var time = "03:00"
+        var weekday: Weekday?
+        for word in words {
+            switch word {
+            case "hourly", "hour": schedule = Schedule(every: .hourly)
+            case "daily", "day", "nightly": schedule = Schedule(every: .daily)
+            case "weekly", "week": schedule = Schedule(every: .weekly)
+            case "monthly", "month": schedule = Schedule(every: .monthly, day: 1)
+            default:
+                if let day = Weekday.allCases.first(where: { $0.rawValue == word || $0.rawValue.prefix(3) == word }) {
+                    weekday = day
+                    if schedule == nil { schedule = Schedule(every: .weekly) }
+                } else if word.contains(":"), Schedule.components(word) != nil {
+                    time = word
+                }
+            }
+        }
+        guard var result = schedule else { return nil }
+        result.at = time
+        if result.every == .weekly { result.weekday = weekday ?? .sunday }
+        return result
+    }
+
+    enum CodingKeys: String, CodingKey { case every, at, weekday, day }
+
+    public init(from decoder: Decoder) throws {
+        if let text = try? decoder.singleValueContainer().decode(String.self) {
+            guard let parsed = Schedule.parse(text) else {
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Unknown schedule '\(text)'. Try hourly, daily, weekly, monthly, or 'sunday 03:00'."))
+            }
+            self = parsed
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        every = try c.decode(Frequency.self, forKey: .every)
+        at = try c.decodeIfPresent(String.self, forKey: .at) ?? "03:00"
+        weekday = try c.decodeIfPresent(Weekday.self, forKey: .weekday)
+        day = try c.decodeIfPresent(Int.self, forKey: .day)
+        if every == .weekly && weekday == nil { weekday = .sunday }
+        if every == .monthly && day == nil { day = 1 }
+        guard Schedule.components(at) != nil else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath + [CodingKeys.at],
+                    debugDescription: "Time '\(at)' must be HH:mm"))
+        }
+    }
+
+    static func components(_ time: String) -> (hour: Int, minute: Int)? {
+        let parts = time.split(separator: ":")
+        guard parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]), (0..<24).contains(hour), (0..<60).contains(minute)
+        else { return nil }
+        return (hour, minute)
+    }
+
+    /// The first scheduled time strictly after `date`.
+    public func nextRun(after date: Date, calendar: Calendar = .current) -> Date {
+        let (hour, minute) = Schedule.components(at) ?? (3, 0)
+        var match = DateComponents()
+        switch every {
+        case .hourly:
+            match.minute = minute
+        case .daily:
+            match.hour = hour
+            match.minute = minute
+        case .weekly:
+            match.weekday = (weekday ?? .sunday).number
+            match.hour = hour
+            match.minute = minute
+        case .monthly:
+            match.day = min(max(day ?? 1, 1), 28)
+            match.hour = hour
+            match.minute = minute
+        }
+        return calendar.nextDate(after: date, matching: match, matchingPolicy: .nextTime) ?? date.addingTimeInterval(86_400)
+    }
+
+    /// "Sunday · 03:00", "Every day · 03:00".
+    public var description: String {
+        switch every {
+        case .hourly: return "Every hour at :\(at.split(separator: ":").last ?? "00")"
+        case .daily: return "Every day · \(at)"
+        case .weekly: return "\((weekday ?? .sunday).title) · \(at)"
+        case .monthly: return "Monthly on day \(day ?? 1) · \(at)"
+        }
+    }
+}

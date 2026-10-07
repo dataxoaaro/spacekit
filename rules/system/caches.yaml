@@ -1,0 +1,153 @@
+# App caches and logs in your Library, browsers and chat apps.
+# Schema: docs/RULES.md
+#
+# The two generic rules (~/Library/Caches and ~/Library/Logs) report one item per app. Every more
+# specific rule elsewhere in the library (Homebrew, pip, Xcode, browsers, …) claims its own folder
+# first, so those folders are reported and cleaned under their own rule.
+group: System & Apps
+category: cache.apps
+
+rules:
+  # Generic
+
+  - id: cache.user-caches
+    name: App caches
+    description: Caches apps keep in ~/Library/Caches, one item per app. Apps rebuild them, but some sign you out or start slowly the first time; quit an app before clearing its cache.
+    path: ~/Library/Caches
+    granularity: children
+    recreatedBy: Each app
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: cache.user-logs
+    name: App logs
+    description: Log files apps write to ~/Library/Logs, one item per app.
+    category: system.logs
+    path: ~/Library/Logs
+    granularity: children
+    recreatedBy: Each app
+    safety: safe
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: monthly
+      mode: suggest
+    action: remove
+
+  - id: cache.diagnostic-reports
+    name: Crash and diagnostic reports
+    description: Crash, hang and resource reports for your apps. Only useful while you're debugging a recent crash.
+    category: system.logs
+    path: ~/Library/Logs/DiagnosticReports
+    recreatedBy: macOS, when an app crashes
+    safety: safe
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: monthly
+      mode: automatic
+    action: remove
+
+  - id: cache.app-updates
+    name: App update downloads
+    description: Updates downloaded by apps that use the Squirrel updater (VS Code, Cursor, Slack, Figma and other Electron apps). Downloaded again when the next update is available.
+    path: ~/Library/Caches/*.ShipIt
+    recreatedBy: The app's updater
+    safety: safe
+    action: remove
+
+  # Browsers
+
+  - id: cache.chrome
+    name: Google Chrome cache
+    description: Chrome's disk cache of web pages, scripts and media. Pages load a little slower until it refills; you stay signed in.
+    category: cache.browser
+    path:
+      - ~/Library/Caches/Google/Chrome
+      - ~/Library/Caches/Google/Chrome Canary
+    recreatedBy: Chrome
+    safety: safe
+    action: remove
+
+  - id: cache.brave
+    name: Brave cache
+    description: Brave's disk cache of web pages, scripts and media. Pages load a little slower until it refills; you stay signed in.
+    category: cache.browser
+    path: ~/Library/Caches/BraveSoftware/Brave-Browser
+    recreatedBy: Brave
+    safety: safe
+    action: remove
+
+  - id: cache.edge
+    name: Microsoft Edge cache
+    description: Edge's disk cache of web pages, scripts and media. Pages load a little slower until it refills; you stay signed in.
+    category: cache.browser
+    path: ~/Library/Caches/Microsoft Edge
+    recreatedBy: Microsoft Edge
+    safety: safe
+    action: remove
+
+  - id: cache.firefox
+    name: Firefox cache
+    description: Firefox's disk cache for each profile. Pages load a little slower until it refills; you stay signed in.
+    category: cache.browser
+    path: ~/Library/Caches/Firefox/Profiles/*/cache2
+    recreatedBy: Firefox
+    safety: safe
+    action: remove
+
+  # Apps
+
+  - id: cache.spotify
+    name: Spotify cache
+    description: Music and artwork Spotify cached while streaming. Refilled as you listen; quit Spotify first.
+    path: ~/Library/Caches/com.spotify.client
+    recreatedBy: Spotify
+    safety: safe
+    action: remove
+
+  - id: cache.slack
+    name: Slack cache
+    description: Slack's web caches, which can grow to several GB. Slack downloads messages and files again as needed; quit Slack first.
+    path:
+      - ~/Library/Application Support/Slack/Cache
+      - ~/Library/Application Support/Slack/Code Cache
+      - ~/Library/Application Support/Slack/GPUCache
+      - ~/Library/Application Support/Slack/Service Worker/CacheStorage
+      - ~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack/Cache
+      - ~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack/Code Cache
+      - ~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack/GPUCache
+      - ~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack/Service Worker/CacheStorage
+    recreatedBy: Slack
+    safety: safe
+    action: remove
+
+  - id: cache.discord
+    name: Discord cache
+    description: Discord's web caches of images, videos and code. Downloaded again as needed; quit Discord first.
+    path:
+      - ~/Library/Application Support/discord/Cache
+      - ~/Library/Application Support/discord/Code Cache
+      - ~/Library/Application Support/discord/GPUCache
+    recreatedBy: Discord
+    safety: safe
+    action: remove
+
+  - id: cache.adobe-media
+    name: Adobe media cache
+    description: Conformed audio and indexes Premiere Pro, After Effects and Audition build for imported media. Rebuilt when you open projects, which can take a while for large ones.
+    category: cache.media
+    path:
+      - ~/Library/Application Support/Adobe/Common/Media Cache Files
+      - ~/Library/Application Support/Adobe/Common/Media Cache
+    recreatedBy: Adobe Premiere Pro / After Effects / Audition
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove

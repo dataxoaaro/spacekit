@@ -1,0 +1,52 @@
+# Hugging Face caches (huggingface_hub, transformers, diffusers, datasets, MLX models from mlx-community).
+# Schema: docs/RULES.md
+#
+# The rules target the folders inside ~/.cache/huggingface rather than the folder itself:
+# it also holds your access token (protected in protected/credentials.yaml) and config such
+# as accelerate's default_config.yaml.
+group: Hugging Face
+category: ai.models
+
+rules:
+  - id: ai.huggingface.hub
+    name: Hugging Face models
+    description: Models and datasets downloaded from the Hub, one folder per repository. Downloaded again the next time code loads them; remove single models from the AI view or with huggingface-cli delete-cache.
+    path: ~/.cache/huggingface/hub
+    recreatedBy: from_pretrained / snapshot_download / hf download
+    safety: review
+    ai:
+      tool: Hugging Face
+      layout: huggingface
+    docs: https://huggingface.co/docs/huggingface_hub/guides/manage-cache
+
+  - id: ai.huggingface.datasets
+    name: Hugging Face datasets cache
+    description: Arrow files the datasets library builds when loading and processing datasets. Rebuilt, and possibly downloaded again, the next time you load them.
+    category: ai.cache
+    path: ~/.cache/huggingface/datasets
+    granularity: children
+    recreatedBy: datasets.load_dataset
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+    ai:
+      tool: Hugging Face
+      layout: cache
+
+  - id: ai.huggingface.xet
+    name: Hugging Face Xet cache
+    description: Chunk cache used by Xet-backed downloads. Models already in the hub cache are unaffected; chunks are fetched again for future downloads.
+    category: ai.cache
+    path: ~/.cache/huggingface/xet
+    recreatedBy: huggingface_hub downloads
+    safety:
+      level: safe
+      trash: false
+    action: remove
+    ai:
+      tool: Hugging Face
+      layout: cache
+    docs: https://huggingface.co/docs/huggingface_hub/guides/manage-cache

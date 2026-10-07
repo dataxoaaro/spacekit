@@ -1,0 +1,130 @@
+# Xcode and Apple platform development.
+# Schema: docs/RULES.md
+group: Xcode
+category: developer.build
+
+rules:
+  - id: xcode.derived-data
+    name: Xcode DerivedData
+    description: Build products, intermediates and indexes. Xcode rebuilds them the next time you build.
+    category: developer.build
+    path: ~/Library/Developer/Xcode/DerivedData
+    granularity: children            # one item per project, so recently used projects can be kept
+    recreatedBy: Xcode
+    safety:
+      level: safe
+      trash: false                   # pure build output; deleting directly frees space immediately
+    policy:
+      type: size
+      threshold: 30GB
+      keepRecent: 14d
+      schedule: weekly
+      mode: automatic
+    exclusions:
+      - active_projects
+    action:
+      remove: true
+    docs: https://developer.apple.com/documentation/xcode/build-system
+
+  - id: xcode.archives
+    name: Xcode Archives
+    description: Archived app builds. You need them to symbolicate crash reports from builds you shipped.
+    path: ~/Library/Developer/Xcode/Archives
+    granularity: children
+    recreatedBy: Re-archiving the exact source (often impossible)
+    safety: review
+    policy:
+      olderThan: 1y
+      mode: suggest
+    action:
+      remove: true
+
+  - id: xcode.ios-device-support
+    name: iOS DeviceSupport
+    description: Debug symbols copied from each iOS version you connected a device with. Old versions are rarely needed.
+    path:
+      - ~/Library/Developer/Xcode/iOS DeviceSupport
+      - ~/Library/Developer/Xcode/watchOS DeviceSupport
+      - ~/Library/Developer/Xcode/tvOS DeviceSupport
+      - ~/Library/Developer/Xcode/visionOS DeviceSupport
+      - ~/Library/Developer/Xcode/macOS DeviceSupport
+    granularity: children
+    recreatedBy: Xcode, the next time that device connects
+    safety: safe
+    policy:
+      olderThan: 90d
+      mode: suggest
+    action:
+      remove: true
+
+  - id: xcode.simulator-devices
+    name: Simulator devices
+    description: Simulator devices and their installed apps and data. Unavailable devices (for runtimes you removed) are pure waste.
+    path: ~/Library/Developer/CoreSimulator/Devices
+    recreatedBy: Xcode → Window → Devices and Simulators
+    safety: review
+    action:
+      command: [xcrun, simctl, delete, unavailable]
+
+  - id: xcode.simulator-caches
+    name: Simulator caches
+    description: Dyld and runtime caches for simulators. Rebuilt automatically on next simulator boot.
+    path: ~/Library/Developer/CoreSimulator/Caches
+    granularity: children
+    recreatedBy: CoreSimulator
+    safety: safe
+    action:
+      remove: true
+
+  - id: xcode.simulator-runtimes
+    name: Simulator runtimes
+    description: Downloaded simulator runtimes (several GB each). Remove the platforms you don't target.
+    path:
+      - /Library/Developer/CoreSimulator/Images
+      - /Library/Developer/CoreSimulator/Cryptex
+    recreatedBy: Xcode → Settings → Components
+    safety: review
+    action:
+      command: [xcrun, simctl, runtime, delete, unavailable]
+
+  - id: xcode.previews
+    name: SwiftUI Previews
+    description: Simulator devices used only by SwiftUI previews.
+    path: ~/Library/Developer/Xcode/UserData/Previews
+    recreatedBy: Xcode previews
+    safety: safe
+    action:
+      remove: true
+
+  - id: xcode.caches
+    name: Xcode caches
+    description: Xcode's own caches, including package resolution and documentation.
+    path:
+      - ~/Library/Caches/com.apple.dt.Xcode
+      - ~/Library/Developer/Xcode/DocumentationCache
+    granularity: children
+    recreatedBy: Xcode
+    safety: safe
+    action:
+      remove: true
+
+  - id: xcode.device-logs
+    name: Device logs
+    description: Crash and diagnostic logs pulled from connected devices.
+    path: ~/Library/Developer/Xcode/DeviceLogs
+    granularity: children
+    safety: review
+    policy:
+      olderThan: 90d
+    action:
+      remove: true
+
+  - id: xcode.products
+    name: Xcode Products
+    description: Build products from archive and export operations.
+    path: ~/Library/Developer/Xcode/Products
+    granularity: children
+    recreatedBy: Xcode
+    safety: safe
+    action:
+      remove: true

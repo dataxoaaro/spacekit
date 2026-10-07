@@ -1,0 +1,53 @@
+# Local database data directories. All protected: SpaceKit shows them and never removes them.
+# Schema: docs/RULES.md
+#
+# Paths cover Apple silicon (/opt/homebrew) and Intel (/usr/local) Homebrew prefixes.
+group: Databases
+category: developer.databases
+
+rules:
+  - id: db.postgres-app
+    name: Postgres.app data
+    description: Database clusters created by Postgres.app, one folder per PostgreSQL major version. Drop databases with SQL or remove a server in Postgres.app instead.
+    path: ~/Library/Application Support/Postgres
+    safety: protected
+
+  - id: db.homebrew-postgres
+    name: PostgreSQL data (Homebrew)
+    description: Data directories of PostgreSQL installed with Homebrew. Drop databases with SQL; pg_upgrade handles moving between major versions.
+    path:
+      - /opt/homebrew/var/postgresql@*
+      - /opt/homebrew/var/postgres
+      - /usr/local/var/postgresql@*
+      - /usr/local/var/postgres
+    safety: protected
+
+  - id: db.homebrew-mysql
+    name: MySQL / MariaDB data (Homebrew)
+    description: The data directory of MySQL or MariaDB installed with Homebrew. Drop databases with SQL instead.
+    path:
+      - /opt/homebrew/var/mysql
+      - /usr/local/var/mysql
+    safety: protected
+
+  - id: db.homebrew-redis
+    name: Redis data (Homebrew)
+    description: Redis snapshots and append-only files for Redis installed with Homebrew. Clear keys with redis-cli instead.
+    path:
+      - /opt/homebrew/var/db/redis
+      - /usr/local/var/db/redis
+    safety: protected
+
+  - id: db.homebrew-mongodb
+    name: MongoDB data (Homebrew)
+    description: The data directory of MongoDB installed with Homebrew. Drop databases with mongosh instead.
+    path:
+      - /opt/homebrew/var/mongodb
+      - /usr/local/var/mongodb
+    safety: protected
+
+  - id: db.dbngin
+    name: DBngin data
+    description: Data directories of database servers managed by DBngin. Remove a server in DBngin instead.
+    path: /Users/Shared/DBngin
+    safety: protected

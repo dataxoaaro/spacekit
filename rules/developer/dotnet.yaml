@@ -1,0 +1,45 @@
+# .NET: NuGet caches and project intermediate output.
+# Schema: docs/RULES.md
+#
+# bin folders are not matched: nothing inside them reliably identifies a .NET project, and `sibling`
+# can't match *.csproj. obj folders are matched by the project.assets.json NuGet restore writes.
+group: .NET
+category: developer.cache
+
+rules:
+  - id: dotnet.obj
+    name: .NET obj folders
+    description: Intermediate build output and NuGet restore files of .NET projects. Recreated by dotnet restore or dotnet build.
+    category: developer.build
+    match:
+      names: [obj]
+      contains: [project.assets.json]
+    recreatedBy: dotnet restore / dotnet build
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  - id: dotnet.nuget-packages
+    name: NuGet global packages
+    description: Every package version restored by NuGet for all projects. Downloaded again on the next restore.
+    path: ~/.nuget/packages
+    recreatedBy: dotnet restore
+    safety: review
+    action: remove
+    docs: https://learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders
+
+  - id: dotnet.nuget-http-cache
+    name: NuGet HTTP cache
+    description: Package metadata and downloads NuGet caches between restores.
+    path:
+      - ~/.local/share/NuGet/http-cache
+      - ~/.local/share/NuGet/v3-cache
+    recreatedBy: dotnet restore
+    safety: safe
+    action: remove
+    docs: https://learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders

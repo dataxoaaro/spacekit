@@ -1,0 +1,90 @@
+# Apple: device backups and firmware, Mail and Messages, Photos, macOS installers and the Trash.
+# Schema: docs/RULES.md
+#
+# Many of these locations need Full Disk Access to be measured.
+group: Apple
+category: system.apple
+
+rules:
+  - id: apple.ios-backups
+    name: iPhone and iPad backups
+    description: Local backups of your iOS and iPadOS devices, one folder per device. Old devices' backups are often forgotten; a removed backup can't be restored.
+    category: personal.backups
+    path: ~/Library/Application Support/MobileSync/Backup
+    granularity: children
+    recreatedBy: Finder → your device → Back Up Now (current data only)
+    safety: review
+    policy:
+      type: age
+      olderThan: 180d
+      mode: suggest
+    action: remove
+
+  - id: apple.ios-software-updates
+    name: iPhone and iPad software updates
+    description: Firmware files Finder downloaded to update or restore devices. Downloaded again when needed.
+    category: system.updates
+    path:
+      - ~/Library/iTunes/iPhone Software Updates
+      - ~/Library/iTunes/iPad Software Updates
+    recreatedBy: Finder, when updating a device
+    safety: safe
+    action: remove
+
+  - id: apple.mail-downloads
+    name: Mail attachment copies
+    description: Copies of attachments you opened from Mail. The originals stay in your messages.
+    category: cache.mail
+    path: ~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads
+    recreatedBy: Mail, when you open an attachment
+    safety: safe
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  - id: apple.mail-data
+    name: Mail mailboxes
+    description: Your Mail messages and attachments. Delete messages in Mail, or have Mail keep fewer attachments, instead.
+    category: personal.mail
+    path: ~/Library/Mail
+    safety: protected
+
+  - id: apple.messages-attachments
+    name: Messages attachments
+    description: Photos, videos and files from your conversations. Remove them in Messages (Settings → General → Keep messages, or System Settings → General → Storage).
+    category: personal.messages
+    path: ~/Library/Messages/Attachments
+    safety: protected
+
+  - id: apple.photos-library
+    name: Photos libraries
+    description: Your Photos libraries. Manage them only in Photos; editing files inside a library can corrupt it.
+    category: personal.photos
+    path: ~/Pictures/*.photoslibrary
+    safety: protected
+
+  - id: apple.macos-installers
+    name: macOS installers
+    description: Full macOS installer apps, 12 GB or more each. Only needed to install or reinstall that macOS version or make a bootable installer.
+    category: system.installers
+    path: /Applications/Install macOS*.app
+    recreatedBy: App Store or softwareupdate --fetch-full-installer
+    safety: review
+    action: remove
+
+  - id: apple.trash
+    name: Trash
+    description: Items in your Trash. Removing them here deletes them permanently.
+    category: system.trash
+    path: ~/.Trash
+    granularity: children
+    safety:
+      level: review
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove

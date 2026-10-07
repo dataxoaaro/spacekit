@@ -1,0 +1,87 @@
+# Rust: Cargo caches, build output and rustup toolchains.
+# Schema: docs/RULES.md
+group: Rust
+category: developer.cache
+
+rules:
+  - id: cargo.target
+    name: Cargo target folders
+    description: Build output of Rust projects and workspaces. Rebuilt by the next cargo build, which can take a while for large dependency trees.
+    category: developer.build
+    match:
+      names: [target]
+      sibling: [Cargo.toml]
+    recreatedBy: cargo build
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: weekly
+      mode: suggest
+    action: remove
+
+  - id: cargo.registry
+    name: Cargo registry cache
+    description: Downloaded crates, their extracted sources and the registry index. Fetched again on the next build.
+    path:
+      - ~/.cargo/registry/cache
+      - ~/.cargo/registry/src
+      - ~/.cargo/registry/index
+    recreatedBy: cargo build / cargo fetch
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: size
+      threshold: 10GB
+      schedule: monthly
+      mode: suggest
+    action: remove
+    docs: https://doc.rust-lang.org/cargo/guide/cargo-home.html
+
+  - id: cargo.git
+    name: Cargo git dependencies
+    description: Clones and checkouts of git dependencies. Cloned again on the next build that needs them.
+    path:
+      - ~/.cargo/git/checkouts
+      - ~/.cargo/git/db
+    recreatedBy: cargo build / cargo fetch
+    safety:
+      level: safe
+      trash: false
+    action: remove
+    docs: https://doc.rust-lang.org/cargo/guide/cargo-home.html
+
+  - id: rust.sccache
+    name: sccache local cache
+    description: Compiler outputs cached by sccache. Builds are slower until it refills.
+    path: ~/Library/Caches/Mozilla.sccache
+    recreatedBy: sccache
+    safety:
+      level: safe
+      trash: false
+    action: remove
+
+  - id: rustup.toolchains
+    name: Rust toolchains
+    description: Toolchains installed by rustup (stable, beta, nightlies, pinned versions). Dated nightlies and old pinned versions pile up.
+    category: developer.toolchains
+    path: ~/.rustup/toolchains
+    granularity: children
+    recreatedBy: rustup toolchain install
+    safety: review
+    action:
+      itemCommand: [rustup, toolchain, uninstall, "{name}"]
+    docs: https://rust-lang.github.io/rustup/concepts/toolchains.html
+
+  - id: rustup.downloads
+    name: rustup downloads
+    description: Partial and leftover downloads from rustup installs and updates.
+    path:
+      - ~/.rustup/downloads
+      - ~/.rustup/tmp
+    recreatedBy: rustup
+    safety: safe
+    action: remove

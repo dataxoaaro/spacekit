@@ -1,0 +1,32 @@
+# An example user rule. Copy to ~/.config/spacekit/rules/ and adjust.
+# Schema: docs/RULES.md · Check: spacekit rules validate ~/.config/spacekit/rules/my-tool.yaml
+group: My tools
+category: developer.cache
+
+rules:
+  - id: mytool.cache
+    name: MyTool cache
+    description: Downloads MyTool caches between runs. It fetches them again when needed.
+    path: ~/Library/Caches/com.example.mytool
+    granularity: children
+    recreatedBy: MyTool
+    safety:
+      level: safe
+      trash: true
+    policy:
+      olderThan: 30d
+      schedule: weekly
+      mode: suggest
+    action: remove
+
+  - id: mytool.build
+    name: MyTool build folders
+    description: Build output next to every mytool.toml project. Rebuilt by `mytool build`.
+    category: developer.build
+    match:
+      names: [.mytool-build]
+      sibling: [mytool.toml]
+    recreatedBy: mytool build
+    safety: safe
+    exclusions: [active_projects]
+    action: remove

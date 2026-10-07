@@ -1,0 +1,19 @@
+# LM Studio.
+# Schema: docs/RULES.md
+#
+# No cleanup action: models are removed one at a time from the AI view or LM Studio's My Models.
+group: LM Studio
+category: ai.models
+
+rules:
+  - id: ai.lmstudio.models
+    name: LM Studio models
+    description: Models downloaded in LM Studio, organised as publisher/model. ~/.cache/lm-studio/models is the location used by older versions.
+    path:
+      - ~/.lmstudio/models
+      - ~/.cache/lm-studio/models
+    recreatedBy: LM Studio → Discover
+    safety: review
+    ai:
+      tool: LM Studio
+      layout: lmstudio

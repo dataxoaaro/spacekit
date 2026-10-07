@@ -1,0 +1,352 @@
+import Foundation
+
+/// How risky it is to remove what a rule matches.
+public enum SafetyLevel: String, Codable, Sendable, CaseIterable, Comparable {
+    /// 🟢 Regenerable. The owning tool recreates it on demand (build output, package caches).
+    case safe
+    /// 🟡 Review. Removable, but costs time, bandwidth or something you might want (archives, models, simulators).
+    case review
+    /// 🔴 Don't touch automatically. Identified so it can be shown and protected, never cleaned by SpaceKit.
+    case protected
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self).lowercased()
+        guard let level = SafetyLevel(alias: raw) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unknown safety level '\(raw)'. Use safe, review or protected."))
+        }
+        self = level
+    }
+
+    public init?(alias: String) {
+        switch alias.lowercased() {
+        case "safe", "regenerable", "low", "green": self = .safe
+        case "review", "caution", "medium", "yellow": self = .review
+        case "protected", "never", "keep", "high", "red", "dont-touch": self = .protected
+        default: return nil
+        }
+    }
+
+    private var rank: Int { self == .safe ? 0 : self == .review ? 1 : 2 }
+    public static func < (lhs: SafetyLevel, rhs: SafetyLevel) -> Bool { lhs.rank < rhs.rank }
+
+    public var title: String {
+        switch self {
+        case .safe: return "Regenerable"
+        case .review: return "Review"
+        case .protected: return "Don't touch"
+        }
+    }
+
+    public var risk: String {
+        switch self {
+        case .safe: return "Low"
+        case .review: return "Medium"
+        case .protected: return "High"
+        }
+    }
+
+    public var emoji: String {
+        switch self {
+        case .safe: return "🟢"
+        case .review: return "🟡"
+        case .protected: return "🔴"
+        }
+    }
+}
+
+/// Whether a rule's matched location is one item or a set of items.
+public enum Granularity: String, Codable, Sendable {
+    /// The matched directory is one item (`node_modules`, a single cache).
+    case whole
+    /// Each entry inside the matched directory is an item (`DerivedData/<project>`, `Archives/<date>`),
+    /// so policies like "keep projects used within 14 days" can apply per entry.
+    case children
+}
+
+/// A storage rule: knowledge about one kind of data on a Mac.
+///
+/// Rules live in YAML files (see `docs/RULES.md` and the `rules/` directory). The schema is
+/// deliberately forgiving: `path` may be a string or a list, `safety` may be a level or an object,
+/// and `action` may be `trash`, `delete` or an object.
+public struct Rule: Codable, Sendable, Identifiable, Hashable {
+    public var id: String
+    public var name: String
+    /// Display group, e.g. `Xcode`, `JavaScript`, `Ollama`. Defaults to the file's `group`.
+    public var group: String
+    /// Dotted category, e.g. `developer.build`, `developer.cache`, `ai.models`, `system.cache`.
+    public var category: String
+    public var description: String?
+    /// Tool that recreates the data, shown as "Recreated by".
+    public var recreatedBy: String?
+    /// Fixed locations. `~` and globs (`*`) are allowed.
+    public var paths: [String]
+    /// Name-based matching anywhere under search roots (for `node_modules`, `target`, `__pycache__`, …).
+    public var match: PatternSpec?
+    public var granularity: Granularity
+    public var safety: SafetySpec
+    /// Suggested automation defaults.
+    public var policy: PolicySpec?
+    /// Globs to leave alone, plus tokens: `active_projects` (respect the policy's `keepRecent`).
+    public var exclusions: [String]
+    public var action: ActionSpec
+    public var ai: AISpec?
+    public var docs: String?
+    public var tags: [String]
+    /// File the rule was loaded from (not part of the schema).
+    public var source: String?
+
+    public static func == (lhs: Rule, rhs: Rule) -> Bool { lhs.id == rhs.id }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    public var isPattern: Bool { match != nil }
+    public var topCategory: String { String(category.split(separator: ".").first ?? "other") }
+
+    public init(
+        id: String, name: String, group: String = "", category: String = "other",
+        description: String? = nil, recreatedBy: String? = nil, paths: [String] = [],
+        match: PatternSpec? = nil, granularity: Granularity = .whole, safety: SafetySpec = SafetySpec(level: .review),
+        policy: PolicySpec? = nil, exclusions: [String] = [], action: ActionSpec = ActionSpec(),
+        ai: AISpec? = nil, docs: String? = nil, tags: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.group = group
+        self.category = category
+        self.description = description
+        self.recreatedBy = recreatedBy
+        self.paths = paths
+        self.match = match
+        self.granularity = granularity
+        self.safety = safety
+        self.policy = policy
+        self.exclusions = exclusions
+        self.action = action
+        self.ai = ai
+        self.docs = docs
+        self.tags = tags
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, group, category, description, recreatedBy, path, paths, match, granularity
+        case safety, policy, exclusions, action, ai, docs, tags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? Rule.slug(name)
+        group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
+        category = try c.decodeIfPresent(String.self, forKey: .category) ?? ""
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        recreatedBy = try c.decodeIfPresent(String.self, forKey: .recreatedBy)
+        let single = try? c.decodeIfPresent(String.self, forKey: .path)
+        let pathList = try? c.decodeIfPresent([String].self, forKey: .path)
+        let pathsList = try c.decodeIfPresent([String].self, forKey: .paths)
+        paths = pathList ?? pathsList ?? single.map { [$0] } ?? []
+        match = try c.decodeIfPresent(PatternSpec.self, forKey: .match)
+        granularity = try c.decodeIfPresent(Granularity.self, forKey: .granularity) ?? .whole
+        safety = try c.decodeIfPresent(SafetySpec.self, forKey: .safety) ?? SafetySpec(level: .review)
+        policy = try c.decodeIfPresent(PolicySpec.self, forKey: .policy)
+        exclusions = try c.decodeIfPresent([String].self, forKey: .exclusions) ?? []
+        action = try c.decodeIfPresent(ActionSpec.self, forKey: .action) ?? ActionSpec()
+        ai = try c.decodeIfPresent(AISpec.self, forKey: .ai)
+        docs = try c.decodeIfPresent(String.self, forKey: .docs)
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(group, forKey: .group)
+        try c.encode(category, forKey: .category)
+        try c.encodeIfPresent(description, forKey: .description)
+        try c.encodeIfPresent(recreatedBy, forKey: .recreatedBy)
+        if !paths.isEmpty { try c.encode(paths, forKey: .path) }
+        try c.encodeIfPresent(match, forKey: .match)
+        try c.encode(granularity, forKey: .granularity)
+        try c.encode(safety, forKey: .safety)
+        try c.encodeIfPresent(policy, forKey: .policy)
+        if !exclusions.isEmpty { try c.encode(exclusions, forKey: .exclusions) }
+        try c.encode(action, forKey: .action)
+        try c.encodeIfPresent(ai, forKey: .ai)
+        try c.encodeIfPresent(docs, forKey: .docs)
+        if !tags.isEmpty { try c.encode(tags, forKey: .tags) }
+    }
+
+    public static func slug(_ text: String) -> String {
+        let lowered = text.lowercased()
+        var result = ""
+        var lastWasDash = false
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if !lastWasDash && !result.isEmpty {
+                result.append("-")
+                lastWasDash = true
+            }
+        }
+        return result.hasSuffix("-") ? String(result.dropLast()) : result
+    }
+}
+
+/// Name-based matching, e.g. every `node_modules` that sits next to a `package.json`.
+public struct PatternSpec: Codable, Sendable, Hashable {
+    /// Directory names to match.
+    public var names: [String]
+    /// At least one of these must exist next to the match (in its parent directory).
+    public var sibling: [String]
+    /// At least one of these must exist inside the match.
+    public var contains: [String]
+    /// Where to search. Defaults to the configured developer roots (normally `~`).
+    public var roots: [String]?
+    /// Globs that are never searched (in addition to SpaceKit's defaults such as `~/Library`).
+    public var exclude: [String]
+
+    public init(names: [String], sibling: [String] = [], contains: [String] = [], roots: [String]? = nil, exclude: [String] = []) {
+        self.names = names
+        self.sibling = sibling
+        self.contains = contains
+        self.roots = roots
+        self.exclude = exclude
+    }
+
+    enum CodingKeys: String, CodingKey { case names, name, sibling, contains, roots, exclude }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let many = try c.decodeIfPresent([String].self, forKey: .names)
+        let one = try c.decodeIfPresent(String.self, forKey: .name)
+        names = many ?? one.map { [$0] } ?? []
+        sibling = try PatternSpec.stringOrList(c, .sibling)
+        contains = try PatternSpec.stringOrList(c, .contains)
+        roots = try c.decodeIfPresent([String].self, forKey: .roots)
+        exclude = try PatternSpec.stringOrList(c, .exclude)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(names, forKey: .names)
+        if !sibling.isEmpty { try c.encode(sibling, forKey: .sibling) }
+        if !contains.isEmpty { try c.encode(contains, forKey: .contains) }
+        try c.encodeIfPresent(roots, forKey: .roots)
+        if !exclude.isEmpty { try c.encode(exclude, forKey: .exclude) }
+    }
+
+    private static func stringOrList(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) throws -> [String] {
+        if let list = try? c.decodeIfPresent([String].self, forKey: key) { return list }
+        if let one = try c.decodeIfPresent(String.self, forKey: key) { return [one] }
+        return []
+    }
+}
+
+public struct SafetySpec: Codable, Sendable, Hashable {
+    public var level: SafetyLevel
+    /// Move to the Trash instead of deleting permanently.
+    public var trash: Bool
+
+    public init(level: SafetyLevel, trash: Bool = true) {
+        self.level = level
+        self.trash = trash
+    }
+
+    enum CodingKeys: String, CodingKey { case level, trash }
+
+    public init(from decoder: Decoder) throws {
+        if let level = try? decoder.singleValueContainer().decode(SafetyLevel.self) {
+            self = SafetySpec(level: level)
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        level = try c.decode(SafetyLevel.self, forKey: .level)
+        trash = try c.decodeIfPresent(Bool.self, forKey: .trash) ?? true
+    }
+}
+
+/// Suggested automation for a rule. Jobs created from the rule start with these values.
+public struct PolicySpec: Codable, Sendable, Hashable {
+    /// `size`, `age` or `schedule`; informational, the fields below are what count.
+    public var type: String?
+    /// Clean when the total grows beyond this.
+    public var threshold: ByteCount?
+    /// Only clean items untouched for at least this long.
+    public var olderThan: Age?
+    /// Never clean items used within this window (`active_projects`).
+    public var keepRecent: Age?
+    /// `daily`, `weekly`, `monthly`.
+    public var schedule: String?
+    /// `observe`, `suggest` or `automatic`.
+    public var mode: String?
+
+    public init(
+        type: String? = nil, threshold: ByteCount? = nil, olderThan: Age? = nil, keepRecent: Age? = nil, schedule: String? = nil,
+        mode: String? = nil
+    ) {
+        self.type = type
+        self.threshold = threshold
+        self.olderThan = olderThan
+        self.keepRecent = keepRecent
+        self.schedule = schedule
+        self.mode = mode
+    }
+}
+
+/// What cleaning means for a rule.
+public struct ActionSpec: Codable, Sendable, Hashable {
+    /// Remove the matched items (to the Trash unless `safety.trash` is false).
+    public var remove: Bool
+    /// Run this instead of removing files, e.g. `[docker, builder, prune, --force]`. No shell is involved.
+    public var command: [String]?
+    /// Run once per item; `{name}` and `{path}` are substituted (e.g. `[ollama, rm, "{name}"]`).
+    public var itemCommand: [String]?
+    /// Human instructions when cleanup must happen in another app.
+    public var manual: String?
+
+    public init(remove: Bool = false, command: [String]? = nil, itemCommand: [String]? = nil, manual: String? = nil) {
+        self.remove = remove
+        self.command = command
+        self.itemCommand = itemCommand
+        self.manual = manual
+    }
+
+    enum CodingKeys: String, CodingKey { case remove, command, itemCommand, manual }
+
+    public init(from decoder: Decoder) throws {
+        if let word = try? decoder.singleValueContainer().decode(String.self) {
+            switch word.lowercased() {
+            case "remove", "trash", "delete", "clean": self = ActionSpec(remove: true)
+            case "none", "manual", "report": self = ActionSpec()
+            default:
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Unknown action '\(word)'. Use remove, none, or an object with command/manual."))
+            }
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        command = try c.decodeIfPresent([String].self, forKey: .command)
+        itemCommand = try c.decodeIfPresent([String].self, forKey: .itemCommand)
+        manual = try c.decodeIfPresent(String.self, forKey: .manual)
+        remove = try c.decodeIfPresent(Bool.self, forKey: .remove) ?? false
+    }
+
+    public var isCleanable: Bool { remove || command != nil || itemCommand != nil }
+}
+
+/// Extra knowledge for the AI Development view.
+public struct AISpec: Codable, Sendable, Hashable {
+    /// Tool name shown in the AI view (`Ollama`, `Hugging Face`, …).
+    public var tool: String
+    /// How models are laid out on disk: `ollama`, `huggingface`, `lmstudio`, `children` (each entry is a model) or `cache`.
+    public var layout: String
+
+    public init(tool: String, layout: String) {
+        self.tool = tool
+        self.layout = layout
+    }
+}

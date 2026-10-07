@@ -1,0 +1,347 @@
+import Foundation
+
+/// One removable unit found by a rule.
+public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
+    public enum Kind: String, Codable, Sendable {
+        case directory
+        case file
+        /// All plain files directly inside `path` (not its subdirectories).
+        case looseFiles
+    }
+
+    public var path: String
+    public var kind: Kind
+    public var name: String
+    public var size: UInt64
+    public var fileCount: UInt64
+    public var lastModified: Date?
+    /// Best estimate of when this was last used. For project artifacts (`node_modules`, `target`) this is the
+    /// project's activity, because package managers reset file dates inside them.
+    public var lastUsed: Date?
+    /// The item itself is a git working copy.
+    public var isRepository: Bool
+    /// Somewhere inside there's a git working copy.
+    public var containsRepository: Bool
+    /// For pattern matches, the enclosing project folder.
+    public var project: String?
+
+    public var id: String { kind == .looseFiles ? path + "/*" : path }
+
+    public init(
+        path: String, kind: Kind, name: String, size: UInt64, fileCount: UInt64 = 0, lastModified: Date? = nil,
+        lastUsed: Date? = nil, isRepository: Bool = false, containsRepository: Bool = false, project: String? = nil
+    ) {
+        self.path = path
+        self.kind = kind
+        self.name = name
+        self.size = size
+        self.fileCount = fileCount
+        self.lastModified = lastModified
+        self.lastUsed = lastUsed
+        self.isRepository = isRepository
+        self.containsRepository = containsRepository
+        self.project = project
+    }
+
+    public var displayName: String {
+        if let project { return PathUtil.lastComponent(project) + "/" + name }
+        return name
+    }
+
+    /// Days since last use, if known.
+    public func idleDays(now: Date = Date()) -> Int? {
+        lastUsed.map { max(0, Int(now.timeIntervalSince($0) / 86_400)) }
+    }
+}
+
+/// Everything one rule matched.
+public struct Finding: Sendable, Identifiable {
+    public let rule: Rule
+    public var items: [FindingItem]
+
+    public init(rule: Rule, items: [FindingItem]) {
+        self.rule = rule
+        self.items = items.sorted { $0.size > $1.size }
+    }
+
+    public var id: String { rule.id }
+    public var size: UInt64 { items.reduce(0) { $0 &+ $1.size } }
+    public var lastUsed: Date? { items.compactMap(\.lastUsed).max() }
+    public var safety: SafetyLevel { rule.safety.level }
+    public var isCleanable: Bool { rule.action.isCleanable && rule.safety.level != .protected }
+
+    /// Items a cleanup with these conditions would touch.
+    public func eligibleItems(olderThan: Age? = nil, keepRecent: Age? = nil, now: Date = Date()) -> [FindingItem] {
+        let keep =
+            keepRecent ?? (rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) ? rule.policy?.keepRecent ?? .days(14) : nil)
+        return items.filter { item in
+            guard let used = item.lastUsed else { return olderThan == nil && keep == nil }
+            let idle = now.timeIntervalSince(used)
+            if let olderThan, idle < olderThan.seconds { return false }
+            if let keep, idle < keep.seconds { return false }
+            return true
+        }
+    }
+}
+
+/// Matches rules against a scan tree.
+public struct RuleEngine: Sendable {
+    public var rules: [Rule]
+    /// Default search roots for pattern rules.
+    public var devRoots: [String]
+
+    /// Never searched by pattern rules: tool homes and app data where a `node_modules` or `build`
+    /// folder belongs to an installed tool rather than to one of your projects.
+    public static let defaultPatternExcludes: [String] = [
+        "~/Library", "~/.Trash", "~/Applications", "~/.cache", "~/.local", "~/.config",
+        "~/.npm", "~/.pnpm-store", "~/.nvm", "~/.volta", "~/.fnm", "~/.bun", "~/.deno", "~/.yarn",
+        "~/.cargo", "~/.rustup", "~/go", "~/.gradle", "~/.m2", "~/.sdkman", "~/.android",
+        "~/.vscode", "~/.vscode-insiders", "~/.cursor", "~/.windsurf", "~/.zed", "~/.antigravity",
+        "~/.pyenv", "~/.rbenv", "~/.gem", "~/.docker", "~/.orbstack", "~/.ollama", "~/.lmstudio",
+        "~/miniconda3", "~/anaconda3", "~/miniforge3", "~/.conda", "~/.mamba", "~/.pub-cache", "~/fvm",
+        "~/.claude", "~/.codex", "~/.gemini", "~/.Spotlight-V100", "~/.cocoapods", "~/jan",
+    ]
+
+    /// Bundles are opaque: never search inside them.
+    static let bundleSuffixes = [".app", ".photoslibrary", ".bundle", ".framework", ".xcarchive", ".musiclibrary", ".tvlibrary"]
+
+    public init(rules: [Rule], devRoots: [String] = ["~"]) {
+        self.rules = rules
+        self.devRoots = devRoots
+    }
+
+    static func isActiveProjectsToken(_ token: String) -> Bool {
+        ["active_projects", "recently_used", "active-projects"].contains(token.lowercased())
+    }
+
+    /// Paths a scan must cover for these rules to be evaluated: fixed locations that exist, plus pattern roots.
+    public func requiredRoots() -> [String] {
+        var roots: [String] = []
+        for rule in rules {
+            for pattern in rule.paths {
+                // A rule may point at a single file; scan the folder that holds it.
+                roots += PathUtil.glob(pattern).map { path in
+                    var isDirectory: ObjCBool = false
+                    FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                    return isDirectory.boolValue ? path : PathUtil.parent(path)
+                }
+            }
+            if let match = rule.match { roots += (match.roots ?? devRoots).map { PathUtil.expand($0) } }
+        }
+        let unique = Array(Set(roots.filter { FileManager.default.fileExists(atPath: $0) })).sorted()
+        return unique.filter { candidate in !unique.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
+    }
+
+    // MARK: Evaluation
+
+    public func evaluate(_ tree: ScanTree) -> [Finding] {
+        var claims: [Claim] = []
+        for (index, rule) in rules.enumerated() where !rule.paths.isEmpty {
+            for pattern in rule.paths {
+                let expandedPattern = PathUtil.expand(pattern)
+                for path in PathUtil.glob(pattern) where tree.covers(path) {
+                    let specificity = PathUtil.components(expandedPattern).count * 2 + (rule.granularity == .children ? 1 : 0)
+                    for item in items(at: path, rule: rule, tree: tree) where !isExcluded(item, by: rule) {
+                        claims.append(Claim(rule: index, item: item, specificity: specificity))
+                    }
+                }
+            }
+        }
+        claims += patternClaims(tree)
+        claims = resolveOverlaps(claims, tree: tree)
+
+        var grouped: [Int: [FindingItem]] = [:]
+        for claim in claims { grouped[claim.rule, default: []].append(claim.item) }
+        return grouped.keys.sorted().compactMap { index in
+            let items = grouped[index] ?? []
+            return items.isEmpty ? nil : Finding(rule: rules[index], items: items)
+        }
+        .sorted { $0.size > $1.size }
+    }
+
+    private struct Claim {
+        var rule: Int
+        var item: FindingItem
+        var specificity: Int
+    }
+
+    private func items(at path: String, rule: Rule, tree: ScanTree) -> [FindingItem] {
+        if let node = tree.node(at: path) {
+            guard !node.isSkipped else { return [] }
+            switch rule.granularity {
+            case .whole: return node.size > 0 ? [Self.item(for: node, markers: tree.markers)] : []
+            case .children: return Self.childItems(of: node, markers: tree.markers)
+            }
+        }
+        // A single file. Small files aren't kept in the tree, so fall back to the file system.
+        let parent = PathUtil.parent(path)
+        let name = PathUtil.lastComponent(path)
+        guard let directory = tree.node(at: parent), !directory.isSkipped else { return [] }
+        if let leaf = directory.files.first(where: { $0.name == name }) {
+            let date = Date(timeIntervalSince1970: TimeInterval(leaf.modified))
+            return [FindingItem(path: path, kind: .file, name: name, size: leaf.size, fileCount: 1, lastModified: date, lastUsed: date)]
+        }
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { return [] }
+        let date = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
+        return [
+            FindingItem(
+                path: path, kind: .file, name: name, size: UInt64(max(0, st.st_blocks)) * 512, fileCount: 1,
+                lastModified: date, lastUsed: date)
+        ]
+    }
+
+    static func item(for node: DirNode, markers: MarkerRegistry, project: String? = nil, lastUsed: Date? = nil) -> FindingItem {
+        let git = markers.bit(for: ".git")
+        return FindingItem(
+            path: node.path,
+            kind: .directory,
+            name: node.name,
+            size: node.size,
+            fileCount: node.fileCount,
+            lastModified: node.subtreeNewestModifiedDate,
+            lastUsed: lastUsed ?? node.lastUsed,
+            isRepository: node.markers & git != 0,
+            containsRepository: node.subtreeMarkers & git != 0,
+            project: project
+        )
+    }
+
+    static func childItems(of node: DirNode, markers: MarkerRegistry, excluding claimed: Set<String> = []) -> [FindingItem] {
+        var result: [FindingItem] = []
+        for child in node.children where child.size > 0 && !child.isSkipped && !claimed.contains(child.path) {
+            result.append(item(for: child, markers: markers))
+        }
+        if node.directFileSize > 0 {
+            let date = node.newestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(node.newestModified)) : nil
+            result.append(
+                FindingItem(
+                    path: node.path, kind: .looseFiles, name: "Files in \(node.name)",
+                    size: node.directFileSize, fileCount: UInt64(node.directFileCount),
+                    lastModified: date, lastUsed: date
+                ))
+        }
+        return result
+    }
+
+    private func isExcluded(_ item: FindingItem, by rule: Rule) -> Bool {
+        rule.exclusions.contains { token in
+            !RuleEngine.isActiveProjectsToken(token) && PathUtil.matches(item.path, glob: token)
+        }
+    }
+
+    // MARK: Pattern rules
+
+    private func patternClaims(_ tree: ScanTree) -> [Claim] {
+        let patternRules = rules.enumerated().filter { $0.element.match != nil }
+        guard !patternRules.isEmpty else { return [] }
+
+        var byName: [String: [(Int, Rule, [String])]] = [:]
+        var allRoots = Set<String>()
+        for (index, rule) in patternRules {
+            let roots = (rule.match!.roots ?? devRoots).map { PathUtil.expand($0) }
+            allRoots.formUnion(roots)
+            for name in rule.match!.names { byName[name, default: []].append((index, rule, roots)) }
+        }
+        var excluded = Set(RuleEngine.defaultPatternExcludes.map { PathUtil.expand($0) })
+        for (_, rule) in patternRules {
+            for glob in rule.match!.exclude where !glob.contains("*") { excluded.insert(PathUtil.expand(glob)) }
+        }
+        let globExcludes = patternRules.flatMap { $0.element.match!.exclude.filter { $0.contains("*") } }
+
+        let roots = allRoots.sorted().filter { candidate in !allRoots.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
+        var claims: [Claim] = []
+        for root in roots {
+            guard let start = tree.node(at: root) else { continue }
+            var stack: [(DirNode, String)] = [(start, start.path)]
+            while let (node, path) = stack.popLast() {
+                for child in node.children where !child.isSkipped && child.size > 0 {
+                    let childPath = PathUtil.join(path, child.name)
+                    if excluded.contains(childPath) { continue }
+                    if RuleEngine.bundleSuffixes.contains(where: { child.name.hasSuffix($0) }) { continue }
+                    if !globExcludes.isEmpty, globExcludes.contains(where: { PathUtil.matches(childPath, glob: $0) }) { continue }
+
+                    var matched = false
+                    for (index, rule, ruleRoots) in byName[child.name] ?? [] {
+                        let match = rule.match!
+                        guard ruleRoots.contains(where: { PathUtil.isAncestorOrEqual($0, of: childPath) }) else { continue }
+                        if !match.sibling.isEmpty && !match.sibling.contains(where: { tree.markers.contains($0, in: node.markers) }) {
+                            continue
+                        }
+                        if !match.contains.isEmpty && !match.contains.contains(where: { tree.markers.contains($0, in: child.markers) }) {
+                            continue
+                        }
+                        var item = RuleEngine.item(
+                            for: child, markers: tree.markers, project: path, lastUsed: projectActivity(node, excluding: child))
+                        item.name = child.name
+                        if !isExcluded(item, by: rule) {
+                            claims.append(Claim(rule: index, item: item, specificity: 0))
+                        }
+                        matched = true
+                        break
+                    }
+                    if !matched { stack.append((child, childPath)) }
+                }
+            }
+        }
+        return claims
+    }
+
+    /// When a project was last worked on, ignoring the generated folder itself.
+    private func projectActivity(_ project: DirNode, excluding artifact: DirNode) -> Date? {
+        var newest = project.newestModified
+        for sibling in project.children where sibling !== artifact {
+            newest = max(newest, sibling.subtreeNewestModified)
+        }
+        return newest > 0 ? Date(timeIntervalSince1970: TimeInterval(newest)) : nil
+    }
+
+    // MARK: Overlaps
+
+    /// Makes sure no byte is claimed twice. If two rules claim the same path, the more specific rule wins.
+    /// If an item contains another rule's item, the outer item is split into its children so the
+    /// inner item is reported (and cleaned) under its own rule.
+    private func resolveOverlaps(_ claims: [Claim], tree: ScanTree) -> [Claim] {
+        var best: [String: Claim] = [:]
+        for claim in claims {
+            if let existing = best[claim.item.id], existing.specificity >= claim.specificity { continue }
+            best[claim.item.id] = claim
+        }
+        let directoryPaths = best.values.filter { $0.item.kind == .directory }.map(\.item.path).sorted()
+        func hasClaimInside(_ path: String) -> Bool {
+            let prefix = path == "/" ? "/" : path + "/"
+            var low = 0
+            var high = directoryPaths.count
+            while low < high {
+                let mid = (low + high) / 2
+                if directoryPaths[mid] < prefix { low = mid + 1 } else { high = mid }
+            }
+            return low < directoryPaths.count && directoryPaths[low].hasPrefix(prefix)
+        }
+        let claimedSet = Set(directoryPaths)
+
+        var result: [Claim] = []
+        for claim in best.values {
+            guard claim.item.kind == .directory, hasClaimInside(claim.item.path), let node = tree.node(at: claim.item.path) else {
+                result.append(claim)
+                continue
+            }
+            var stack = [node]
+            while let current = stack.popLast() {
+                for child in current.children where child.size > 0 && !claimedSet.contains(child.path) {
+                    if hasClaimInside(child.path) {
+                        stack.append(child)
+                    } else {
+                        result.append(
+                            Claim(
+                                rule: claim.rule, item: RuleEngine.item(for: child, markers: tree.markers), specificity: claim.specificity))
+                    }
+                }
+                for item in RuleEngine.childItems(of: current, markers: tree.markers, excluding: Set(current.children.map(\.path))) {
+                    result.append(Claim(rule: claim.rule, item: item, specificity: claim.specificity))
+                }
+            }
+        }
+        return result
+    }
+}

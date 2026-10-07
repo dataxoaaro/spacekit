@@ -1,0 +1,96 @@
+# Docker Desktop, OrbStack, Colima and Podman.
+# Schema: docs/RULES.md
+#
+# Images, containers, volumes and build cache live inside each tool's Linux VM disk image, not as
+# files on the Mac. The disk images are protected; space inside them is reclaimed with the tool's
+# own commands. Those command rules point at ~/.docker (the Docker CLI's state folder) because a
+# rule needs a location, so the size SpaceKit shows for them is not the space they free.
+group: Docker
+category: developer.containers
+
+rules:
+  - id: docker.disk-image
+    name: Docker Desktop disk image
+    description: The Linux VM disk holding all Docker images, containers, volumes and build cache. Reclaim space with Docker's own commands (docker system df shows usage), never delete the file.
+    path: ~/Library/Containers/com.docker.docker/Data/vms
+    safety: protected
+
+  - id: docker.build-cache
+    name: Docker build cache
+    description: BuildKit cache inside Docker's VM. docker builder prune removes cache no build is using; the size shown is only the buildx state folder, check docker system df for the real figure.
+    category: developer.cache
+    path: ~/.docker/buildx
+    recreatedBy: docker build
+    safety: safe
+    policy:
+      type: schedule
+      schedule: monthly
+      mode: suggest
+    action:
+      command: [docker, builder, prune, --force]
+    docs: https://docs.docker.com/reference/cli/docker/builder/prune/
+
+  - id: docker.unused-images
+    name: Unused Docker images
+    description: Images no container uses, inside Docker's VM. They are pulled or rebuilt again when needed. The size shown is only the CLI's state folder; check docker system df. For dangling images only, run docker image prune yourself.
+    path: ~/.docker
+    recreatedBy: docker pull / docker build
+    safety: review
+    action:
+      command: [docker, image, prune, --all, --force]
+    docs: https://docs.docker.com/reference/cli/docker/image/prune/
+
+  - id: docker.scout-cache
+    name: Docker Scout SBOM cache
+    description: Software bills of materials Docker Scout generated for your images. Regenerated the next time Scout analyses an image.
+    category: developer.cache
+    path: ~/.docker/scout
+    recreatedBy: docker scout / Docker Desktop
+    safety:
+      level: safe
+      trash: false
+    action: remove
+
+  - id: docker.desktop-logs
+    name: Docker Desktop logs
+    description: Logs written by Docker Desktop and its VM.
+    category: developer.logs
+    path: ~/Library/Containers/com.docker.docker/Data/log
+    recreatedBy: Docker Desktop
+    safety: safe
+    action: remove
+
+  - id: orbstack.disk-image
+    name: OrbStack data
+    description: OrbStack's disk image with all containers, images, volumes and Linux machines. Free space with docker system prune or by deleting machines in OrbStack, never by deleting the file.
+    path: ~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data
+    safety: protected
+
+  - id: colima.vm
+    name: Colima virtual machines
+    description: Colima profiles and their VM disks with all images, containers and volumes. Free space inside with docker system prune; colima delete removes a VM and everything in it.
+    path: ~/.colima
+    recreatedBy: colima start
+    safety: review
+    action:
+      manual: "Run docker system prune to free space inside the VM, or colima delete [profile] to remove a VM entirely."
+
+  - id: colima.downloads
+    name: Colima and Lima downloads
+    description: VM images Colima and Lima downloaded to create machines. Downloaded again when you create a new VM.
+    category: developer.cache
+    path:
+      - ~/Library/Caches/colima
+      - ~/Library/Caches/lima
+    recreatedBy: colima start / limactl create
+    safety: safe
+    action: remove
+
+  - id: podman.machines
+    name: Podman machines
+    description: Podman machine VM disks with their images, containers and volumes. Free space inside with podman system prune; podman machine rm deletes a machine.
+    path: ~/.local/share/containers
+    recreatedBy: podman machine init
+    safety: review
+    action:
+      manual: "Run podman system prune to free space inside the machine, or podman machine rm <name> to delete a machine."

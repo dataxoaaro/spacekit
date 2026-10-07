@@ -1,0 +1,74 @@
+# Android SDK, emulators and Android Studio.
+# Schema: docs/RULES.md
+group: Android
+category: developer.toolchains
+
+rules:
+  - id: android.avds
+    name: Android emulators (AVDs)
+    description: Disk images and snapshots of each Android Virtual Device, often several GB each. Removing one deletes that emulator and its data.
+    category: developer.emulators
+    path: ~/.android/avd
+    granularity: children
+    recreatedBy: Android Studio → Device Manager
+    safety: review
+    action: remove
+    docs: https://developer.android.com/studio/run/managing-avds
+
+  - id: android.system-images
+    name: Android system images
+    description: Emulator system images, one folder per API level. Emulators that use a removed image stop booting until it's reinstalled.
+    category: developer.emulators
+    path: ~/Library/Android/sdk/system-images
+    granularity: children
+    recreatedBy: Android Studio → SDK Manager
+    safety: review
+    action: remove
+
+  - id: android.sdk-versions
+    name: Android SDK versions
+    description: Installed versions of build-tools, NDK, CMake and platforms. Old versions accumulate; Gradle downloads a missing one when a project asks for it.
+    path:
+      - ~/Library/Android/sdk/build-tools
+      - ~/Library/Android/sdk/ndk
+      - ~/Library/Android/sdk/cmake
+      - ~/Library/Android/sdk/platforms
+    granularity: children
+    recreatedBy: Android Studio → SDK Manager, or Gradle
+    safety: review
+    policy:
+      type: age
+      olderThan: 180d
+      mode: suggest
+    action: remove
+
+  - id: android.cache
+    name: Android SDK cache
+    description: Download and repository caches of the Android SDK tools.
+    category: developer.cache
+    path: ~/.android/cache
+    recreatedBy: sdkmanager / Android Studio
+    safety: safe
+    action: remove
+
+  - id: android.studio-caches
+    name: Android Studio caches
+    description: Indexes and caches of Android Studio, one folder per version. Old versions are pure waste; the current one is rebuilt by re-indexing.
+    category: developer.cache
+    path: ~/Library/Caches/Google/AndroidStudio*
+    recreatedBy: Android Studio (re-indexing)
+    safety: safe
+    policy:
+      type: age
+      olderThan: 60d
+      mode: suggest
+    action: remove
+
+  - id: android.studio-logs
+    name: Android Studio logs
+    description: Logs of Android Studio, one folder per version.
+    category: developer.logs
+    path: ~/Library/Logs/Google/AndroidStudio*
+    recreatedBy: Android Studio
+    safety: safe
+    action: remove

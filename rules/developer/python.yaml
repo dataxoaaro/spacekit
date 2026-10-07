@@ -1,0 +1,192 @@
+# Python: bytecode, package manager caches, virtual environments and interpreters.
+# Schema: docs/RULES.md
+group: Python
+category: developer.cache
+
+rules:
+  # Project artifacts
+
+  - id: python.pycache
+    name: __pycache__ folders
+    description: Compiled bytecode Python writes next to your modules. Recreated automatically on the next import.
+    category: developer.build
+    match:
+      names: [__pycache__]
+    recreatedBy: Python, on import
+    safety:
+      level: safe
+      trash: false
+    action: remove
+
+  - id: python.virtualenvs
+    name: Python virtual environments
+    description: Project virtual environments (.venv, venv, env). Recreate with uv sync, poetry install or pip install -r requirements.txt; packages installed by hand are lost.
+    category: developer.dependencies
+    match:
+      names: [.venv, venv, env]
+      contains: [pyvenv.cfg]
+    recreatedBy: uv sync / poetry install / pip install
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: python.tool-caches
+    name: pytest, mypy and Ruff caches
+    description: Caches written by pytest, mypy and Ruff in your projects. The next run is slower while they refill.
+    category: developer.build
+    match:
+      names: [.pytest_cache, .mypy_cache, .ruff_cache]
+    recreatedBy: pytest / mypy / ruff
+    safety:
+      level: safe
+      trash: false
+    action: remove
+
+  - id: python.tox
+    name: tox and nox environments
+    description: Test environments created by tox and nox. Recreated on the next run, which reinstalls their dependencies.
+    category: developer.build
+    match:
+      names: [.tox, .nox]
+      sibling: [tox.ini, pyproject.toml, setup.cfg, noxfile.py]
+    recreatedBy: tox / nox
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  # Package manager caches
+
+  - id: python.pip-cache
+    name: pip cache
+    description: Wheels and HTTP responses pip caches. Packages are downloaded again when needed.
+    path: ~/Library/Caches/pip
+    recreatedBy: pip install
+    safety: safe
+    policy:
+      type: size
+      threshold: 5GB
+      schedule: monthly
+      mode: suggest
+    action: remove
+    docs: https://pip.pypa.io/en/stable/topics/caching/
+
+  - id: python.uv-cache
+    name: uv cache
+    description: uv's package cache. Environments uv created keep working; packages are downloaded again on the next install.
+    path: ~/.cache/uv
+    recreatedBy: uv sync / uv pip install
+    safety: safe
+    policy:
+      type: size
+      threshold: 10GB
+      schedule: monthly
+      mode: suggest
+    action:
+      command: [uv, cache, clean]
+    docs: https://docs.astral.sh/uv/concepts/cache/
+
+  - id: python.poetry-cache
+    name: Poetry cache
+    description: Package metadata and downloaded distributions cached by Poetry. Downloaded again on the next poetry install.
+    path:
+      - ~/Library/Caches/pypoetry/cache
+      - ~/Library/Caches/pypoetry/artifacts
+    recreatedBy: poetry install
+    safety: safe
+    action: remove
+
+  - id: python.poetry-virtualenvs
+    name: Poetry virtual environments
+    description: Virtual environments Poetry manages outside your projects, one per project and Python version.
+    category: developer.dependencies
+    path: ~/Library/Caches/pypoetry/virtualenvs
+    granularity: children
+    recreatedBy: poetry install
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: python.pipenv-cache
+    name: Pipenv cache
+    description: Packages cached by Pipenv. Downloaded again on the next pipenv install.
+    path: ~/Library/Caches/pipenv
+    recreatedBy: pipenv install
+    safety: safe
+    action: remove
+
+  - id: python.pipenv-virtualenvs
+    name: Pipenv virtual environments
+    description: Virtual environments Pipenv keeps outside your projects, one per project.
+    category: developer.dependencies
+    path: ~/.local/share/virtualenvs
+    granularity: children
+    recreatedBy: pipenv install
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: python.conda-pkgs
+    name: Conda package cache
+    description: Package archives and extracted packages conda keeps after installing. conda clean removes the ones no environment uses.
+    path:
+      - ~/miniconda3/pkgs
+      - ~/anaconda3/pkgs
+      - ~/miniforge3/pkgs
+      - ~/mambaforge/pkgs
+      - ~/.conda/pkgs
+      - /opt/homebrew/Caskroom/miniconda/base/pkgs
+      - /opt/homebrew/Caskroom/miniforge/base/pkgs
+    recreatedBy: conda / mamba install
+    safety: safe
+    policy:
+      type: size
+      threshold: 5GB
+      schedule: monthly
+      mode: suggest
+    action:
+      command: [conda, clean, --all, --yes]
+    docs: https://docs.conda.io/projects/conda/en/latest/commands/clean.html
+
+  - id: python.pre-commit
+    name: pre-commit environments
+    description: Hook repositories and environments pre-commit installs. Reinstalled the next time the hooks run.
+    path: ~/.cache/pre-commit
+    recreatedBy: pre-commit
+    safety: safe
+    action: remove
+
+  # Interpreters
+
+  - id: python.pyenv-versions
+    name: pyenv Python versions
+    description: Python versions built by pyenv, including any pyenv-virtualenv environments inside them. Rebuilding a version takes several minutes.
+    category: developer.toolchains
+    path: ~/.pyenv/versions
+    granularity: children
+    recreatedBy: pyenv install
+    safety: review
+    action: remove
+
+  - id: python.uv-pythons
+    name: uv-managed Python versions
+    description: Python interpreters downloaded by uv. Environments built on a removed interpreter stop working until recreated.
+    category: developer.toolchains
+    path: ~/.local/share/uv/python
+    granularity: children
+    recreatedBy: uv python install
+    safety: review
+    action: remove

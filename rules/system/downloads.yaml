@@ -1,0 +1,23 @@
+# Installer files left in Downloads.
+# Schema: docs/RULES.md
+#
+# Only installer file types are listed; the rest of Downloads is handled by the app as personal data.
+group: Downloads
+category: personal.downloads
+
+rules:
+  - id: downloads.installers
+    name: Installers in Downloads
+    description: Disk images, installer packages, Xcode archives and ISO files in Downloads. Usually not needed once the app is installed.
+    path:
+      - ~/Downloads/*.dmg
+      - ~/Downloads/*.pkg
+      - ~/Downloads/*.xip
+      - ~/Downloads/*.iso
+    recreatedBy: Downloading the installer again
+    safety: review
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove

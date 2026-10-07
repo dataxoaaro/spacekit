@@ -1,0 +1,80 @@
+# Flutter and Dart: pub cache, project build output and FVM-managed SDKs.
+# Schema: docs/RULES.md
+#
+# The pub cache rule targets hosted/ and git/ only: ~/.pub-cache/bin and global_packages hold
+# tools you activated with dart pub global activate.
+group: Flutter & Dart
+category: developer.cache
+
+rules:
+  - id: flutter.build
+    name: Flutter build folders
+    description: Build output of Flutter projects for every platform. Rebuilt by the next flutter build or flutter run.
+    category: developer.build
+    match:
+      names: [build]
+      sibling: [pubspec.yaml]
+    recreatedBy: flutter build / flutter run
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: weekly
+      mode: suggest
+    action: remove
+
+  - id: dart.dart-tool
+    name: .dart_tool folders
+    description: Package configuration and build caches of Dart and Flutter projects. Recreated by flutter pub get or dart pub get.
+    category: developer.build
+    match:
+      names: [.dart_tool]
+      sibling: [pubspec.yaml]
+    recreatedBy: flutter pub get / dart pub get
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      mode: suggest
+    action: remove
+
+  - id: dart.pub-cache
+    name: Pub package cache
+    description: Packages downloaded from pub.dev and git for all Dart and Flutter projects. Downloaded again on the next pub get; globally activated tools may need a re-activate.
+    path:
+      - ~/.pub-cache/hosted
+      - ~/.pub-cache/git
+    recreatedBy: flutter pub get / dart pub get
+    safety: review
+    policy:
+      type: size
+      threshold: 10GB
+      mode: suggest
+    action: remove
+
+  - id: fvm.versions
+    name: FVM Flutter versions
+    description: Flutter SDKs installed by FVM, one folder per version (each well over 1 GB).
+    category: developer.toolchains
+    path: ~/fvm/versions
+    granularity: children
+    recreatedBy: fvm install
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: fvm.git-cache
+    name: FVM Flutter git cache
+    description: The local mirror of the Flutter repository FVM clones new versions from. Cloned again on the next fvm install.
+    category: developer.toolchains
+    path: ~/fvm/cache.git
+    recreatedBy: fvm install
+    safety: review
+    action: remove

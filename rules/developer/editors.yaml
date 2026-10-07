@@ -1,0 +1,170 @@
+# Code editors: VS Code and its forks (Cursor, Windsurf, Insiders) and Zed.
+# Schema: docs/RULES.md
+#
+# Each VS Code-family editor gets a "caches and logs" rule (Chromium caches, V8 code cache,
+# downloaded extension packages, logs) and a "workspace storage" rule. Electron auto-update
+# downloads (~/Library/Caches/*.ShipIt) are covered in system/caches.yaml.
+# JetBrains IDEs are in jvm.yaml, Android Studio in android.yaml.
+group: Editors
+category: developer.editor
+
+rules:
+  # Visual Studio Code
+
+  - id: vscode.caches
+    name: VS Code caches and logs
+    description: Chromium and V8 caches, downloaded extension packages and logs of VS Code. Recreated as you use the editor; quit it first.
+    path:
+      - ~/Library/Application Support/Code/Cache
+      - ~/Library/Application Support/Code/CachedData
+      - ~/Library/Application Support/Code/CachedExtensionVSIXs
+      - ~/Library/Application Support/Code/Code Cache
+      - ~/Library/Application Support/Code/GPUCache
+      - ~/Library/Application Support/Code/Dawn*Cache
+      - ~/Library/Application Support/Code/Service Worker/CacheStorage
+      - ~/Library/Application Support/Code/logs
+      - ~/Library/Caches/com.microsoft.VSCode
+    recreatedBy: VS Code
+    safety: safe
+    policy:
+      type: size
+      threshold: 2GB
+      mode: suggest
+    action: remove
+
+  - id: vscode.workspace-storage
+    name: VS Code workspace storage
+    description: Per-workspace state such as open editors, extension data and local chat history, one folder per folder you opened. Folders for projects you no longer open are leftovers.
+    path: ~/Library/Application Support/Code/User/workspaceStorage
+    granularity: children
+    recreatedBy: VS Code (state is not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  # Visual Studio Code - Insiders
+
+  - id: vscode-insiders.caches
+    name: VS Code Insiders caches and logs
+    description: Chromium and V8 caches, downloaded extension packages and logs of VS Code Insiders. Recreated as you use the editor; quit it first.
+    path:
+      - ~/Library/Application Support/Code - Insiders/Cache
+      - ~/Library/Application Support/Code - Insiders/CachedData
+      - ~/Library/Application Support/Code - Insiders/CachedExtensionVSIXs
+      - ~/Library/Application Support/Code - Insiders/Code Cache
+      - ~/Library/Application Support/Code - Insiders/GPUCache
+      - ~/Library/Application Support/Code - Insiders/Dawn*Cache
+      - ~/Library/Application Support/Code - Insiders/Service Worker/CacheStorage
+      - ~/Library/Application Support/Code - Insiders/logs
+      - ~/Library/Caches/com.microsoft.VSCodeInsiders
+    recreatedBy: VS Code Insiders
+    safety: safe
+    action: remove
+
+  - id: vscode-insiders.workspace-storage
+    name: VS Code Insiders workspace storage
+    description: Per-workspace state such as open editors, extension data and local chat history, one folder per folder you opened.
+    path: ~/Library/Application Support/Code - Insiders/User/workspaceStorage
+    granularity: children
+    recreatedBy: VS Code Insiders (state is not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  # Cursor
+
+  - id: cursor.caches
+    name: Cursor caches and logs
+    description: Chromium and V8 caches, downloaded extension packages and logs of Cursor. Recreated as you use the editor; quit it first.
+    path:
+      - ~/Library/Application Support/Cursor/Cache
+      - ~/Library/Application Support/Cursor/CachedData
+      - ~/Library/Application Support/Cursor/CachedExtensionVSIXs
+      - ~/Library/Application Support/Cursor/Code Cache
+      - ~/Library/Application Support/Cursor/GPUCache
+      - ~/Library/Application Support/Cursor/Dawn*Cache
+      - ~/Library/Application Support/Cursor/Service Worker/CacheStorage
+      - ~/Library/Application Support/Cursor/logs
+      - ~/Library/Caches/com.todesktop.230313mzl4w4u92
+    recreatedBy: Cursor
+    safety: safe
+    policy:
+      type: size
+      threshold: 2GB
+      mode: suggest
+    action: remove
+
+  - id: cursor.workspace-storage
+    name: Cursor workspace storage
+    description: Per-workspace state, including Cursor's chat and composer history for that project, one folder per folder you opened.
+    path: ~/Library/Application Support/Cursor/User/workspaceStorage
+    granularity: children
+    recreatedBy: Cursor (state and chat history are not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  # Windsurf
+
+  - id: windsurf.caches
+    name: Windsurf caches and logs
+    description: Chromium and V8 caches, downloaded extension packages and logs of Windsurf. Recreated as you use the editor; quit it first.
+    path:
+      - ~/Library/Application Support/Windsurf/Cache
+      - ~/Library/Application Support/Windsurf/CachedData
+      - ~/Library/Application Support/Windsurf/CachedExtensionVSIXs
+      - ~/Library/Application Support/Windsurf/Code Cache
+      - ~/Library/Application Support/Windsurf/GPUCache
+      - ~/Library/Application Support/Windsurf/Dawn*Cache
+      - ~/Library/Application Support/Windsurf/Service Worker/CacheStorage
+      - ~/Library/Application Support/Windsurf/logs
+    recreatedBy: Windsurf
+    safety: safe
+    action: remove
+
+  - id: windsurf.workspace-storage
+    name: Windsurf workspace storage
+    description: Per-workspace state such as open editors and extension data, one folder per folder you opened.
+    path: ~/Library/Application Support/Windsurf/User/workspaceStorage
+    granularity: children
+    recreatedBy: Windsurf (state is not recreated)
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  # Zed
+
+  - id: zed.caches
+    name: Zed caches and logs
+    description: Zed's temporary downloads and logs. Recreated as you use the editor.
+    path:
+      - ~/Library/Caches/Zed
+      - ~/Library/Logs/Zed
+    recreatedBy: Zed
+    safety: safe
+    action: remove
+
+  - id: zed.language-servers
+    name: Zed language servers
+    description: Language servers Zed downloaded, one folder per language server. Downloaded again when you open a file that needs one.
+    path: ~/Library/Application Support/Zed/languages
+    granularity: children
+    recreatedBy: Zed, on demand
+    safety: safe
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove

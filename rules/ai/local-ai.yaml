@@ -1,0 +1,81 @@
+# Other local AI model stores and download caches.
+# Schema: docs/RULES.md
+#
+# MLX: mlx-lm and mlx-community models are downloaded through huggingface_hub, so they live in
+# the Hugging Face hub cache (ai/huggingface.yaml). There is no separate MLX model folder.
+# Not covered: ComfyUI and Stable Diffusion web UIs (models live wherever you installed them).
+group: Local AI models
+category: ai.models
+
+rules:
+  - id: ai.torch.hub
+    name: PyTorch hub cache
+    description: Weights and repositories downloaded by torch.hub and torchvision pretrained models. Downloaded again the next time code loads them.
+    category: ai.cache
+    path: ~/.cache/torch
+    recreatedBy: torch.hub.load / torchvision pretrained weights
+    safety: review
+    action: remove
+    ai:
+      tool: PyTorch
+      layout: children
+
+  - id: ai.whisper.models
+    name: Whisper models
+    description: Speech recognition models downloaded by openai-whisper. Downloaded again the next time you load them.
+    category: ai.cache
+    path: ~/.cache/whisper
+    recreatedBy: whisper.load_model
+    safety: review
+    action: remove
+    ai:
+      tool: Whisper
+      layout: children
+
+  - id: ai.clip.models
+    name: CLIP models
+    description: Models downloaded by OpenAI's clip package. Downloaded again the next time you load them.
+    category: ai.cache
+    path: ~/.cache/clip
+    recreatedBy: clip.load
+    safety: review
+    action: remove
+    ai:
+      tool: CLIP
+      layout: children
+
+  - id: ai.llamacpp.cache
+    name: llama.cpp model cache
+    description: GGUF models llama.cpp tools downloaded with -hf / --hf-repo. Downloaded again the next time you run them.
+    category: ai.cache
+    path: ~/Library/Caches/llama.cpp
+    recreatedBy: llama-cli / llama-server -hf
+    safety: review
+    action: remove
+    ai:
+      tool: llama.cpp
+      layout: children
+
+  - id: ai.gpt4all.models
+    name: GPT4All models
+    description: Models downloaded by the GPT4All app and Python bindings. The app folder also holds your chats and LocalDocs index, so remove models from inside GPT4All.
+    path:
+      - ~/Library/Application Support/nomic.ai/GPT4All
+      - ~/.cache/gpt4all
+    recreatedBy: GPT4All → Models
+    safety: review
+    ai:
+      tool: GPT4All
+      layout: children
+
+  - id: ai.jan.models
+    name: Jan models
+    description: Models downloaded in Jan, one folder per model. Remove them from Jan's model hub or the AI view.
+    path:
+      - ~/jan/models
+      - ~/Library/Application Support/Jan/data/models
+    recreatedBy: Jan → Hub
+    safety: review
+    ai:
+      tool: Jan
+      layout: children

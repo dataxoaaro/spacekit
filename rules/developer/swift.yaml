@@ -1,0 +1,98 @@
+# Swift Package Manager, CocoaPods and Carthage.
+# Schema: docs/RULES.md
+#
+# Not included on purpose: ~/Library/org.swift.swiftpm. It holds SwiftPM's configuration
+# (mirrors, registries) and security fingerprints, not cached data.
+group: Swift & CocoaPods
+category: developer.cache
+
+rules:
+  - id: swiftpm.cache
+    name: SwiftPM cache
+    description: Package repositories, manifests and binary artifacts SwiftPM caches for all projects. Packages are fetched again on the next resolve.
+    path: ~/Library/Caches/org.swift.swiftpm
+    recreatedBy: swift package resolve, or Xcode
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: size
+      threshold: 5GB
+      schedule: monthly
+      mode: suggest
+    action: remove
+
+  - id: swiftpm.build
+    name: SwiftPM .build folders
+    description: Build output and checked-out dependencies of Swift packages built with swift build or SourceKit-LSP. Rebuilt on the next build.
+    category: developer.build
+    match:
+      names: [.build]
+      sibling: [Package.swift]
+    recreatedBy: swift build
+    safety:
+      level: safe
+      trash: false
+    policy:
+      type: age
+      olderThan: 30d
+      schedule: weekly
+      mode: suggest
+    action: remove
+
+  - id: swift.toolchains
+    name: Swift toolchains
+    description: Toolchains installed from swift.org or by swiftly, one folder each. Xcode's own toolchain is not here.
+    category: developer.toolchains
+    path: ~/Library/Developer/Toolchains
+    granularity: children
+    recreatedBy: Reinstalling the toolchain (swift.org or swiftly)
+    safety: review
+    action: remove
+
+  - id: cocoapods.cache
+    name: CocoaPods cache
+    description: Downloaded pod sources and podspecs reused across projects. Pods are downloaded again on the next pod install.
+    path: ~/Library/Caches/CocoaPods
+    recreatedBy: pod install
+    safety: safe
+    policy:
+      type: size
+      threshold: 5GB
+      mode: suggest
+    action:
+      command: [pod, cache, clean, --all]
+    docs: https://guides.cocoapods.org/terminal/commands.html#pod_cache_clean
+
+  - id: cocoapods.spec-repos
+    name: CocoaPods spec repos
+    description: Git clones of podspec repositories. The legacy "master" repo can take several GB; the CDN-based "trunk" source made it unnecessary.
+    path: ~/.cocoapods/repos
+    granularity: children
+    recreatedBy: pod repo add, or pod install for trunk
+    safety: review
+    action:
+      itemCommand: [pod, repo, remove, "{name}"]
+
+  - id: cocoapods.pods
+    name: CocoaPods Pods folders
+    description: Pods installed into an Xcode project. Recreated by pod install, unless your team commits Pods to the repository.
+    category: developer.dependencies
+    match:
+      names: [Pods]
+      sibling: [Podfile]
+    recreatedBy: pod install
+    safety: review
+    policy:
+      type: age
+      olderThan: 90d
+      mode: suggest
+    action: remove
+
+  - id: carthage.cache
+    name: Carthage cache
+    description: Dependency clones, prebuilt binaries and derived data Carthage caches for all projects. Fetched again on the next carthage bootstrap.
+    path: ~/Library/Caches/org.carthage.CarthageKit
+    recreatedBy: carthage bootstrap / update
+    safety: safe
+    action: remove

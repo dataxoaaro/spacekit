@@ -1,0 +1,35 @@
+# Ruby: RubyGems, Bundler and rbenv.
+# Schema: docs/RULES.md
+#
+# ~/.gem/credentials (your RubyGems API key) is protected in protected/credentials.yaml.
+group: Ruby
+category: developer.cache
+
+rules:
+  - id: ruby.gem-cache
+    name: RubyGems caches
+    description: Gem spec indexes and the .gem archives kept after user installs (gem install --user-install). Installed gems keep working.
+    path:
+      - ~/.gem/specs
+      - ~/.gem/ruby/*/cache
+    recreatedBy: gem install / bundle install
+    safety: safe
+    action: remove
+
+  - id: ruby.bundler-cache
+    name: Bundler cache
+    description: Bundler's global cache of gem index data. Downloaded again on the next bundle install.
+    path: ~/.bundle/cache
+    recreatedBy: bundle install
+    safety: safe
+    action: remove
+
+  - id: ruby.rbenv-versions
+    name: rbenv Ruby versions
+    description: Ruby versions built by rbenv, each with its installed gems. Rebuilding a version takes several minutes.
+    category: developer.toolchains
+    path: ~/.rbenv/versions
+    granularity: children
+    recreatedBy: rbenv install
+    safety: review
+    action: remove

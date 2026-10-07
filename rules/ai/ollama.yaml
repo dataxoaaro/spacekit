@@ -1,0 +1,20 @@
+# Ollama.
+# Schema: docs/RULES.md
+#
+# No cleanup action on purpose: the rule's item is the whole models folder, so an itemCommand
+# would run `ollama rm models`. The AI view sizes each model from its manifests and removes
+# models one at a time with `ollama rm <model>`. ~/.ollama/id_ed25519 is protected in
+# protected/credentials.yaml.
+group: Ollama
+category: ai.models
+
+rules:
+  - id: ai.ollama.models
+    name: Ollama models
+    description: Models pulled with Ollama, stored as shared blobs plus manifests. Remove the ones you don't use with ollama rm <model>, or from the AI view.
+    path: ~/.ollama/models
+    recreatedBy: ollama pull
+    safety: review
+    ai:
+      tool: Ollama
+      layout: ollama

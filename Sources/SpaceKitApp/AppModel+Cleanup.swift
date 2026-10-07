@@ -6,14 +6,7 @@ extension AppModel {
     // MARK: Cleanup
 
     func cleanupItem(for item: DiskItem) -> CleanupItem? {
-        guard let path = item.path else { return nil }
-        let git = tree?.markers.bit(for: ".git") ?? 0
-        return CleanupItem(
-            path: path, kind: item.isDirectory ? .directory : .file, name: item.name, size: item.size,
-            ruleID: rule(for: path)?.id,
-            isRepository: (item.directory?.markers ?? 0) & git != 0,
-            containsRepository: (item.directory?.subtreeMarkers ?? 0) & git != 0,
-            lastUsed: item.modified)
+        CleanupItem(item, markers: tree?.markers, ruleID: rule(for: item.path)?.id)
     }
 
     func addToCleanupList(_ items: [CleanupItem]) {

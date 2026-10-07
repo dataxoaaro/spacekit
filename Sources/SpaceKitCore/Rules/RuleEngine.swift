@@ -206,7 +206,7 @@ public struct RuleEngine: Sendable {
     }
 
     static func item(for node: DirNode, markers: MarkerRegistry, project: String? = nil, lastUsed: Date? = nil) -> FindingItem {
-        let git = markers.bit(for: ".git")
+        let repository = node.repositoryFlags(markers)
         return FindingItem(
             path: node.path,
             kind: .directory,
@@ -215,8 +215,8 @@ public struct RuleEngine: Sendable {
             fileCount: node.fileCount,
             lastModified: node.lastUsed,
             lastUsed: lastUsed ?? node.lastUsed,
-            isRepository: node.markers & git != 0,
-            containsRepository: node.subtreeMarkers & git != 0,
+            isRepository: repository.isRepository,
+            containsRepository: repository.containsRepository,
             project: project
         )
     }

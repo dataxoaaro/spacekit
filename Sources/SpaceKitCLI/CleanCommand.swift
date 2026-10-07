@@ -133,9 +133,9 @@ struct CleanCommand: ParsableCommand {
         guard isFolder, let tree = try? Scanner(options: options).scan(path) else {
             return CleanupItem(path: path, kind: kind, size: FileSize.allocated(st), ruleID: rule?.id)
         }
-        let git = tree.markers.bit(for: ".git")
+        let repository = tree.root.repositoryFlags(tree.markers)
         return CleanupItem(
             path: path, kind: .directory, size: tree.root.size, ruleID: rule?.id,
-            isRepository: tree.root.markers & git != 0, containsRepository: tree.root.subtreeMarkers & git != 0)
+            isRepository: repository.isRepository, containsRepository: repository.containsRepository)
     }
 }

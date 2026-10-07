@@ -55,4 +55,28 @@ struct FrontEndSupportTests {
         #expect(Spinner.frame(Spinner.frames.count + 1) == Spinner.frames[1])
         #expect(Spinner.frames.contains(Spinner.frame(-3)))
     }
+
+    @Test("An Explore entry becomes a cleanup item with its git facts; the smaller-files block can't")
+    func diskItemConversion() throws {
+        let tree = try TempTree()
+        try tree.file("root/work/app/.git/HEAD", bytes: 100)
+        try tree.file("root/work/app/main.swift", bytes: 4_000)
+        try tree.file("root/big.bin", bytes: 40_000)
+        try tree.file("root/tiny.txt", bytes: 10)
+        let scanned = try scan(tree.path("root"), minFileSize: 20_000, markers: [".git"])
+        let items = scanned.root.items
+        let work = try #require(items.first { $0.name == "work" })
+        let converted = try #require(CleanupItem(work, markers: scanned.markers, ruleID: "r"))
+        #expect(converted.kind == .directory && converted.ruleID == "r")
+        #expect(!converted.isRepository && converted.containsRepository)
+        let appEntry = try #require(work.directory?.items.first { $0.name == "app" })
+        let app = try #require(CleanupItem(appEntry, markers: scanned.markers, ruleID: nil))
+        #expect(app.isRepository)
+        #expect(CleanupItem(work, markers: nil, ruleID: nil)?.containsRepository == false)
+        let fileEntry = try #require(items.first { $0.name == "big.bin" })
+        let file = try #require(CleanupItem(fileEntry, markers: scanned.markers, ruleID: nil))
+        #expect(file.kind == .file && file.path == tree.path("root/big.bin"))
+        let others = try #require(items.first { if case .otherFiles = $0 { return true } else { return false } })
+        #expect(CleanupItem(others, markers: scanned.markers, ruleID: nil) == nil)
+    }
 }

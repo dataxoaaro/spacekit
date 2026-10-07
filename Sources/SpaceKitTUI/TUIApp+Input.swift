@@ -154,7 +154,7 @@ extension TUIApp {
             if state.marked[path] != nil {
                 state.marked[path] = nil
             } else {
-                state.marked[path] = cleanupItem(for: item, path: path)
+                state.marked[path] = cleanupItem(for: item)
             }
             state.explore.move(by: 1, count: items.count)
         case .character("o"):
@@ -163,8 +163,8 @@ extension TUIApp {
             guard !refuseWhileBusy() else { return }
             var plan = CleanupPlan(items: Array(state.marked.values), created: state.scanStarted)
             if plan.items.isEmpty {
-                guard let item = selectedItem(items), let path = item.path else { return }
-                plan.items = [cleanupItem(for: item, path: path)]
+                guard let item = selectedItem(items).flatMap(cleanupItem(for:)) else { return }
+                plan.items = [item]
             }
             plan.useTrash = context.trashPreference(for: .trash) ?? true
             confirmCleanup(plan, title: "Clean selected items")
@@ -177,13 +177,8 @@ extension TUIApp {
         items.indices.contains(state.explore.selection) ? items[state.explore.selection] : nil
     }
 
-    func cleanupItem(for item: DiskItem, path: String) -> CleanupItem {
-        let git = state.tree?.markers.bit(for: ".git") ?? 0
-        return CleanupItem(
-            path: path, kind: item.isDirectory ? .directory : .file, name: item.name, size: item.size,
-            ruleID: state.ruleIndex.rule(for: path)?.id,
-            isRepository: (item.directory?.markers ?? 0) & git != 0,
-            containsRepository: (item.directory?.subtreeMarkers ?? 0) & git != 0, lastUsed: item.modified)
+    func cleanupItem(for item: DiskItem) -> CleanupItem? {
+        CleanupItem(item, markers: state.tree?.markers, ruleID: item.path.flatMap { state.ruleIndex.rule(for: $0)?.id })
     }
 
     // MARK: Dev Intelligence

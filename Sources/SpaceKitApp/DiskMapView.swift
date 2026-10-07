@@ -15,15 +15,12 @@ struct MapGeometry: Sendable {
 final class MapColorer: @unchecked Sendable {
     let mode: UISettings.ColorMode
     let rules: RuleLookupCache
-    let categories: [String: StorageCategory]
+    let locations = CategoryBreakdown.locations(home: PathUtil.home)
     private var categoryCache: [String: StorageCategory] = [:]
 
     init(mode: UISettings.ColorMode, ruleIndex: RuleIndex) {
         self.mode = mode
         self.rules = RuleLookupCache(index: ruleIndex)
-        var categories: [String: StorageCategory] = [:]
-        for (path, category) in CategoryBreakdown.builtinLocations(home: PathUtil.home) { categories[path] = category }
-        self.categories = categories
     }
 
     func color(item: MapItem, branch: Int, depth: Int) -> Color {
@@ -49,21 +46,9 @@ final class MapColorer: @unchecked Sendable {
 
     func category(of item: MapItem) -> StorageCategory {
         guard let path = item.path else { return .other }
-        if let rule = rules.rule(containing: path) {
-            switch rule.topCategory {
-            case "developer": return .developer
-            case "ai": return .ai
-            case "cache": return .caches
-            default: break
-            }
-        }
-        return locationCategory(path)
-    }
-
-    private func locationCategory(_ path: String) -> StorageCategory {
-        if let category = categories[path] { return category }
+        if let rule = rules.rule(containing: path), let category = StorageCategory(ruleCategory: rule.category) { return category }
         if let cached = categoryCache[path] { return cached }
-        let result = path == "/" || path.isEmpty ? StorageCategory.other : locationCategory(PathUtil.parent(path))
+        let result = CategoryBreakdown.nearestCategory(for: path, in: locations) ?? .other
         categoryCache[path] = result
         return result
     }

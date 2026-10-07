@@ -199,7 +199,7 @@ struct FindingCard: View {
                         Button("Automate…") { model.jobDraft = JobDraft(rule: rule) }
                             .help("Create a scheduled job for this rule")
                         Spacer()
-                        if let docs = rule.docs, let url = URL(string: docs) {
+                        if let url = rule.docsURL {
                             Link("Docs", destination: url).font(.callout)
                         }
                     }

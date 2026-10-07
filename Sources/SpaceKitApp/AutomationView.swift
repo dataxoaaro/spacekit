@@ -62,6 +62,9 @@ private struct AgentCard: View {
 
     var body: some View {
         let status = model.agentStatus
+        // What launchd runs with can differ from the config after a hand edit, so show the installed interval.
+        let configured = LaunchAgent.clampedInterval(model.config.automation.checkEvery.seconds)
+        let interval = status?.interval ?? configured
         HStack(spacing: 12) {
             Image(systemName: status?.loaded == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                 .foregroundStyle(status?.loaded == true ? Theme.good : Theme.warning)
@@ -70,13 +73,17 @@ private struct AgentCard: View {
                 Text(status?.loaded == true ? "Background agent is running" : "Background agent isn't running").font(.headline)
                 Text(
                     status?.loaded == true
-                        ? "Checks for due jobs every \(model.config.automation.checkEvery.description). Runs as you, never as root. Missed runs catch up after sleep."
+                        ? "Checks for due jobs every \(Age(seconds: TimeInterval(interval)).description). Runs as you, never as root. Missed runs catch up after sleep."
                         : "Jobs only run on schedule when the agent is installed. It's a small per-user launchd job."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if status?.installed == true {
+                if interval != configured {
+                    Button("Apply New Interval") { model.installAgent() }
+                        .help("Settings say every \(Age(seconds: TimeInterval(configured)).description); the agent still uses the old interval")
+                }
                 Button("Remove") { model.uninstallAgent() }
             } else {
                 Button("Install Agent") { model.installAgent() }.buttonStyle(.borderedProminent)
@@ -104,6 +111,7 @@ private struct SuggestionsSection: View {
                     Text(suggestion.plan.totalBytes.bytesText).monospacedDigit()
                     Button("Dismiss") { model.dismiss(suggestion) }
                     Button("Review…") { model.approve(suggestion) }.buttonStyle(.borderedProminent)
+                        .disabled(model.runningJobID != nil)
                 }
                 .padding(12)
                 .background(Theme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
@@ -288,7 +296,7 @@ struct JobEditor: View {
                     if draft.job.schedule.every == .monthly {
                         Stepper(
                             "Day \(draft.job.schedule.day ?? 1)",
-                            value: Binding(get: { draft.job.schedule.day ?? 1 }, set: { draft.job.schedule.day = $0 }), in: 1...28)
+                            value: Binding(get: { draft.job.schedule.day ?? 1 }, set: { draft.job.schedule.day = $0 }), in: Schedule.monthDays)
                     }
                     DatePicker("At", selection: $time, displayedComponents: .hourAndMinute)
                     TextField("Only when larger than", text: $sizeText, prompt: Text("e.g. 30GB (optional)"))
@@ -384,8 +392,8 @@ struct JobEditor: View {
         sizeText = draft.job.when.sizeAbove?.description ?? ""
         olderText = draft.job.when.olderThan?.description ?? ""
         keepText = draft.job.when.keepRecent?.description ?? ""
-        let parts = draft.job.schedule.at.split(separator: ":").compactMap { Int($0) }
-        time = Calendar.current.date(bySettingHour: parts.first ?? 3, minute: parts.last ?? 0, second: 0, of: Date()) ?? Date()
+        let (hour, minute) = Schedule.components(draft.job.schedule.at) ?? (3, 0)
+        time = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
     }
 
     private func save() {
@@ -399,9 +407,21 @@ struct JobEditor: View {
             }
             return (value, true)
         }
+        // Ages below a day are almost always typos (6m is six minutes, not months), so they're rejected with a hint.
+        func retention(_ text: String) -> (Age?, Bool) {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return (nil, true) }
+            switch Age.parseRetention(trimmed) {
+            case .success(let age):
+                return (age, true)
+            case .failure(let error):
+                problem = error.message
+                return (nil, false)
+            }
+        }
         let (size, sizeOK) = parse(sizeText, ByteCount.parse, "the size")
-        let (older, olderOK) = parse(olderText, Age.parse, "the age")
-        let (keep, keepOK) = parse(keepText, Age.parse, "the age")
+        let (older, olderOK) = retention(olderText)
+        let (keep, keepOK) = retention(keepText)
         guard sizeOK, olderOK, keepOK else { return }
         job.when = Job.Conditions(sizeAbove: size, olderThan: older, keepRecent: keep)
         let components = Calendar.current.dateComponents([.hour, .minute], from: time)
@@ -414,7 +434,7 @@ struct JobEditor: View {
             problem = "Pick at least one rule or folder."
             return
         }
-        if draft.originalID == nil || job.id == "new-job" { job.id = Rule.slug(job.name) }
+        if draft.originalID == nil { job.id = Rule.slug(job.name) }
         model.saveJob(job, replacing: draft.originalID)
         dismiss()
     }

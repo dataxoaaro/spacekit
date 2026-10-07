@@ -77,7 +77,7 @@ struct RulesView: View {
                         "\(model.library.rules.count) rules describe where tools keep data, how risky it is to remove, and how to clean it."
                 )
                 Text(
-                    "Rules are plain YAML. Add your own in `~/.config/spacekit/rules/`, or contribute to the built-in library in the project's `rules/` folder. A rule with the same id as a built-in one replaces it."
+                    "Rules are plain YAML. Add your own in `~/.config/spacekit/rules/`, or contribute to the built-in library in the project's `rules/` folder. A rule with the same id as a built-in one replaces it, unless the built-in rule is “Don't touch” or the replacement would lower its safety level."
                 )
                 .foregroundStyle(.secondary)
                 HStack(spacing: 12) {

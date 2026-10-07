@@ -204,11 +204,12 @@ private struct AutomationSettingsPane: View {
                 }
                 CommitField(
                     title: "Check for due jobs every", prompt: "1h", value: automation.checkEvery.description,
-                    validate: { Age.parse($0).map { $0.seconds >= 300 } ?? false }
+                    validate: { Age.parse($0).map { AutomationSettings.checkEveryRange.contains($0.seconds) } ?? false }
                 ) { value in
                     model.updateConfig { $0.automation.checkEvery = Age.parse(value)! }
                     if model.agentStatus?.installed == true { model.installAgent() }
                 }
+                Text("Between 5m and 24h.").font(.caption).foregroundStyle(.secondary)
                 Toggle(
                     "Notifications",
                     isOn: Binding(
@@ -221,7 +222,7 @@ private struct AutomationSettingsPane: View {
                         get: { automation.snapshot != nil },
                         set: { on in
                             model.updateConfig {
-                                $0.automation.snapshot = on ? Schedule(every: .weekly, at: "04:00", weekday: .sunday) : nil
+                                $0.automation.snapshot = on ? .defaultSnapshot : nil
                             }
                         }))
                 Text("A full analysis, used for “What grew?”. Runs in the background at low priority.").font(.caption).foregroundStyle(
@@ -247,7 +248,7 @@ private struct RulesSettingsPane: View {
     var body: some View {
         let disabled = Set(model.config.rules.disabled)
         // Show every built-in rule, including disabled ones, so they can be turned back on.
-        let all = RuleLibrary.load(directories: model.config.rules.directories).rules
+        let all = model.rulesIncludingDisabled()
         let visible =
             search.isEmpty
             ? all : all.filter { $0.name.localizedCaseInsensitiveContains(search) || $0.group.localizedCaseInsensitiveContains(search) }

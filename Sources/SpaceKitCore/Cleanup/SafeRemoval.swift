@@ -1,3 +1,4 @@
+import CRemovefile
 import Foundation
 
 /// Removal through a directory handle, so the folder that was checked is the folder that is changed.

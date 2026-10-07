@@ -195,9 +195,9 @@ public struct Schedule: Codable, Sendable, Hashable, CustomStringConvertible {
     /// Parses `weekly`, `daily at 02:30`, `every sunday 04:00`. Every word must be understood: one frequency
     /// and/or one weekday, at most one `HH:mm` time, and the fillers `at`, `on`, `every`. Anything else is `nil`.
     public static func parse(_ text: String) -> Schedule? {
-        let words = text.lowercased().split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).filter {
-            $0 != "at" && $0 != "on" && $0 != "every"
-        }
+        let fillers: Set<String> = ["at", "on", "every"]
+        let separated: [Substring] = text.lowercased().split(whereSeparator: { $0 == " " || $0 == "," })
+        let words: [String] = separated.map(String.init).filter { !fillers.contains($0) }
         var frequency: Frequency?
         var weekday: Weekday?
         var time: (hour: Int, minute: Int)?

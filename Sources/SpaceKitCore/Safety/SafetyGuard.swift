@@ -207,7 +207,8 @@ public struct SafetyGuard: Sendable {
         guard rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/") else {
             return SafetyVerdict(decision: .block, reasons: ["Path must be absolute"])
         }
-        let path = PathUtil.expand(rawPath, home: home)
+        // Exactly as given: the executor removes this spelling, trailing spaces and all.
+        let path = PathUtil.expandArgument(rawPath, home: home)
         let candidates = SafetyGuard.spellings(of: path)
 
         if isRunningAsRoot {

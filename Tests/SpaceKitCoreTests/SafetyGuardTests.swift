@@ -408,6 +408,20 @@ struct SafetyGuardAutomationTests {
         #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
     }
 
+    @Test("A path is checked exactly as given: trailing spaces name a different item")
+    func noTrimming() throws {
+        let guardian = testGuard()
+        let manual = CleanupContext.manual(confirmed: false)
+        #expect(guardian.evaluate(path: "/Users/tester/Documents", context: manual).isBlocked)
+        let spaced = guardian.evaluate(path: "/Users/tester/Documents ", context: manual)
+        #expect(spaced.decision == .confirm)
+
+        let tree = try TempTree()
+        try tree.file("report /a", bytes: 50_000)
+        try tree.file("report/b", bytes: 4_000)
+        #expect(try scan(tree.path("report ")).root.size == tree.allocated("report /a"))
+    }
+
     @Test("By hand, a safe rule outside its own locations counts as no rule: the person confirms")
     func manualOutsideScope() {
         let rule = Rule(

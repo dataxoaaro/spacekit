@@ -31,7 +31,8 @@ public struct Scanner: Sendable {
         let clock = ContinuousClock.now
         var resolved: [String] = []
         for path in paths {
-            let expanded = PathUtil.expand(path)
+            // Exactly as given: `report ` and `report` are different folders.
+            let expanded = PathUtil.expandArgument(path)
             guard let real = PathUtil.realpath(expanded) else { throw ScanError.notFound(expanded) }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: real, isDirectory: &isDirectory), isDirectory.boolValue else {

@@ -173,3 +173,238 @@ struct SafetyGuardTests {
         #expect(guardian.evaluate(path: tree.path("link/objects"), context: manual).isBlocked)
     }
 }
+
+/// APFS treats `Library`, `library` and `LIBRARY` (and NFC/NFD spellings of a name) as the same folder,
+/// so every protected list must match regardless of how the path is spelled.
+@Suite("Safety guard: case and Unicode spellings")
+struct SafetyGuardSpellingTests {
+    let manual = CleanupContext.manual(confirmed: true)
+    let automatic = CleanupContext.automatic(AutomationContext(jobID: "test"))
+
+    /// A sandbox home on disk holding the usual protected folders.
+    private func sandbox(protectedPaths: [String] = [], rules: [Rule] = []) throws -> (TempTree, SafetyGuard) {
+        let tree = try TempTree()
+        for folder in ["Library/Keychains", "Library/Caches", ".ssh", "Documents", "Downloads", "Projects/app/.git"] {
+            try tree.directory(folder)
+        }
+        let guardian = SafetyGuard(
+            home: tree.root, userProtectedPaths: protectedPaths, protectedRules: rules, volumes: emptyVolumes, isRunningAsRoot: false)
+        return (tree, guardian)
+    }
+
+    @Test(
+        "Case variants of protected home locations are blocked",
+        arguments: [
+            "~/library", "~/LIBRARY", "~/LIBRARY/Keychains", "~/Library/keychains/login.keychain-db", "~/.SSH", "~/.Ssh/id_ed25519",
+            "~/documents", "~/DOCUMENTS", "~/library/caches", "~/Projects/app/.GIT", "~/Projects/app/.Git/objects",
+        ])
+    func caseVariantsOnDisk(path: String) throws {
+        let (tree, guardian) = try sandbox()
+        let expanded = PathUtil.expand(path, home: tree.root)
+        #expect(guardian.evaluate(path: expanded, context: manual).isBlocked, "\(path) must be blocked")
+    }
+
+    @Test("An upper-cased spelling of the whole home path is blocked")
+    func upperCasedHome() throws {
+        let (tree, guardian) = try sandbox()
+        #expect(guardian.evaluate(path: tree.root.uppercased(), context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.root.uppercased() + "/LIBRARY", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.root.uppercased() + "/.SSH/config", context: manual).isBlocked)
+    }
+
+    @Test(
+        "Case variants are blocked even when nothing exists on disk",
+        arguments: [
+            "/USERS", "/users/tester", "/USERS/TESTER", "/Users/tester/library", "/users/tester/LIBRARY/Keychains/x",
+            "/Users/tester/.SSH", "/Users/tester/documents", "/SYSTEM/Library/Frameworks", "/usr/BIN/ls", "/volumes/External",
+            "/Users/tester/Pictures/Photos Library.PhotosLibrary/originals/0",
+        ])
+    func caseVariantsWithoutDisk(path: String) {
+        #expect(testGuard().evaluate(path: path, context: manual).isBlocked, "\(path) must be blocked")
+    }
+
+    @Test("Personal folders are recognised in any case")
+    func personalCase() {
+        let file = "/Users/tester/downloads/installer.dmg"
+        #expect(testGuard().evaluate(path: file, context: .manual(confirmed: false)).reasons == ["This is personal data, not a cache"])
+        // A job listing `~/downloads` without an age limit must get the strict personal-folder treatment.
+        let noAge = CleanupContext.automatic(AutomationContext(jobID: "dl", customPaths: ["~/downloads"], olderThan: nil, usesTrash: true))
+        #expect(testGuard().evaluate(path: file, context: noAge).isBlocked)
+    }
+
+    @Test("Protected rules and user-protected paths match in any case")
+    func protectedListsCase() {
+        let rule = Rule(
+            id: "db.postgres", name: "Postgres data", paths: ["~/Library/Application Support/Postgres"],
+            safety: SafetySpec(level: .protected))
+        let guardian = testGuard(protectedPaths: ["~/Work/Archive"], rules: [rule])
+        #expect(guardian.evaluate(path: "/Users/tester/work/ARCHIVE/2020", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/WORK", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/library/application support/POSTGRES/var-16", context: manual).isBlocked)
+    }
+
+    @Test("NFC and NFD spellings of a protected name are the same folder")
+    func unicodeNormalization() throws {
+        let nfc = "Caf\u{E9}"
+        let nfd = "Cafe\u{301}"
+        let fromNFC = testGuard(protectedPaths: ["~/\(nfc)"])
+        #expect(fromNFC.evaluate(path: "/Users/tester/\(nfd)/menu.txt", context: manual).isBlocked)
+        let fromNFD = testGuard(protectedPaths: ["~/\(nfd)"])
+        #expect(fromNFD.evaluate(path: "/Users/tester/\(nfc)/menu.txt", context: manual).isBlocked)
+        #expect(fromNFD.evaluate(path: "/Users/tester/CAF\u{C9}", context: manual).isBlocked)
+
+        let (tree, guardian) = try sandbox(protectedPaths: ["~/\(nfc)"])
+        try tree.directory(nfd + "/2024")
+        #expect(guardian.evaluate(path: tree.path(nfc + "/2024"), context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.path(nfd + "/2024"), context: manual).isBlocked)
+    }
+}
+
+@Suite("Safety guard: protected lists")
+struct SafetyGuardProtectedListTests {
+    let manual = CleanupContext.manual(confirmed: true)
+
+    @Test(
+        "Sealed roots are blocked, not only what's inside them",
+        arguments: [
+            "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
+            "/Users/tester/Library/Application Support/1Password", "/Users/tester/Library/Group Containers/2BUA8C4S2C.com.1password",
+            "/Users/tester/Library/Group Containers/group.com.docker",
+        ])
+    func sealedRoots(path: String) {
+        #expect(testGuard().evaluate(path: path, context: manual).isBlocked, "\(path) must be blocked")
+    }
+
+    @Test(
+        "Calendars and password managers are sealed",
+        arguments: [
+            "/Users/tester/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb",
+            "/Users/tester/Library/Group Containers/2BUA8C4S2C.com.agilebits/Library",
+            "/Users/tester/Library/Containers/com.agilebits.onepassword7/Data",
+            "/Users/tester/Library/Containers/com.1password.1password/Data",
+            "/Users/tester/Library/Application Support/Bitwarden/data.json",
+            "/Users/tester/Library/Containers/com.bitwarden.desktop/Data",
+        ])
+    func calendarsAndPasswordManagers(path: String) {
+        #expect(testGuard().evaluate(path: path, context: manual).isBlocked, "\(path) must be blocked")
+    }
+
+    @Test("Protected glob rules also block the folders that contain their matches")
+    func protectedGlobContainers() {
+        let rule = Rule(
+            id: "db.homebrew-postgres", name: "Homebrew Postgres", paths: ["~/brew/var/postgresql@*", "~/Media/*.photoslibrary"],
+            safety: SafetySpec(level: .protected))
+        let guardian = testGuard(rules: [rule])
+        #expect(guardian.evaluate(path: "/Users/tester/brew/var/postgresql@16", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/brew/var/postgresql@16/base", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/brew/var", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/brew", context: manual).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/Media", context: manual).isBlocked)
+        #expect(!guardian.evaluate(path: "/Users/tester/brew/var/log", context: manual).isBlocked)
+        #expect(!guardian.evaluate(path: "/Users/tester/Media/clip.mov", context: manual).isBlocked)
+    }
+
+    @Test("User-protected paths are matched through symlinks")
+    func userProtectedSymlink() throws {
+        let tree = try TempTree()
+        try tree.directory("home")
+        try tree.directory("elsewhere/work/2020")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/work"), withDestinationPath: tree.path("elsewhere/work"))
+        let guardian = SafetyGuard(home: tree.path("home"), userProtectedPaths: ["~/work"], volumes: emptyVolumes, isRunningAsRoot: false)
+        #expect(guardian.evaluate(path: tree.path("elsewhere/work/2020"), context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.path("elsewhere/work"), context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.path("elsewhere"), context: manual).isBlocked)
+        #expect(guardian.evaluate(path: tree.path("home/work/2020"), context: manual).isBlocked)
+    }
+
+    @Test("Only `~` and `~/` are expanded; `~name` paths are refused", arguments: ["~foo/x", "~root", "~tester/Library/Caches/x"])
+    func tildeUserPaths(path: String) {
+        let verdict = testGuard().evaluate(path: path, context: manual)
+        #expect(verdict.isBlocked)
+        #expect(verdict.reasons == ["Path must be absolute"])
+    }
+
+    @Test("Folders containing repositories need confirmation unless a safe rule claims them")
+    func containsRepository() {
+        let guardian = testGuard()
+        let path = "/Users/tester/Projects"
+        let automatic = CleanupContext.automatic(AutomationContext(jobID: "a", customPaths: ["~/Projects"]))
+        let byHand = guardian.evaluate(path: path, context: .manual(confirmed: false), containsRepository: true)
+        #expect(byHand.decision == .confirm)
+        #expect(byHand.reasons.contains("This folder contains git repositories"))
+        #expect(guardian.evaluate(path: path, context: automatic, containsRepository: true).isBlocked)
+
+        let safe = Rule(
+            id: "dev.builds", name: "Builds", paths: ["~/Projects"], safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        #expect(guardian.evaluate(path: path, rule: safe, context: .manual(confirmed: false), containsRepository: true).decision == .allow)
+        #expect(guardian.evaluate(path: path, rule: safe, context: automatic, containsRepository: true).decision == .allow)
+
+        let review = Rule(
+            id: "dev.builds", name: "Builds", paths: ["~/Projects"], safety: SafetySpec(level: .review), action: ActionSpec(remove: true))
+        let reviewed = guardian.evaluate(path: path, rule: review, context: .manual(confirmed: false), containsRepository: true)
+        #expect(reviewed.reasons.contains("This folder contains git repositories"))
+        let optedIn = CleanupContext.automatic(AutomationContext(jobID: "a", allowReview: true))
+        #expect(guardian.evaluate(path: path, rule: review, context: optedIn, containsRepository: true).isBlocked)
+    }
+}
+
+@Suite("Safety guard: automation limits")
+struct SafetyGuardAutomationTests {
+    let safeRule = Rule(
+        id: "xcode.derived-data", name: "DerivedData", paths: ["~/Library/Developer/Xcode/DerivedData"],
+        granularity: .children, safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+    let path = "/Users/tester/Library/Developer/Xcode/DerivedData/App-abc"
+    let automatic = CleanupContext.automatic(AutomationContext(jobID: "test"))
+
+    /// A guard on a volume with 1000 bytes in use, so sizes read as tenths of a percent.
+    private var guardian: SafetyGuard {
+        SafetyGuard(
+            home: "/Users/tester", volumes: emptyVolumes, isRunningAsRoot: false,
+            volumeCapacity: { _ in VolumeCapacity(name: "Test", mountPoint: "/", total: 2000, freeNow: 1000, available: 1000) })
+    }
+
+    @Test("By hand, an item over 10% of used space needs confirmation")
+    func manualVolumeShare() {
+        let manual = CleanupContext.manual(confirmed: false)
+        #expect(guardian.evaluate(path: path, size: 100, rule: safeRule, context: manual).decision == .allow)
+        #expect(guardian.evaluate(path: path, size: 150, rule: safeRule, context: manual).decision == .confirm)
+        #expect(guardian.evaluate(path: path, size: 300, rule: safeRule, context: manual).decision == .confirm)
+    }
+
+    @Test("Automatically, an item up to 25% of used space is allowed and anything bigger is blocked")
+    func automaticVolumeShare() {
+        #expect(guardian.evaluate(path: path, size: 150, rule: safeRule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: path, size: 250, rule: safeRule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: path, size: 300, rule: safeRule, context: automatic).isBlocked)
+    }
+
+    @Test("Pattern rules are in scope only under their roots, outside their exclusions")
+    func patternScope() {
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"], exclude: ["~/Code/vendor"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let guardian = testGuard()
+        #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: rule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: rule, context: automatic).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/Code/vendor/lib/node_modules", rule: rule, context: automatic).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/code/VENDOR/lib/node_modules", rule: rule, context: automatic).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/.npm/_npx/abc/node_modules", rule: rule, context: automatic).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/Code/Tool.app/Contents/node_modules", rule: rule, context: automatic).isBlocked)
+        #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules/x", rule: rule, context: automatic).isBlocked)
+    }
+
+    @Test("Pattern rules without roots search the configured developer roots")
+    func patternRoots() {
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let guardian = SafetyGuard(home: "/Users/tester", volumes: emptyVolumes, isRunningAsRoot: false, patternRoots: ["/opt/work"])
+        #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: rule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: "/Users/tester/app/node_modules", rule: rule, context: automatic).isBlocked)
+        let ownRoots = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"], roots: ["~/Code"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: ownRoots, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
+    }
+}

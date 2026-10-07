@@ -63,6 +63,41 @@ public enum PathUtil {
         return realParent == "/" ? "/" + name : realParent + "/" + name
     }
 
+    /// The form two paths are compared in when deciding whether one is protected. APFS is case-insensitive
+    /// and normalization-insensitive by default, so `~/library` and `~/Library` are the same folder; comparing
+    /// keys means a different spelling can't slip past a protected list. On a case-sensitive volume this
+    /// over-matches, which only ever blocks more.
+    public static func comparisonKey(_ path: String) -> String {
+        path.lowercased().precomposedStringWithCanonicalMapping
+    }
+
+    /// True if `pattern` contains glob characters (`*`, `?`, `[`).
+    public static func isGlob(_ pattern: String) -> Bool {
+        pattern.contains { "*?[".contains($0) }
+    }
+
+    /// True if `path` is a location `pattern` describes, or lies inside one. `pattern` is an expanded path
+    /// that may contain globs.
+    public static func isInside(_ path: String, pattern: String) -> Bool {
+        guard isGlob(pattern) else { return isAncestorOrEqual(pattern, of: path) }
+        return matches(path, glob: pattern) || matches(path, glob: pattern + "/**")
+    }
+
+    /// True if `path` is a strict ancestor of a location `pattern` could describe: each of its components
+    /// matches the pattern's component at the same depth, and the pattern goes deeper. Nothing is read from
+    /// disk, so a folder counts as containing a match even before one exists there.
+    public static func couldContain(_ path: String, pattern: String) -> Bool {
+        guard isGlob(pattern) else { return isStrictAncestor(path, of: pattern) }
+        let parts = components(path)
+        let globParts = components(pattern)
+        for (index, part) in parts.enumerated() {
+            guard index < globParts.count else { return false }
+            if globParts[index] == "**" { return true }
+            guard fnmatch(String(globParts[index]), String(part), 0) == 0 else { return false }
+        }
+        return parts.count < globParts.count
+    }
+
     public static func components(_ path: String) -> [Substring] {
         path.split(separator: "/", omittingEmptySubsequences: true)
     }
@@ -92,7 +127,7 @@ public enum PathUtil {
     /// Expands shell-style globs (`*`, `?`, `[...]`) after `~` expansion. Non-glob paths are returned as-is if they exist.
     public static func glob(_ pattern: String, home: String = PathUtil.home) -> [String] {
         let expanded = expand(pattern, home: home)
-        guard expanded.contains(where: { "*?[".contains($0) }) else {
+        guard isGlob(expanded) else {
             return FileManager.default.fileExists(atPath: expanded) ? [expanded] : []
         }
         var result = glob_t()

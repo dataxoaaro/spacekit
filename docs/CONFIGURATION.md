@@ -136,6 +136,10 @@ A value SpaceKit can't read makes the whole file invalid; it is never silently r
 
 While the file is invalid, every command, the TUI and the app keep working for anything read-only, using the defaults and showing a warning. **Nothing is removed and no tool command runs** until the file is fixed, because the defaults lack your protected paths, allowed commands and disabled rules. The TUI's header and a banner above every section of the app say that cleaning is off until the file is fixed. Nothing saves over an invalid file: `spacekit jobs add/remove/enable/disable` exit with status 1, and the app's Settings and the TUI show the error, so your hand edits stay as they are. Valid files are changed in place: SpaceKit re-reads the file and applies only the one change, so edits made elsewhere in the meantime are kept.
 
+**Symlinks.** A config path that is a symlink (dotfiles) is read through the link. A symlink whose target is missing or can't be read is a config error, not a missing config, so cleaning stops instead of running on the defaults. `spacekit config init` never replaces a symlink, even with `--force`, and saves (the app, `spacekit jobs`) write through the link to its target.
+
+**Who can change it.** The background agent reads the config unattended, so SpaceKit reads it only if it is owned by you or root, isn't writable by group or others, and isn't in a folder that group or others can write to without the sticky bit. For a symlink, the target's owner and permissions count, and both the link's folder and the target's folder. A config that fails this is a config error. Rule files follow the same rules, and one that fails them isn't loaded (see [RULES.md](RULES.md#your-own-rules-and-overrides)).
+
 ## Files SpaceKit writes
 
 | File | What |

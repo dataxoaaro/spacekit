@@ -107,7 +107,7 @@ A monthly job runs on `day` 1 to 28 (default 1), so it runs every month; a large
 
 | `safety.trash` | Manual cleanups | Automatic jobs |
 |---|---|---|
-| `always` (default) | Everything goes to the Trash. The CLI refuses `--permanent`, and the app has no delete option. | Everything goes to the Trash, whatever the job's `action`. |
+| `always` (default) | Everything goes to the Trash; the executor enforces this whatever a front end asks for. The CLI refuses `--permanent`, and the app has no delete option. Emptying the Trash still deletes, since that is the only way to remove what's in it. | Everything goes to the Trash, whatever the job's `action`. |
 | `rules` | When every rule in a cleanup is 🟢 with `safety.trash: false`, its items are deleted; otherwise everything goes to the Trash. The CLI's `--permanent` and the app's toggle delete everything. Paths you name on the CLI send the whole cleanup to the Trash unless you pass `--permanent`. | `action: delete` deletes 🟢 items; `action: rule` follows each rule; `action: trash` trashes. Everything that isn't 🟢 goes to the Trash. |
 
 Items already in the Trash can only be deleted. Automatic runs delete them only when a 🟢 rule covers them.
@@ -132,7 +132,7 @@ The agent uses the config and state folder of the command that installed it: `sp
 
 A value SpaceKit can't read makes the whole file invalid; it is never silently replaced by a default. `spacekit config validate` names the key and the problem (for example `jobs.[0].when.olderThan: '6m' means 6 minutes; did you mean 6mo (months)?`) and exits with status 1. It also reports jobs that name an unknown or disabled rule.
 
-While the file is invalid, every command, the TUI and the app keep working for anything read-only, using the defaults and showing a warning. **Nothing is removed and no tool command runs** until the file is fixed, because the defaults lack your protected paths, allowed commands and disabled rules. The app's Settings and the TUI won't save over an invalid file, so your hand edits stay as they are.
+While the file is invalid, every command, the TUI and the app keep working for anything read-only, using the defaults and showing a warning. **Nothing is removed and no tool command runs** until the file is fixed, because the defaults lack your protected paths, allowed commands and disabled rules. Nothing saves over an invalid file: `spacekit jobs add/remove/enable/disable` exit with status 1, and the app's Settings and the TUI show the error, so your hand edits stay as they are. Valid files are changed in place: SpaceKit re-reads the file and applies only the one change, so edits made elsewhere in the meantime are kept.
 
 ## Files SpaceKit writes
 

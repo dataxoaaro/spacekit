@@ -30,7 +30,7 @@ export SPACEKIT_CONFIG=/private/tmp/sk/config.yaml SPACEKIT_STATE_DIR=/private/t
 ```
 
 - **`SPACEKIT_HOME` works in debug builds only.** It moves SpaceKit's idea of the home folder, and with it the default config and state locations and every home protection, to a sandbox folder. Release builds (`make app`, `make install`, `swift build -c release`) ignore it, so it can never strip the protections from your real home.
-- **Write `/private/tmp`, not `/tmp`.** `/tmp` is a symlink to `/private/tmp`, and scans report the resolved path, so rule and job paths under `/tmp` don't match what a scan of that folder finds. The app's debug `confirm-cleanup` hook (below) also only accepts a sandbox home spelled `/private/tmp/…` or `/private/var/folders/…`.
+- **`/tmp` and `/private/tmp` both work.** Rule paths, pattern roots, job paths and the debug sandbox home are resolved through symlinks before they're compared, so either spelling matches what a scan finds.
 - **Keep the real Trash out of it.** Moving to the Trash uses macOS's Trash, whatever the sandbox, so anything you clean with the default `safety.trash: always` lands in your own `~/.Trash`. To test removals without that, set `safety.trash: rules` in the sandbox config and give your fixture rules `safety: { level: safe, trash: false }` and `action: remove`, with paths inside the sandbox. A cleanup made only of such rules deletes directly. Paths you name on `spacekit clean` still go to the Trash unless you pass `--permanent`.
 
 ## Adding or fixing a rule
@@ -63,7 +63,7 @@ printf 'scan=~/Library/Developer\n' > /tmp/sk/shots/request
 printf 'section=dev\nsnapshot=dev.png\n' > /tmp/sk/shots/request      # → /tmp/sk/shots/dev.png
 ```
 
-Supported keys: `section`, `visualization`, `color`, `depth`, `scan`, `focus`, `select`, `hover`, `sheet` (`onboarding`, `safety`, `job`, `cleanup`, `cleanup:<rule-id>`, `settings`), `close`, `snapshot`. `confirm-cleanup` runs the open cleanup only when `SPACEKIT_HOME` is a temporary sandbox spelled `/private/tmp/…` or `/private/var/folders/…`, every item lies inside it, and the plan has no tool commands. It never confirms warnings, so it removes only items the guard allows outright, such as items of a 🟢 rule.
+Supported keys: `section`, `visualization`, `color`, `depth`, `scan`, `focus`, `select`, `hover`, `sheet` (`onboarding`, `safety`, `job`, `cleanup`, `cleanup:<rule-id>`, `settings`), `close`, `snapshot`. `confirm-cleanup` runs the open cleanup only when `SPACEKIT_HOME` resolves to a temporary sandbox under `/private/tmp` or `/private/var/folders`, every item lies inside it, and the plan has no tool commands. It never confirms warnings, so it removes only items the guard allows outright, such as items of a 🟢 rule.
 
 ## Reporting bugs
 

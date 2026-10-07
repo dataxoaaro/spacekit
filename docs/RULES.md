@@ -135,7 +135,10 @@ policy:
 ai:
   tool: Ollama         # name in the AI Development view
   layout: ollama       # how models are laid out on disk
+  removeCommand: [ollama, rm, "{name}"]   # optional: how the tool removes one model
 ```
+
+`removeCommand` is for tools whose models share files, so only the tool knows what may go. `{name}` is the model's name as the AI view shows it; `{path}` isn't allowed. It goes through the same checks as `action.command`: a bare executable name, built-in trust or `safety.allowedCommands`, no `sudo`, confirmation for 🟡 rules and the automatic byte budget. Model names that start with `-` are refused. A model of a rule without `removeCommand` is removed by its folders.
 
 | Layout | Meaning |
 |---|---|

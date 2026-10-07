@@ -64,6 +64,10 @@ public struct RuleLibrary: Sendable {
 
         for (directory, isBuiltin) in sources {
             for file in yamlFiles(in: directory) {
+                if let problem = FileTrust.problem(with: file) {
+                    issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
+                    continue
+                }
                 let parsed: [Rule]
                 do {
                     parsed = try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file)

@@ -32,6 +32,9 @@ public struct ConfigStore: Sendable {
     /// an error: the defaults would lack the person's protections.
     public func load() throws -> SpaceKitConfig {
         guard exists else { return SpaceKitConfig() }
+        if let problem = FileTrust.problem(with: file) {
+            throw ConfigError.invalid(file: file, message: "\(problem); SpaceKit only reads a config only you can change")
+        }
         let text: String
         do {
             text = try String(contentsOfFile: file, encoding: .utf8)

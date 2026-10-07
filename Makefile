@@ -34,7 +34,8 @@ install: release ## Install the CLI to $(BINDIR) and the rule library to $(SHARE
 	rm -rf "$(SHAREDIR)/rules" && cp -R rules "$(SHAREDIR)/rules"
 	@echo "Installed $(BINDIR)/spacekit. Make sure $(BINDIR) is on your PATH, then try: spacekit doctor"
 
-uninstall: ## Remove the installed CLI and rules (your config and history stay)
+uninstall: ## Stop the background agent, remove the installed CLI and rules (your config and history stay)
+	@if [ -x "$(BINDIR)/spacekit" ]; then "$(BINDIR)/spacekit" agent uninstall || true; fi
 	rm -f "$(BINDIR)/spacekit"
 	rm -rf "$(SHAREDIR)"
 

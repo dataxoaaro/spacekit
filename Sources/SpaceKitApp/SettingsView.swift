@@ -272,7 +272,7 @@ private struct RulesSettingsPane: View {
                     }
                 }
             }
-            Text("Your own rules live in \(PathUtil.abbreviate(model.context.paths.userRulesDirectory)).").font(.caption).foregroundStyle(
+            Text("Your own rules live in \(PathUtil.abbreviate(model.paths.userRulesDirectory)).").font(.caption).foregroundStyle(
                 .secondary)
         }
         .padding()
@@ -283,18 +283,18 @@ private struct ConfigFilePane: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let paths = model.context.paths
+        let paths = model.paths
         VStack(alignment: .leading, spacing: 12) {
             Text("Everything here is stored as YAML, so you can keep it in your dotfiles and edit it by hand.")
                 .foregroundStyle(.secondary)
             LabeledContent("Config", value: PathUtil.abbreviate(paths.configFile))
             LabeledContent("Your rules", value: PathUtil.abbreviate(paths.userRulesDirectory))
             LabeledContent("History & journal", value: PathUtil.abbreviate(paths.stateDirectory))
-            if let error = model.context.configError {
+            if let error = model.configError {
                 Label(error, systemImage: "xmark.octagon").foregroundStyle(Theme.critical)
             } else {
                 Label(
-                    model.context.configStore.exists ? "Config is valid" : "No config file yet — using defaults",
+                    model.configFileExists ? "Config is valid" : "No config file yet — using defaults",
                     systemImage: "checkmark.circle"
                 )
                 .foregroundStyle(Theme.good)
@@ -308,15 +308,7 @@ private struct ConfigFilePane: View {
             .padding(8)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
             HStack {
-                Button("Create Starter Config") {
-                    _ = try? model.context.configStore.initialize()
-                    model.reloadContext()
-                }
-                .disabled(model.context.configStore.exists)
-                Button("Open in Editor") {
-                    _ = try? model.context.configStore.initialize()
-                    NSWorkspace.shared.open(URL(fileURLWithPath: paths.configFile))
-                }
+                ConfigFileButtons()
                 Button("Reveal in Finder") { model.reveal(paths.configFile) }
                 Spacer()
                 Button("Reload") { model.reloadContext() }

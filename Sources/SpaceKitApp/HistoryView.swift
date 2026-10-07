@@ -8,7 +8,7 @@ struct HistoryView: View {
     @State private var hoveredDate: Date?
 
     private var points: [(date: Date, used: UInt64, total: UInt64)] {
-        model.context.history.dailyUsage(days: days)
+        model.historyStore.dailyUsage(days: days)
     }
 
     var body: some View {
@@ -56,7 +56,7 @@ struct HistoryView: View {
     }
 
     private var deltas: some View {
-        let history = model.context.history
+        let history = model.historyStore
         let month = history.usedDelta(over: .days(30))
         let range = history.usedDelta(over: .days(Double(days)))
         return HStack(spacing: 12) {
@@ -144,7 +144,7 @@ struct HistoryView: View {
 
     // Growth is polarity, so it uses a diverging pair: warm for grew, cool for shrank. Values are labeled directly.
     private var growthChart: some View {
-        let grew = model.context.history.whatGrew(over: .days(Double(days)), limit: 10)
+        let grew = model.historyStore.whatGrew(over: .days(Double(days)), limit: 10)
         return Card {
             VStack(alignment: .leading, spacing: 8) {
                 Text("What grew?").font(.headline)

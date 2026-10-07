@@ -158,6 +158,10 @@ final class AppModel {
 
     var config: SpaceKitConfig { context.config }
     var library: RuleLibrary { context.library }
+    var paths: SpaceKitPaths { context.paths }
+    var historyStore: HistoryStore { context.history }
+    var configFileExists: Bool { context.configStore.exists }
+    var configError: String? { context.configError }
 
     // MARK: Config
 
@@ -184,6 +188,27 @@ final class AppModel {
             context.config = saved
             if saved.jobs != before.jobs { refreshJournal() }
         }
+    }
+
+    /// Writes the commented starter config if there's no config file yet, and loads it.
+    func createStarterConfig() {
+        do {
+            try context.configStore.initialize()
+        } catch {
+            errorMessage = "Couldn't create the config: \(error.localizedDescription)"
+        }
+        reloadContext()
+    }
+
+    /// Opens the config file in the default editor, creating the starter config first if there's none.
+    func openConfigInEditor() {
+        do {
+            try context.configStore.initialize()
+        } catch {
+            errorMessage = "Couldn't create the config: \(error.localizedDescription)"
+            return
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: paths.configFile))
     }
 
     /// Re-reads config and rules from disk (after edits in the YAML file).

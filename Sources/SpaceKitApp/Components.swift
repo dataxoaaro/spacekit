@@ -163,3 +163,14 @@ struct FlowLayout: Layout {
         return rows
     }
 }
+
+/// "Create Starter Config" and "Open in Editor", as onboarding and Settings show them.
+struct ConfigFileButtons: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button("Create Starter Config") { model.createStarterConfig() }
+            .disabled(model.configFileExists)
+        Button("Open in Editor") { model.openConfigInEditor() }
+    }
+}

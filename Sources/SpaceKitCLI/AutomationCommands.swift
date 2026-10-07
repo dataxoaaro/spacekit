@@ -12,10 +12,19 @@ struct JobsCommand: ParsableCommand {
     )
 
     static func find(_ id: String, in context: SpaceKitContext) throws -> Job {
-        guard let job = context.config.jobs.first(where: { $0.id == id }) else {
-            throw ValidationError("No job '\(id)'. See `spacekit jobs list`.")
-        }
+        guard let job = context.config.jobs.first(where: { $0.id == id }) else { throw noJob(id) }
         return job
+    }
+
+    static func noJob(_ id: String) -> ValidationError { ValidationError("No job '\(id)'. See `spacekit jobs list`.") }
+
+    /// Changes the config file as it is on disk now. A file that doesn't parse is never replaced: saving the
+    /// defaults loaded in its place would drop protected paths, allowed commands and disabled rules.
+    static func updateConfig(_ context: SpaceKitContext, _ change: (inout SpaceKitConfig) throws -> Void) throws {
+        if let error = context.configError {
+            throw ValidationError("Config file is invalid: \(error). Fix it (spacekit config validate) first; nothing was saved.")
+        }
+        try context.configStore.update(change)
     }
 
     /// The job, what it matched now and whether it would run.
@@ -170,15 +179,9 @@ struct JobsCommand: ParsableCommand {
                     Output.warn(Output.safe("Automatic runs won't clean inside \(folder): \(verdict.reasons.joined(separator: "; "))"))
                 }
             }
-            var config = context.config
-            let base = job.id
-            var counter = 2
-            while config.jobs.contains(where: { $0.id == job.id }) {
-                job.id = "\(base)-\(counter)"
-                counter += 1
-            }
-            config.jobs.append(job)
-            try context.configStore.save(config)
+            var storedID = job.id
+            try JobsCommand.updateConfig(context) { storedID = $0.upsertJob(job, replacing: nil) }
+            job.id = storedID
             print("Added job " + Output.safe(job.id).bold + ": \(job.mode.title), \(job.schedule). " + job.conditionSummary.dim)
             if job.mode == .automatic && !LaunchAgent(paths: context.paths).status().loaded {
                 print("Install the background agent so it runs on schedule: ".fg(ANSI.review) + "spacekit agent install".bold)
@@ -193,10 +196,10 @@ struct JobsCommand: ParsableCommand {
 
         func run() throws {
             let context = global.loadContext()
-            _ = try JobsCommand.find(id, in: context)
-            var config = context.config
-            config.jobs.removeAll { $0.id == id }
-            try context.configStore.save(config)
+            try JobsCommand.updateConfig(context) { config in
+                guard config.jobs.contains(where: { $0.id == id }) else { throw JobsCommand.noJob(id) }
+                config.jobs.removeAll { $0.id == id }
+            }
             print("Removed \(Output.safe(id)).")
         }
     }
@@ -217,10 +220,10 @@ struct JobsCommand: ParsableCommand {
 
     static func setEnabled(_ id: String, _ enabled: Bool, _ global: GlobalOptions) throws {
         let context = global.loadContext()
-        _ = try find(id, in: context)
-        var config = context.config
-        for index in config.jobs.indices where config.jobs[index].id == id { config.jobs[index].enabled = enabled }
-        try context.configStore.save(config)
+        try updateConfig(context) { config in
+            guard let index = config.jobs.firstIndex(where: { $0.id == id }) else { throw noJob(id) }
+            config.jobs[index].enabled = enabled
+        }
         print("\(Output.safe(id)): \(enabled ? "on" : "off")")
     }
 

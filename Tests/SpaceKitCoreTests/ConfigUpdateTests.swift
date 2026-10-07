@@ -36,6 +36,22 @@ struct ConfigUpdateTests {
         #expect(try String(contentsOfFile: file, encoding: .utf8) == broken)
     }
 
+    @Test("Adding a job to a config that doesn't parse keeps the person's protections on disk")
+    func addJobRefusesInvalidFile() throws {
+        let tree = try TempTree()
+        let file = tree.path("config.yaml")
+        let broken = "safety:\n  protectedPaths: [~/Work]\n  trash: sometimes\nrules:\n  disabled: [node.node-modules]\n"
+        try broken.write(toFile: file, atomically: true, encoding: .utf8)
+        let context = SpaceKitContext.load(paths: SpaceKitPaths(configFile: file, stateDirectory: tree.path("state")))
+        #expect(context.configError != nil)
+
+        #expect(throws: ConfigError.self) {
+            try context.configStore.update { $0.upsertJob(Job(id: "new", name: "New", rules: ["x"]), replacing: nil) }
+        }
+        #expect(try String(contentsOfFile: file, encoding: .utf8) == broken)
+        #expect(!FileManager.default.fileExists(atPath: file + ".bak"))
+    }
+
     @Test("An update without a config file starts from the defaults")
     func updateCreatesFile() throws {
         let tree = try TempTree()

@@ -20,7 +20,7 @@ struct RuleSelection: ParsableArguments {
             ? library.rules
             : rules.map { id in
                 guard let rule = library.rule(id: id) else {
-                    throw ValidationError("Unknown rule '\(id)'. See `spacekit rules list`.")
+                    throw ValidationError("Unknown rule '\(Output.safe(id))'. See `spacekit rules list`.")
                 }
                 return rule
             }

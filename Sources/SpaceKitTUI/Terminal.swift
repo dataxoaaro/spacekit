@@ -2,13 +2,11 @@ import Darwin
 import Foundation
 import SpaceKitCore
 
-public typealias Key = TerminalKey
-
 /// Raw-mode terminal I/O for the full-screen interface.
 public final class Terminal {
     private var isRaw = false
-    /// Bytes of a key sequence cut off at the end of the previous read.
-    private var pending: [UInt8] = []
+    /// Seconds to wait for the rest of a key sequence the terminal split across reads.
+    private static let sequenceGap: TimeInterval = 0.03
 
     public init() {}
 
@@ -62,28 +60,49 @@ public final class Terminal {
         }
     }
 
-    /// Waits up to `timeout` seconds for input and returns every key in it.
-    public func readKeys(timeout: TimeInterval) -> [Key] {
-        var pfd = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
-        guard poll(&pfd, 1, Int32(timeout * 1000)) > 0 else {
-            // A sequence the terminal never finished isn't a key.
-            pending = []
-            return []
+    /// Waits up to `timeout` seconds for input and returns every key in it. A key sequence cut off at the end
+    /// of a read gets one short wait for the rest, so a split arrow key isn't read as Escape.
+    public func readKeys(timeout: TimeInterval) -> [TerminalKey] {
+        guard let bytes = readAvailable(timeout: timeout) else { return [] }
+        var parsed = KeyParser.parse(bytes)
+        var keys = parsed.keys
+        while !parsed.rest.isEmpty {
+            guard let more = readAvailable(timeout: Terminal.sequenceGap) else { return keys + KeyParser.flush(parsed.rest) }
+            parsed = KeyParser.parse(parsed.rest + more)
+            keys += parsed.keys
         }
+        return keys
+    }
+
+    private func readAvailable(timeout: TimeInterval) -> [UInt8]? {
+        var pfd = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+        guard poll(&pfd, 1, Int32(timeout * 1000)) > 0 else { return nil }
         var buffer = [UInt8](repeating: 0, count: 256)
         let count = read(STDIN_FILENO, &buffer, buffer.count)
-        guard count > 0 else { return [] }
-        let parsed = KeyParser.parse(pending + buffer[0..<count])
-        pending = parsed.rest
-        return parsed.keys
+        guard count > 0 else { return nil }
+        return Array(buffer[0..<count])
     }
+
+    /// While on, SIGTERM, SIGHUP and SIGINT don't end the process: the terminal is put back at once and the
+    /// signal is kept in `heldSignal`, so work that must not stop halfway (a cleanup) can finish first.
+    public func holdTerminationSignals(_ hold: Bool) {
+        TerminalRestore.holding.pointee = hold ? 1 : 0
+    }
+
+    /// A termination signal that arrived while signals were held. The terminal has already been put back,
+    /// so nothing should be drawn any more.
+    public var heldSignal: Int32? {
+        let signal = TerminalRestore.held.pointee
+        return signal == 0 ? nil : Int32(signal)
+    }
+
 }
 
 /// Puts the terminal back from signal handlers and `atexit`.
 ///
 /// Signal handlers may only call async-signal-safe functions, so everything they need is prepared up front
 /// in memory that is never reallocated: the saved terminal settings and the bytes that leave the alternate
-/// screen. The handlers then only call `write(2)`, `tcsetattr(3)`, `signal(3)` and `raise(3)`.
+/// screen. The handlers then only call `write(2)`, `tcsetattr(3)`, `signal(3)` and `raise(3)`, and set `sig_atomic_t` flags.
 private enum TerminalRestore {
     nonisolated(unsafe) static let saved: UnsafeMutablePointer<termios> = {
         let pointer = UnsafeMutablePointer<termios>.allocate(capacity: 1)
@@ -96,19 +115,28 @@ private enum TerminalRestore {
         _ = buffer.initialize(from: sequence)
         return UnsafeBufferPointer(buffer)
     }()
-    nonisolated(unsafe) static let armed: UnsafeMutablePointer<sig_atomic_t> = {
+    nonisolated(unsafe) static let armed = flag()
+    /// 1 while termination signals are held.
+    nonisolated(unsafe) static let holding = flag()
+    /// The termination signal that arrived while held, or 0.
+    nonisolated(unsafe) static let held = flag()
+    static let terminationSignals = [SIGTERM, SIGHUP, SIGINT]
+    static let fatalSignals = terminationSignals + [SIGQUIT, SIGABRT, SIGTRAP, SIGILL, SIGSEGV, SIGBUS]
+    // Read and written only by `arm()`, which runs on the UI thread, never from a signal handler.
+    nonisolated(unsafe) private static var registeredAtExit = false
+
+    private static func flag() -> UnsafeMutablePointer<sig_atomic_t> {
         let pointer = UnsafeMutablePointer<sig_atomic_t>.allocate(capacity: 1)
         pointer.initialize(to: 0)
         return pointer
-    }()
-    static let fatalSignals = [SIGTERM, SIGHUP, SIGINT, SIGQUIT, SIGABRT, SIGTRAP, SIGILL, SIGSEGV, SIGBUS]
-    nonisolated(unsafe) private static var registeredAtExit = false
+    }
 
     static func arm() {
         // Touch every static before a handler can run, so handlers never trigger their lazy initialisation.
-        _ = (saved, bytes, armed)
+        _ = (saved, bytes, armed, holding, held)
         armed.pointee = 1
         for signal in fatalSignals { Darwin.signal(signal, restoreAndReraise) }
+        for signal in terminationSignals { Darwin.signal(signal, restoreAndHoldOrReraise) }
         if !registeredAtExit {
             registeredAtExit = true
             atexit(restoreAtExit)
@@ -133,6 +161,15 @@ private func restoreAndReraise(_ signal: Int32) {
     TerminalRestore.run()
     Darwin.signal(signal, SIG_DFL)
     raise(signal)
+}
+
+private func restoreAndHoldOrReraise(_ signal: Int32) {
+    guard TerminalRestore.holding.pointee != 0 else {
+        restoreAndReraise(signal)
+        return
+    }
+    TerminalRestore.run()
+    TerminalRestore.held.pointee = sig_atomic_t(signal)
 }
 
 private func restoreAtExit() {

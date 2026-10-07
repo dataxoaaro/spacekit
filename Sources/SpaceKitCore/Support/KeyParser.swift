@@ -10,7 +10,9 @@ public enum TerminalKey: Equatable, Sendable {
 ///
 /// One read can hold many keys (a held arrow key, pasted text), so every key in it is returned. A sequence
 /// cut off at the end of the read (part of an escape sequence or of a UTF-8 character) is returned as `rest`
-/// for the caller to put in front of the next read.
+/// for the caller to put in front of the next read. A lone `ESC` at the end of a read is held back the same way,
+/// because a terminal can split an arrow key's `ESC [ B` across two reads; when no more bytes follow, `flush`
+/// turns it into the Escape key.
 public enum KeyParser {
     public static func parse(_ bytes: [UInt8]) -> (keys: [TerminalKey], rest: [UInt8]) {
         var keys: [TerminalKey] = []
@@ -27,6 +29,12 @@ public enum KeyParser {
             }
         }
         return (keys, [])
+    }
+
+    /// The keys in bytes `parse` held back once the terminal sent nothing more: a lone `ESC` is the Escape key,
+    /// and anything else is a sequence the terminal never finished.
+    public static func flush(_ rest: [UInt8]) -> [TerminalKey] {
+        rest == [0x1B] ? [.escape] : []
     }
 
     private enum Step {
@@ -50,10 +58,10 @@ public enum KeyParser {
         }
     }
 
-    /// `ESC` alone is the Escape key. `ESC [ … final` (CSI) and `ESC O x` (SS3) are cursor and editing keys;
-    /// `ESC` before anything else is an Alt combination, read as Escape.
+    /// `ESC` before another `ESC` is the Escape key. `ESC [ … final` (CSI) and `ESC O x` (SS3) are cursor and
+    /// editing keys; `ESC` before anything else is an Alt combination, read as Escape.
     private static func escape(in bytes: [UInt8], at index: Int) -> Step {
-        guard index + 1 < bytes.count else { return .key(.escape, length: 1) }
+        guard index + 1 < bytes.count else { return .incomplete }
         switch bytes[index + 1] {
         case UInt8(ascii: "["):
             var end = index + 2

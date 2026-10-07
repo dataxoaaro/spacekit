@@ -119,17 +119,17 @@ enum Parse {
     }
 
     static func age(_ text: String) throws -> Age {
-        guard let age = Age.parse(text) else { throw ValidationError("Invalid age '\(text)'. Use values like 30m, 1h or 2d.") }
+        guard let age = Age.parse(text) else { throw ValidationError("Invalid age '\(Output.safe(text))'. Use values like 30m, 1h or 2d.") }
         return age
     }
 
     static func size(_ text: String) throws -> ByteCount {
-        guard let size = ByteCount.parse(text) else { throw ValidationError("Invalid size '\(text)'. Use values like 500MB, 30GB.") }
+        guard let size = ByteCount.parse(text) else { throw ValidationError("Invalid size '\(Output.safe(text))'. Use values like 500MB, 30GB.") }
         return size
     }
 
     static func schedule(_ text: String) throws -> Schedule {
-        guard let schedule = Schedule.parse(text) else { throw ValidationError("Couldn't understand schedule '\(text)'") }
+        guard let schedule = Schedule.parse(text) else { throw ValidationError("Couldn't understand schedule '\(Output.safe(text))'") }
         return schedule
     }
 }

@@ -12,21 +12,23 @@ extension TUIApp {
         var allowed = CleanupPlan(manualSteps: plan.manualSteps, useTrash: plan.useTrash, created: plan.created)
         var needConfirmation = 0
         var blocked = 0
+        // Every reason the guard gave is listed, because the first one raised isn't always the one that decided:
+        // a git repository (confirm) can also sit in a protected folder (block).
         func add(_ verdict: SafetyVerdict, _ text: String) -> Bool {
-            let reason = clean(verdict.reasons.first ?? "")
-            lines.append(verdict.decision.mark + " " + text)
+            let color = verdict.decision.color
             switch verdict.decision {
             case .allow:
+                lines.append(verdict.decision.mark + " " + text)
                 return true
             case .confirm:
                 needConfirmation += 1
-                lines.append("    " + reason.fg(verdict.decision.color))
-                return true
+                lines.append(verdict.decision.mark + " " + text)
             case .block:
                 blocked += 1
-                lines.append("    " + ("Blocked: " + reason).fg(verdict.decision.color))
-                return false
+                lines.append(verdict.decision.mark + " " + text + "  " + "blocked".fg(color))
             }
+            lines += verdict.reasons.map { "    · " + clean($0).fg(color) }
+            return verdict.decision == .confirm
         }
         for item in plan.itemsLargestFirst {
             let verdict = executor.verdict(for: item, context: .manual(confirmed: false))
@@ -77,6 +79,9 @@ extension TUIApp {
             return
         }
         state.activity = .cleaning
+        // Stopping mid-removal would leave an item half deleted; the journal is written per removal, so
+        // finishing first and then exiting is safe.
+        terminal.holdTerminationSignals(true)
         let (executor, inbox) = (context.executor, inbox)
         Thread.detachNewThread {
             // The person saw every item and warning in the preview and pressed y.
@@ -87,6 +92,7 @@ extension TUIApp {
 
     func cleanupFinished(_ report: CleanupReport, job: JobEvaluation?) {
         state.activity = nil
+        terminal.holdTerminationSignals(false)
         let removals = Removal.from(report)
         for removal in removals { state.marked[removal.path] = nil }
         if state.analysisProgress != nil {
@@ -100,7 +106,7 @@ extension TUIApp {
             if let problem = record(job, report: report) { lines.append(problem.fg(ANSI.protected)) }
             refreshAutomation()
         }
-        if state.quitWhenIdle {
+        if state.quitWhenIdle || terminal.heldSignal != nil {
             state.exitMessage = lines.joined(separator: "\n")
             state.quit = true
             return
@@ -153,7 +159,9 @@ extension TUIApp {
                 state.explore.selection = min(state.explore.selection, max(0, current.items.count - 1))
             }
         }
-        state.result?.apply(removals, exploreTree: state.tree)
+        // A copy: reading `state.tree` inside the mutating call on `state.result` is an exclusivity violation.
+        let tree = state.tree
+        state.result?.apply(removals, exploreTree: tree)
     }
 
     func nearestNode(to path: String, in tree: ScanTree) -> DirNode {

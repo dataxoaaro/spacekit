@@ -92,6 +92,46 @@ public enum ANSI {
         return cut.text + reset + String(repeating: " ", count: width - cut.columns)
     }
 
+    /// Splits a styled line into rows of at most `width` columns, breaking after a space where there is one.
+    /// Later rows keep the line's leading indent and reopen the styles in effect where the previous row ended.
+    static func wrap(_ line: String, to width: Int) -> [String] {
+        guard width > 0, self.width(line) > width else { return [line] }
+        let indent = String(repeating: " ", count: min(line.prefix { $0 == " " }.count, width / 2))
+        var rows: [String] = []
+        var rest = Substring(line)
+        var styles = ""
+        while true {
+            let lead = rows.isEmpty ? "" : indent
+            let room = width - lead.count
+            if self.width(String(rest)) <= room {
+                rows.append(lead + styles + rest)
+                return rows
+            }
+            var row = Substring(TerminalWidth.prefix(String(rest), columns: room).text)
+            if row.isEmpty { row = rest.prefix(1) }
+            if let space = row.lastIndex(of: " "), row[..<space].contains(where: { $0 != " " }) {
+                row = row[...space]
+            }
+            rows.append(lead + styles + row)
+            styles = openStyles(after: styles + row)
+            rest = rest.dropFirst(row.count).drop { $0 == " " }
+        }
+    }
+
+    /// The style sequences in `text` that no later reset cancels.
+    private static func openStyles(after text: Substring) -> String {
+        var open = ""
+        var sequence = ""
+        for character in text {
+            if sequence.isEmpty, character != "\u{1B}" { continue }
+            sequence.append(character)
+            guard sequence.count > 2, let last = character.asciiValue, (0x40...0x7E).contains(last) else { continue }
+            open = sequence == reset ? "" : open + sequence
+            sequence = ""
+        }
+        return open
+    }
+
     public static func pad(_ text: String, to width: Int, alignRight: Bool = false) -> String {
         let w = self.width(text)
         guard w < width else { return text }

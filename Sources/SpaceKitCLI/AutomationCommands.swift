@@ -16,7 +16,7 @@ struct JobsCommand: ParsableCommand {
         return job
     }
 
-    static func noJob(_ id: String) -> ValidationError { ValidationError("No job '\(id)'. See `spacekit jobs list`.") }
+    static func noJob(_ id: String) -> ValidationError { ValidationError("No job '\(Output.safe(id))'. See `spacekit jobs list`.") }
 
     /// Changes the config file as it is on disk now. A file that doesn't parse is never replaced: saving the
     /// defaults loaded in its place would drop protected paths, allowed commands and disabled rules.
@@ -153,8 +153,8 @@ struct JobsCommand: ParsableCommand {
             let context = global.loadContext()
             var rules: [Rule] = []
             for id in rule {
-                guard let found = context.library.rule(id: id) else { throw ValidationError("Unknown rule '\(id)'") }
-                guard found.safety.level != .protected else { throw ValidationError("\(found.name) is protected and can't be cleaned") }
+                guard let found = context.library.rule(id: id) else { throw ValidationError("Unknown rule '\(Output.safe(id))'") }
+                guard found.safety.level != .protected else { throw ValidationError("\(Output.safe(found.name)) is protected and can't be cleaned") }
                 rules.append(found)
             }
             var job = rules.first.map(Job.suggested(for:)) ?? Job(id: "custom", name: name ?? "Custom cleanup")
@@ -350,7 +350,7 @@ struct SuggestionsCommand: ParsableCommand {
 
     static func find(_ id: String, in context: SpaceKitContext) throws -> Suggestion {
         guard let suggestion = context.suggestions.get(id) else {
-            throw ValidationError("No suggestion '\(id)'. See `spacekit suggestions`.")
+            throw ValidationError("No suggestion '\(Output.safe(id))'. See `spacekit suggestions`.")
         }
         return suggestion
     }
@@ -405,8 +405,8 @@ struct SuggestionsCommand: ParsableCommand {
             let suggestion = try SuggestionsCommand.find(id, in: context)
             guard let job = context.config.jobs.first(where: { $0.id == suggestion.jobID }) else {
                 throw ValidationError(
-                    "The job that prepared this suggestion (\(suggestion.jobID)) is no longer in your config, so its conditions can't be "
-                        + "checked. Dismiss it: spacekit suggestions dismiss \(suggestion.id)")
+                    "The job that prepared this suggestion (\(Output.safe(suggestion.jobID))) is no longer in your config, so its conditions can't be "
+                        + "checked. Dismiss it: spacekit suggestions dismiss \(Output.safe(suggestion.id))")
             }
             let runner = JobRunner(context: context)
             let evaluation = try ProgressReporter.run("Checking \(Output.safe(job.name))") { try runner.evaluate(job, progress: $0) }
@@ -417,7 +417,7 @@ struct SuggestionsCommand: ParsableCommand {
             notes += dropped.map { "  no longer eligible: ".dim + Output.path($0.path) }
             Output.emit(notes, toStandardError: json)
             guard !plan.isEmpty else {
-                let dismiss = "spacekit suggestions dismiss \(suggestion.id)"
+                let dismiss = "spacekit suggestions dismiss \(Output.safe(suggestion.id))"
                 Output.emit(
                     ["Nothing in this suggestion still matches the job's conditions. Dismiss it: " + dismiss], toStandardError: json)
                 if json {
@@ -428,7 +428,7 @@ struct SuggestionsCommand: ParsableCommand {
             guard
                 let report = try CleanupOutput.session(
                     plan, executor: runner.executor, yes: yes, json: json, interactive: false, heading: "Suggested cleanup",
-                    hint: "Preview only. Approve with: spacekit suggestions approve \(suggestion.id) --yes")
+                    hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes")
             else { return }
             let recorded = JobsCommand.record(.manual(evaluation, report: report), runner: runner)
             if report.removedAnything && !report.hasProblems {
@@ -472,7 +472,7 @@ struct AgentCommand: ParsableCommand {
             try context.paths.ensureDirectories()
             let stamp = Date().ISO8601Format()
             print("[\(stamp)] agent run")
-            let results = JobRunner(context: context).runDue { print("[\(stamp)] \($0)") }
+            let results = JobRunner(context: context).runDue { print("[\(stamp)] \(Output.safe($0))") }
             if results.isEmpty { print("[\(stamp)] no jobs due") }
         }
     }

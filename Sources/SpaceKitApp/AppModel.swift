@@ -64,7 +64,7 @@ final class AppModel {
     var focus: DirNode?
     var selection: MapItem?
     var hovered: MapItem?
-    var backStack: [DirNode] = []
+    private var backStack: [DirNode] = []
     private(set) var categories: [CategorySlice] = []
     /// Labels folders until an analysis exists.
     private var libraryIndex: RuleIndex {
@@ -75,7 +75,10 @@ final class AppModel {
     var colorMode: UISettings.ColorMode
     var mapDepth: Int
     private var scanTask: Task<Void, Never>?
-    @ObservationIgnored private var scanRequests = RequestGeneration()
+    /// Bumped by every scan; a scan that finishes after a newer one started is dropped.
+    @ObservationIgnored private var scanGeneration = 0
+    /// When the scan behind `tree` started. Plans made from it don't touch loose files changed after this.
+    @ObservationIgnored private(set) var treeScanStarted = Date()
     /// The folder the current `tree` is a scan of (`scanPath` moves on as soon as another scan starts).
     @ObservationIgnored private var treeScanPath: String?
     /// Off-main work reading the trees, and tree changes waiting for it to finish (see `readingTrees`).
@@ -90,7 +93,8 @@ final class AppModel {
     var analysis: Analysis? { analysisResult?.analysis }
     var aiReport: AIReport? { analysisResult?.aiReport }
     private(set) var analysisProgress: ScanProgress?
-    @ObservationIgnored private var analysisRequests = RequestGeneration()
+    /// Bumped by every analysis; only the latest one's result is used.
+    @ObservationIgnored private var analysisGeneration = 0
 
     // MARK: Cleanup
     /// Items collected from Explore and Dev Intelligence for one combined review.
@@ -108,7 +112,7 @@ final class AppModel {
     /// Cleanups removing things right now. Quitting waits for them (see `AppDelegate`).
     private(set) var runningCleanups = 0
     /// Set when the person chose to quit while a cleanup ran; the app quits once the last one finishes.
-    @ObservationIgnored var quitWhenCleanupsFinish = false
+    @ObservationIgnored private var quitWhenCleanupsFinish = false
 
     // Render-time caches. Not observed, so filling them during a view update doesn't trigger another one.
     @ObservationIgnored private var itemsCache: [UInt: [DiskItem]] = [:]
@@ -129,8 +133,8 @@ final class AppModel {
     private(set) var trashBytes: UInt64?
     /// Local Time Machine snapshots on the startup disk; they hold deleted files' space as "purgeable".
     private(set) var localSnapshotCount = 0
-    @ObservationIgnored var capacityMonitor: Task<Void, Never>?
-    @ObservationIgnored var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var capacityMonitor: Task<Void, Never>?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
     private(set) var runningJobID: String?
 
     struct PendingCleanup: Identifiable {
@@ -265,7 +269,9 @@ final class AppModel {
     func scan(_ path: String? = nil) {
         if let path { scanPath = PathUtil.expand(path) }
         scanTask?.cancel()
-        let generation = scanRequests.next()
+        scanGeneration += 1
+        let generation = scanGeneration
+        let started = Date()
         let progress = ScanProgress()
         scanProgress = progress
         progressSnapshot = progress.snapshot
@@ -285,14 +291,14 @@ final class AppModel {
             defer { poller.cancel() }
             do {
                 let tree = try await Scanner(options: options).scan(root, progress: progress)
-                guard self.scanRequests.isCurrent(generation) else { return }
+                guard self.scanGeneration == generation else { return }
                 if tree.stats.cancelled {
                     self.stopScan()
                 } else {
-                    self.finishScan(tree, path: root)
+                    self.finishScan(tree, path: root, started: started)
                 }
             } catch {
-                guard self.scanRequests.isCurrent(generation) else { return }
+                guard self.scanGeneration == generation else { return }
                 self.errorMessage = error.localizedDescription
                 self.stopScan()
             }
@@ -311,9 +317,10 @@ final class AppModel {
         if let treeScanPath { scanPath = treeScanPath }
     }
 
-    private func finishScan(_ tree: ScanTree, path: String) {
+    private func finishScan(_ tree: ScanTree, path: String, started: Date) {
         self.tree = tree
         treeScanPath = path
+        treeScanStarted = started
         treeRevision += 1
         focus = tree.root
         scanProgress = nil
@@ -370,7 +377,8 @@ final class AppModel {
     /// analysed.
     func analyze() {
         analysisProgress?.cancel()
-        let generation = analysisRequests.next()
+        analysisGeneration += 1
+        let generation = analysisGeneration
         let progress = ScanProgress()
         analysisProgress = progress
         let analyzer = context.analyzer
@@ -386,12 +394,12 @@ final class AppModel {
                     return AnalysisResult(analysis, rules: rules, activeModelWindow: window)
                 }
             } catch {
-                guard self.analysisRequests.isCurrent(generation) else { return }
+                guard self.analysisGeneration == generation else { return }
                 self.analysisProgress = nil
                 self.errorMessage = error.localizedDescription
                 return
             }
-            guard self.analysisRequests.isCurrent(generation) else { return }
+            guard self.analysisGeneration == generation else { return }
             self.analysisProgress = nil
             self.analysisResult = result
             let analysis = result.analysis
@@ -403,11 +411,48 @@ final class AppModel {
         }
     }
 
+    // MARK: Monitoring
+
+    /// Keeps capacity live: every few seconds (one cheap system call per volume), and immediately when SpaceKit
+    /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder).
+    private func startMonitoring() {
+        observers.append(
+            NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
+                [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.refreshVolumes()
+                    self.refreshTrash(resync: true)
+                    self.refreshSnapshots()
+                }
+            })
+        startCapacityLoop()
+        refreshSnapshots()
+    }
+
+    private func startCapacityLoop() {
+        capacityMonitor?.cancel()
+        capacityMonitor = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                self?.refreshVolumes()
+            }
+        }
+    }
+
     // MARK: State changes
-    // Extensions in other files read the published state freely but change it only through these methods, so the
-    // properties keep their private setters.
+    // Extensions in other files change private state only through these methods, so it keeps its private setters.
 
     func beginCleanup() { runningCleanups += 1 }
+
+    /// Asks the app to quit once the last running cleanup finishes.
+    func quitWhenCleanupsAreDone() { quitWhenCleanupsFinish = true }
+
+    /// Moves the map to `node` with an empty back history, after the folders it held were removed.
+    func refocus(on node: DirNode?) {
+        focus = node
+        backStack = []
+    }
 
     func endCleanup() {
         runningCleanups -= 1

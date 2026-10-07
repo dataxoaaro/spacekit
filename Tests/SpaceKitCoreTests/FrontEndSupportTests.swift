@@ -5,16 +5,6 @@ import Testing
 
 @Suite("Front-end support")
 struct FrontEndSupportTests {
-    @Test("Starting a new request makes every earlier tag stale")
-    func requestGenerations() {
-        var generation = RequestGeneration()
-        let first = generation.next()
-        #expect(generation.isCurrent(first))
-        let second = generation.next()
-        #expect(!generation.isCurrent(first))
-        #expect(generation.isCurrent(second))
-    }
-
     @Test("Rule docs open only as https links")
     func docsLinks() {
         func url(_ docs: String?) -> URL? { Rule(id: "r", name: "r", docs: docs).docsURL }

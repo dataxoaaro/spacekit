@@ -37,7 +37,8 @@ struct CleanupSheet: View {
         var plan = pending.plan
         plan.items = rows.filter { !$0.verdict.isBlocked && !excluded.contains($0.item.id) }.map(\.item)
         plan.commands = selectedCommandRows.map(\.command)
-        plan.useTrash = useTrash
+        // With `safety.trash: always` the executor moves everything to the Trash whatever the plan says.
+        plan.useTrash = useTrash || model.config.safety.trashesEverything
         return plan
     }
 

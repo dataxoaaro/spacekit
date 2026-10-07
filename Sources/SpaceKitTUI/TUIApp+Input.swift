@@ -7,7 +7,7 @@ extension TUIApp {
         return false
     }
 
-    func handle(_ key: Key) {
+    func handle(_ key: TerminalKey) {
         if key == .character("q") || key == .control("c"), state.modal == nil || isCleaning {
             requestQuit()
             return
@@ -64,23 +64,25 @@ extension TUIApp {
         return true
     }
 
-    func handleModal(_ key: Key) {
+    func handleModal(_ key: TerminalKey) {
         guard var modal = state.modal else { return }
-        let visible = modalListHeight(modal, size: terminal.size)
+        let size = terminal.size
+        let layout = modalLayout(modal, width: size.columns, bodyHeight: size.rows - TUIApp.chromeRows)
+        let page = max(1, layout.visible - 1)
         switch key {
-        case .up, .character("k"): modal.pager.scroll(by: -1, visible: visible)
-        case .down, .character("j"): modal.pager.scroll(by: 1, visible: visible)
-        case .pageUp: modal.pager.scroll(by: -max(1, visible - 1), visible: visible)
-        case .pageDown, .space: modal.pager.scroll(by: max(1, visible - 1), visible: visible)
-        case .home: modal.pager.scroll(by: -modal.lines.count, visible: visible)
-        case .end: modal.pager.scroll(by: modal.lines.count, visible: visible)
+        case .up, .character("k"): modal.scroll(by: -1, in: layout)
+        case .down, .character("j"): modal.scroll(by: 1, in: layout)
+        case .pageUp: modal.scroll(by: -page, in: layout)
+        case .pageDown, .space: modal.scroll(by: page, in: layout)
+        case .home: modal.scroll(by: -layout.rows.count, in: layout)
+        case .end: modal.scroll(by: layout.rows.count, in: layout)
         case .character("y"), .character("Y"):
             guard let onConfirm = modal.onConfirm else {
                 state.modal = nil
                 return
             }
-            guard modal.pager.hasShownEnd else {
-                flash("Scroll to the end of the list first (↓ or PgDn), then press y")
+            guard modal.hasShownEveryLine else {
+                flash("Scroll through the whole list first (↓ or PgDn), then press y")
                 return
             }
             state.modal = nil
@@ -122,7 +124,7 @@ extension TUIApp {
 
     // MARK: Explore
 
-    func handleExplore(_ key: Key) {
+    func handleExplore(_ key: TerminalKey) {
         let items = state.current?.items ?? []
         let pageSize = max(1, terminal.size.rows - 8)
         switch key {
@@ -166,7 +168,6 @@ extension TUIApp {
                 guard let item = selectedItem(items).flatMap(cleanupItem(for:)) else { return }
                 plan.items = [item]
             }
-            plan.useTrash = context.trashPreference(for: .trash) ?? true
             confirmCleanup(plan, title: "Clean selected items")
         default:
             break
@@ -183,6 +184,12 @@ extension TUIApp {
 
     // MARK: Dev Intelligence
 
+    /// Moves a selection off a group heading (or past the end) to the nearest row below it that keys act on,
+    /// so the highlighted row is always the one `d`, `n` or Enter use.
+    static func settle(_ selection: Int, on selectable: [Int]) -> Int {
+        selectable.first { $0 >= selection } ?? selectable.last ?? 0
+    }
+
     func devRows() -> [(group: String, finding: Finding?)] {
         guard let analysis = state.analysis else { return [] }
         var rows: [(String, Finding?)] = []
@@ -195,7 +202,7 @@ extension TUIApp {
         return rows
     }
 
-    func handleDev(_ key: Key) {
+    func handleDev(_ key: TerminalKey) {
         if key == .character("r") {
             guard !refuseWhileBusy() else { return }
             guard state.analysisProgress == nil else {
@@ -209,6 +216,7 @@ extension TUIApp {
         let rows = devRows()
         let selectable = rows.indices.filter { rows[$0].finding != nil }
         guard !selectable.isEmpty else { return }
+        state.dev.selection = TUIApp.settle(state.dev.selection, on: selectable)
         let position = selectable.firstIndex(of: state.dev.selection) ?? 0
         func select(_ p: Int) { state.dev.selection = selectable[min(max(p, 0), selectable.count - 1)] }
         guard let finding = rows[selectable[position]].finding else { return }
@@ -272,10 +280,11 @@ extension TUIApp {
         return rows
     }
 
-    func handleAI(_ key: Key) {
+    func handleAI(_ key: TerminalKey) {
         let rows = aiRows()
         let selectable = rows.indices.filter { rows[$0].model != nil }
         guard !selectable.isEmpty else { return }
+        state.ai.selection = TUIApp.settle(state.ai.selection, on: selectable)
         let position = selectable.firstIndex(of: state.ai.selection) ?? 0
         func select(_ p: Int) { state.ai.selection = selectable[min(max(p, 0), selectable.count - 1)] }
         switch key {

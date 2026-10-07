@@ -308,7 +308,7 @@ struct MapItemMenu: View {
                 }
                 .disabled(model.isInCleanupList(disk.path))
                 Button("Move to Trash…") {
-                    model.review(CleanupPlan(items: [cleanup], useTrash: true), title: "Remove \(disk.name)")
+                    model.review(model.manualPlan([cleanup]), title: "Remove \(disk.name)")
                 }
             }
             if let path = disk.path, disk.isDirectory {

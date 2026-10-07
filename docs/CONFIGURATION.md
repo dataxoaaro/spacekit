@@ -107,7 +107,7 @@ A monthly job runs on `day` 1 to 28 (default 1), so it runs every month; a large
 
 | `safety.trash` | Manual cleanups | Automatic jobs |
 |---|---|---|
-| `always` (default) | Everything goes to the Trash; the executor enforces this whatever a front end asks for. The CLI refuses `--permanent`, and the app has no delete option. Emptying the Trash still deletes, since that is the only way to remove what's in it. | Everything goes to the Trash, whatever the job's `action`. |
+| `always` (default) | Everything goes to the Trash; the executor enforces this whatever a front end asks for. The CLI refuses `--permanent`, and the app's cleanup sheet has no delete option and its button says Move to Trash. Emptying the Trash still deletes, since that is the only way to remove what's in it. | Everything goes to the Trash, whatever the job's `action`. |
 | `rules` | When every rule in a cleanup is 🟢 with `safety.trash: false`, its items are deleted; otherwise everything goes to the Trash. The CLI's `--permanent` and the app's toggle delete everything. Paths you name on the CLI send the whole cleanup to the Trash unless you pass `--permanent`. | `action: delete` deletes 🟢 items; `action: rule` follows each rule; `action: trash` trashes. Everything that isn't 🟢 goes to the Trash. |
 
 Items already in the Trash can only be deleted. Automatic runs delete them only when a 🟢 rule covers them.
@@ -126,13 +126,15 @@ Jobs only run on schedule when the background agent is installed (`spacekit agen
 
 The agent uses the config and state folder of the command that installed it: `spacekit agent install --config ~/dotfiles/spacekit.yaml` writes that path (and `SPACEKIT_STATE_DIR`, if set) into the plist's environment. After changing `checkEvery` by hand, run `spacekit agent install` again; the app's Settings reinstall the agent for you.
 
-`spacekit jobs run <id>` previews what a job would do; `--yes` runs it now, confirming the warnings the preview showed; `--scheduled` runs it exactly as the agent would.
+`spacekit jobs run <id>` previews what a job would do; `--yes` runs it now, confirming the warnings the preview showed; `--scheduled` runs it exactly as the agent would. Run Now in the app and `x` in the TUI evaluate the job first. When its conditions aren't met (`sizeAbove`, `olderThan`, …) nothing is cleaned: the check is recorded as a manual run and its result shown, as with `jobs run --yes`. Otherwise the cleanup is reviewed like any other, and the run is recorded against the job.
+
+Approving a suggestion (`spacekit suggestions approve <id> --yes`, or in the app) evaluates its job again, cleans what still qualifies and records a manual run of the job, so the job's last run moves to now. The suggestion is removed only when the cleanup removed something without problems; otherwise it stays so you can try again or dismiss it.
 
 ### Invalid config
 
 A value SpaceKit can't read makes the whole file invalid; it is never silently replaced by a default. `spacekit config validate` names the key and the problem (for example `jobs.[0].when.olderThan: '6m' means 6 minutes; did you mean 6mo (months)?`) and exits with status 1. It also reports jobs that name an unknown or disabled rule.
 
-While the file is invalid, every command, the TUI and the app keep working for anything read-only, using the defaults and showing a warning. **Nothing is removed and no tool command runs** until the file is fixed, because the defaults lack your protected paths, allowed commands and disabled rules. Nothing saves over an invalid file: `spacekit jobs add/remove/enable/disable` exit with status 1, and the app's Settings and the TUI show the error, so your hand edits stay as they are. Valid files are changed in place: SpaceKit re-reads the file and applies only the one change, so edits made elsewhere in the meantime are kept.
+While the file is invalid, every command, the TUI and the app keep working for anything read-only, using the defaults and showing a warning. **Nothing is removed and no tool command runs** until the file is fixed, because the defaults lack your protected paths, allowed commands and disabled rules. The TUI's header and a banner above every section of the app say that cleaning is off until the file is fixed. Nothing saves over an invalid file: `spacekit jobs add/remove/enable/disable` exit with status 1, and the app's Settings and the TUI show the error, so your hand edits stay as they are. Valid files are changed in place: SpaceKit re-reads the file and applies only the one change, so edits made elsewhere in the meantime are kept.
 
 ## Files SpaceKit writes
 

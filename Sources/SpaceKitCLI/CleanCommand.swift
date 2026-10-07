@@ -91,7 +91,7 @@ struct CleanCommand: ParsableCommand {
             let path = PathUtil.expandArgument(target)
             var st = stat()
             guard target.hasPrefix("/") || target.hasPrefix("~") || target.hasPrefix(".") || lstat(path, &st) == 0 else {
-                throw ValidationError("'\(target)' is neither a rule id nor an existing path. See `spacekit rules list`.")
+                throw ValidationError("'\(Output.safe(target))' is neither a rule id nor an existing path. See `spacekit rules list`.")
             }
             paths.append(path)
         }
@@ -120,7 +120,7 @@ struct CleanCommand: ParsableCommand {
     /// executor removes.
     private func pathItem(_ path: String, context: SpaceKitContext, index: RuleIndex) throws -> CleanupItem {
         var st = stat()
-        guard lstat(path, &st) == 0 else { throw ValidationError("No such file or folder: \(path)") }
+        guard lstat(path, &st) == 0 else { throw ValidationError("No such file or folder: \(Output.safe(path))") }
         let isFolder = (st.st_mode & S_IFMT) == S_IFDIR
         let kind: FindingItem.Kind = isFolder ? .directory : .file
         let rule = index.rule(for: path)

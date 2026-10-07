@@ -27,7 +27,10 @@ public final class TUIApp {
         var lines: [String]
         /// Always visible below the scrolling lines, whatever the scroll position.
         var footer: [String] = []
-        var pager: Pager
+        /// The first wrapped row on screen.
+        var offset = 0
+        /// Which of `lines` have been drawn whole. Jumping to the end doesn't mark the lines in between.
+        var shown: [Bool]
         /// Runs when the person presses `y`, once every line has been on screen. `nil` makes it an information box.
         var onConfirm: (() -> Void)?
         var confirmLabel = "y confirm · n cancel"
@@ -36,9 +39,46 @@ public final class TUIApp {
             self.title = title
             self.lines = lines
             self.footer = footer
-            self.pager = Pager(lineCount: lines.count)
+            self.shown = Array(repeating: false, count: lines.count)
             self.onConfirm = onConfirm
             if let confirmLabel { self.confirmLabel = confirmLabel }
+        }
+
+        var hasShownEveryLine: Bool { !shown.contains(false) }
+
+        /// Moves by `delta` rows without scrolling past either end of `layout`.
+        mutating func scroll(by delta: Int, in layout: ModalLayout) {
+            offset = layout.clamp(offset + delta)
+        }
+
+        /// The rows to draw with `layout`, recording which lines they show whole. Call it with what is drawn.
+        mutating func display(_ layout: ModalLayout) -> Range<Int> {
+            offset = layout.clamp(offset)
+            guard layout.visible > 0 else { return offset..<offset }
+            let range = offset..<min(layout.rows.count, offset + layout.visible)
+            guard let first = range.first, let last = range.last else { return range }
+            for line in layout.rows[first].line...layout.rows[last].line {
+                let rows = layout.lineRows[line]
+                // A line taller than the box can't be on screen at once; its last row coming into view counts.
+                let isTall = rows.count > layout.visible
+                if range.contains(rows.upperBound - 1), isTall || range.contains(rows.lowerBound) { shown[line] = true }
+            }
+            return range
+        }
+    }
+
+    /// A dialog fitted to the screen: its lines wrapped to the box width, and how many rows of them fit.
+    struct ModalLayout {
+        var boxWidth: Int
+        /// Every wrapped row and the index of the line it belongs to.
+        var rows: [(text: String, line: Int)]
+        /// The rows of each line.
+        var lineRows: [Range<Int>]
+        var footer: [String]
+        var visible: Int
+
+        func clamp(_ offset: Int) -> Int {
+            min(max(offset, 0), max(0, rows.count - max(1, visible)))
         }
     }
 
@@ -147,6 +187,13 @@ public final class TUIApp {
         while !state.quit {
             let events = inbox.drain()
             for event in events { handle(event) }
+            // A termination signal held during a cleanup has already put the terminal back: stop drawing and
+            // reading keys, and quit once the cleanup is done.
+            if terminal.heldSignal != nil {
+                if isCleaning { state.quitWhenIdle = true } else { state.quit = true }
+                Thread.sleep(forTimeInterval: 0.08)
+                continue
+            }
             let keys = terminal.readKeys(timeout: 0.08)
             for key in keys where !state.quit { handle(key) }
             if !events.isEmpty || !keys.isEmpty || Date().timeIntervalSince(lastRender) > 0.12 {
@@ -156,6 +203,10 @@ public final class TUIApp {
         }
         terminal.restore()
         if let message = state.exitMessage { print(message) }
+        if let signal = terminal.heldSignal {
+            fflush(stdout)
+            raise(signal)
+        }
     }
 
     // MARK: Background work

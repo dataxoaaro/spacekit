@@ -31,8 +31,15 @@ extension AppModel {
         pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
     }
 
+    /// A plan for items picked from the map or the cleanup list, dated by the scan they came from (loose files
+    /// changed since aren't touched), moved to the Trash.
+    func manualPlan(_ items: [CleanupItem]) -> CleanupPlan {
+        CleanupPlan(items: items, useTrash: true, created: treeScanStarted)
+    }
+
     func reviewFinding(_ finding: Finding, items: [FindingItem]? = nil) {
-        let plan = CleanupPlan.make(findings: [finding], trashPreference: context.trashPreference(for: .rule)) { items ?? $0.items }
+        let plan = CleanupPlan.make(
+            findings: [finding], trashPreference: context.trashPreference(for: .rule), created: treeScanStarted) { items ?? $0.items }
         review(plan, title: "Clean \(finding.rule.name)")
     }
 
@@ -84,15 +91,13 @@ extension AppModel {
         // Tool commands free space their own way; re-evaluate just those rules.
         refreshFindings(ruleIDs: report.rulesToReevaluate)
 
-        // Navigation and selection.
         let removedPaths = Set(removals.filter { $0.kind != .looseFiles }.map(\.path))
         if let focus, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: focus.path) }) {
             var survivor = focus.parent
             while let node = survivor, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: node.path) }) {
                 survivor = node.parent
             }
-            self.focus = survivor ?? tree?.root
-            backStack = []
+            refocus(on: survivor ?? tree?.root)
         }
         if !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) {
             cleanupList.removeAll { item in

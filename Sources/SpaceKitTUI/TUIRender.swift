@@ -59,7 +59,11 @@ extension TUIApp {
 
     func headerLine(width: Int) -> String {
         let title = " ◆ SpaceKit ".styled(Style(fg: 255, bg: 25, bold: true))
-        let tagline = "  Understand your Mac. Automate the cleanup.".dim
+        // The startup warning about an invalid config is hidden by the alternate screen, so it stays up here.
+        let tagline =
+            context.configError == nil
+            ? "  Understand your Mac. Automate the cleanup.".dim
+            : "  Config file is invalid; cleaning is off. Run spacekit config validate".bold.fg(ANSI.protected)
         var right = ""
         if let capacity = state.tree?.capacity ?? VolumeCapacity.of(path: state.rootPath) {
             let fraction = capacity.usedFraction
@@ -143,37 +147,49 @@ extension TUIApp {
 
     // MARK: Modal
 
-    /// Rows a dialog's scrolling lines get: the body minus the borders, the key hint and the pinned footer.
-    func modalListHeight(_ modal: Modal, bodyHeight: Int) -> Int {
-        let footer = modal.footer.isEmpty ? 0 : modal.footer.count + 1
-        return max(0, min(modal.lines.count, bodyHeight - 3 - footer))
+    /// Lays a dialog out in a body `bodyHeight` rows tall: long lines wrap to the box, and the scrolling rows
+    /// get what the borders, the key hint and the pinned footer leave.
+    func modalLayout(_ modal: Modal, width: Int, bodyHeight: Int) -> ModalLayout {
+        let count = modal.lines.count
+        let position = "\(count)–\(count) of \(count) · "
+        let hints = [position + TUIApp.scrollToConfirmHint, position + modal.confirmLabel]
+        let longest = (modal.lines + modal.footer + hints).map(ANSI.width).max() ?? 0
+        let boxWidth = max(10, min(width - 4, max(50, longest + 4, ANSI.width(modal.title) + 8)))
+        let inner = boxWidth - 4
+        var rows: [(text: String, line: Int)] = []
+        var lineRows: [Range<Int>] = []
+        for (index, line) in modal.lines.enumerated() {
+            let wrapped = ANSI.wrap(line, to: inner)
+            lineRows.append(rows.count..<(rows.count + wrapped.count))
+            rows += wrapped.map { (text: $0, line: index) }
+        }
+        let footer = modal.footer.flatMap { ANSI.wrap($0, to: inner) }
+        let footerRows = footer.isEmpty ? 0 : footer.count + 1
+        let visible = max(0, min(rows.count, bodyHeight - 3 - footerRows))
+        return ModalLayout(boxWidth: boxWidth, rows: rows, lineRows: lineRows, footer: footer, visible: visible)
     }
 
-    func modalListHeight(_ modal: Modal, size: (columns: Int, rows: Int)) -> Int {
-        modalListHeight(modal, bodyHeight: size.rows - TUIApp.chromeRows)
-    }
+    static let scrollToConfirmHint = "scroll through the list (↓ PgDn) to confirm · n cancel"
 
     func overlayModal(on body: [String], width: Int) -> [String] {
         guard var modal = state.modal else { return body }
-        let visible = modalListHeight(modal, bodyHeight: body.count)
-        let range = modal.pager.display(visible: visible)
+        let layout = modalLayout(modal, width: width, bodyHeight: body.count)
+        let range = modal.display(layout)
         state.modal = modal
 
-        let hint = modalHint(modal, range: range)
-        let longest = (modal.lines + modal.footer + [hint]).map(ANSI.width).max() ?? 40
-        let boxWidth = max(10, min(width - 4, max(50, longest + 4, ANSI.width(modal.title) + 8)))
+        let boxWidth = layout.boxWidth
         let inner = boxWidth - 4
         func row(_ line: String) -> String { "│ " + ANSI.fit(ANSI.truncate(line, to: inner), to: inner) + " │" }
 
         var box: [String] = []
         let title = ANSI.truncate(modal.title, to: max(0, boxWidth - 6))
         box.append("╭─ " + title.bold + " " + String(repeating: "─", count: max(0, boxWidth - ANSI.width(title) - 5)) + "╮")
-        for line in modal.lines[range] { box.append(row(line)) }
-        if !modal.footer.isEmpty {
+        for index in range { box.append(row(layout.rows[index].text)) }
+        if !layout.footer.isEmpty {
             box.append("├" + String(repeating: "─", count: boxWidth - 2) + "┤")
-            for line in modal.footer { box.append(row(line)) }
+            for line in layout.footer { box.append(row(line)) }
         }
-        box.append(row(hint.fg(ANSI.accent)))
+        box.append(row(modalHint(modal, range: range, total: layout.rows.count).fg(ANSI.accent)))
         box.append("╰" + String(repeating: "─", count: boxWidth - 2) + "╯")
 
         var result = body
@@ -185,14 +201,13 @@ extension TUIApp {
         return result
     }
 
-    private func modalHint(_ modal: Modal, range: Range<Int>) -> String {
-        let total = modal.lines.count
+    private func modalHint(_ modal: Modal, range: Range<Int>, total: Int) -> String {
         if range.isEmpty && total > 0 { return "Make the window taller to see this list · n close" }
         let position = range.count < total ? "\(range.lowerBound + 1)–\(range.upperBound) of \(total) · " : ""
         guard modal.onConfirm != nil else {
             return position + (position.isEmpty ? "any key to close" : "↑↓ scroll · other keys close")
         }
-        guard modal.pager.hasShownEnd else { return position + "scroll to the end (↓ PgDn) to confirm · n cancel" }
+        guard modal.hasShownEveryLine else { return position + TUIApp.scrollToConfirmHint }
         return position + modal.confirmLabel
     }
 

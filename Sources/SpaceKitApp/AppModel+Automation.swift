@@ -7,24 +7,21 @@ extension AppModel {
 
     var jobRunner: JobRunner { JobRunner(context: context) }
 
-    /// Evaluates a job in the background and opens the review sheet with its plan.
+    /// Evaluates a job in the background and opens the review sheet with its plan. A job whose conditions aren't
+    /// met doesn't run, as in the CLI and the TUI: the check is recorded and its result shown.
     func previewJob(_ job: Job) {
         let runner = jobRunner
         Task {
             switch await self.evaluate(job, with: runner) {
             case .success(let evaluation):
                 let plan = runner.plan(for: evaluation)
-                if plan.isEmpty {
+                guard evaluation.isTriggered, !plan.isEmpty else {
                     self.errorMessage = "\(job.name): \(evaluation.triggerSummary)."
-                } else {
-                    self.review(plan, title: "Run “\(job.name)” now") { report in
-                        do {
-                            try runner.record(.manual(evaluation, report: report))
-                        } catch {
-                            self.errorMessage = "Couldn't save the job's state: \(error.localizedDescription)"
-                        }
-                        self.refreshJournal()
-                    }
+                    self.record(evaluation, report: nil, with: runner)
+                    return
+                }
+                self.review(plan, title: "Run “\(job.name)” now") { report in
+                    self.record(evaluation, report: report, with: runner)
                 }
             case .failure(let error):
                 self.errorMessage = error.localizedDescription
@@ -32,8 +29,19 @@ extension AppModel {
         }
     }
 
+    /// Saves a manual run so the job's schedule moves on, as `JobRunner.run` would.
+    private func record(_ evaluation: JobEvaluation, report: CleanupReport?, with runner: JobRunner) {
+        do {
+            try runner.record(.manual(evaluation, report: report))
+        } catch {
+            errorMessage = "Couldn't save the job's state: \(error.localizedDescription)"
+        }
+        refreshJournal()
+    }
+
     /// Re-evaluates the suggestion's job first, so only items that still meet its conditions are offered (a project
-    /// used since it was prepared drops out). The suggestion stays if the cleanup removed nothing and had problems.
+    /// used since it was prepared drops out). The run is recorded against the job, as in the CLI, and the suggestion
+    /// is removed only when the cleanup removed something and had no problems.
     func approve(_ suggestion: Suggestion) {
         guard let job = config.jobs.first(where: { $0.id == suggestion.jobID }) else {
             errorMessage = "The job “\(suggestion.jobName)” that prepared this cleanup no longer exists. Dismiss the suggestion."
@@ -49,11 +57,8 @@ extension AppModel {
                     return
                 }
                 self.review(plan, title: "Approve “\(suggestion.jobName)”") { report in
-                    if report.removedAnything || !report.hasProblems {
-                        self.dismiss(suggestion)
-                    } else {
-                        self.refreshJournal()
-                    }
+                    self.record(evaluation, report: report, with: runner)
+                    if report.removedAnything && !report.hasProblems { self.dismiss(suggestion) }
                 }
             case .failure(let error):
                 self.errorMessage = error.localizedDescription

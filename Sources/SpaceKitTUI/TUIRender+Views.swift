@@ -16,6 +16,7 @@ extension TUIApp {
         let rows = devRows()
         guard !rows.isEmpty else { return ["", "  Nothing recognised. Rules live in rules/ and ~/.config/spacekit/rules.".dim] }
 
+        state.dev.selection = TUIApp.settle(state.dev.selection, on: rows.indices.filter { rows[$0].finding != nil })
         var lines: [String] = []
         lines.append(
             "  " + "Regenerable \(ByteCount.format(analysis.total(.safe)))".fg(ANSI.safe).bold + "   "
@@ -75,6 +76,7 @@ extension TUIApp {
                 + "   " + "Unused \(Int(report.activeWindow.days))+ days \(ByteCount.format(report.unused()))".fg(ANSI.review))
         lines.append("")
         let rows = aiRows()
+        state.ai.selection = TUIApp.settle(state.ai.selection, on: rows.indices.filter { rows[$0].model != nil })
         let tools = Dictionary(report.tools.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         for index in state.ai.visibleRows(height - lines.count, count: rows.count) {
             let row = rows[index]

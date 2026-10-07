@@ -20,9 +20,10 @@ struct RulesView: View {
     var body: some View {
         HSplitView {
             List(selection: $selectedID) {
-                ForEach(groups, id: \.self) { group in
+                let grouped = Dictionary(grouping: rules, by: \.group)
+                ForEach(grouped.keys.sorted(), id: \.self) { group in
                     Section(group) {
-                        ForEach(rules.filter { $0.group == group }) { rule in
+                        ForEach(grouped[group] ?? []) { rule in
                             HStack {
                                 Image(systemName: Theme.symbol(for: rule.safety.level)).foregroundStyle(Theme.color(for: rule.safety.level))
                                 Text(rule.name)
@@ -63,11 +64,6 @@ struct RulesView: View {
         }
     }
 
-    private var groups: [String] {
-        var seen = Set<String>()
-        return rules.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
-    }
-
     private var libraryOverview: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -77,7 +73,7 @@ struct RulesView: View {
                         "\(model.library.rules.count) rules describe where tools keep data, how risky it is to remove, and how to clean it."
                 )
                 Text(
-                    "Rules are plain YAML. Add your own in `~/.config/spacekit/rules/`, or contribute to the built-in library in the project's `rules/` folder. A rule with the same id as a built-in one replaces it."
+                    "Rules are plain YAML. Add your own in `~/.config/spacekit/rules/`, or contribute to the built-in library in the project's `rules/` folder. A rule with the same id as a built-in one replaces it, unless the built-in rule is “Don't touch” or the replacement would lower its safety level."
                 )
                 .foregroundStyle(.secondary)
                 HStack(spacing: 12) {

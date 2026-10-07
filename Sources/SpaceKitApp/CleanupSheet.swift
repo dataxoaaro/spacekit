@@ -1,14 +1,17 @@
 import SpaceKitCore
 import SwiftUI
 
-/// Review-before-remove. Every item shows the safety guard's verdict; blocked items can't be selected,
-/// and items with warnings need an explicit acknowledgement.
+/// Review-before-remove. Every item and tool command shows the safety guard's verdict; blocked ones can't be
+/// selected, and ones with warnings need an explicit acknowledgement.
 struct CleanupSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let pending: AppModel.PendingCleanup
 
+    /// Computed once when the sheet opens; the executor checks everything again right before removal.
+    @State private var verdicts: AppModel.PlanVerdicts?
     @State private var excluded: Set<String> = []
+    @State private var excludedCommands: Set<String> = []
     @State private var acknowledged = false
     @State private var useTrash = true
     @State private var phase: Phase = .review
@@ -21,12 +24,19 @@ struct CleanupSheet: View {
     }
 
     private var rows: [(item: CleanupItem, verdict: SafetyVerdict)] {
-        pending.plan.items.sorted { $0.size > $1.size }.map { ($0, model.verdict(for: $0)) }
+        (verdicts?.items ?? []).sorted { $0.item.size > $1.item.size }
+    }
+
+    private var commandRows: [(command: PlannedCommand, verdict: SafetyVerdict)] { verdicts?.commands ?? [] }
+
+    private var selectedCommandRows: [(command: PlannedCommand, verdict: SafetyVerdict)] {
+        commandRows.filter { !$0.verdict.isBlocked && !excludedCommands.contains($0.command.id) }
     }
 
     private var selectedPlan: CleanupPlan {
         var plan = pending.plan
         plan.items = rows.filter { !$0.verdict.isBlocked && !excluded.contains($0.item.id) }.map(\.item)
+        plan.commands = selectedCommandRows.map(\.command)
         plan.useTrash = useTrash || model.config.safety.trash == .always
         return plan
     }
@@ -39,6 +49,7 @@ struct CleanupSheet: View {
 
     private var needsAcknowledgement: Bool {
         rows.contains { $0.verdict.decision == .confirm && !excluded.contains($0.item.id) }
+            || selectedCommandRows.contains { $0.verdict.decision == .confirm }
     }
 
     var body: some View {
@@ -52,6 +63,7 @@ struct CleanupSheet: View {
         .padding(24)
         .frame(width: 640, height: 560)
         .onAppear { useTrash = pending.plan.useTrash }
+        .task { verdicts = await model.verdicts(for: pending.plan) }
     }
 
     // MARK: Review
@@ -84,23 +96,23 @@ struct CleanupSheet: View {
                                 if included { excluded.remove(row.item.id) } else { excluded.insert(row.item.id) }
                             }))
                 }
-                ForEach(pending.plan.commands) { command in
-                    HStack(alignment: .top) {
-                        Image(systemName: "terminal").foregroundStyle(.secondary)
-                        VStack(alignment: .leading) {
-                            Text(command.displayString).font(.callout.monospaced())
-                            Text(
-                                "Runs the tool's own cleanup, which removes only what the tool knows is unused · up to \(command.estimatedBytes.bytesText)"
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                ForEach(commandRows, id: \.command.id) { row in
+                    CommandRow(
+                        command: row.command, verdict: row.verdict,
+                        isIncluded: Binding(
+                            get: { !row.verdict.isBlocked && !excludedCommands.contains(row.command.id) },
+                            set: { included in
+                                if included { excludedCommands.remove(row.command.id) } else { excludedCommands.insert(row.command.id) }
+                            }))
                 }
                 ForEach(pending.plan.manualSteps, id: \.self) { step in
                     Label(step, systemImage: "hand.point.right").font(.callout).foregroundStyle(.secondary)
                 }
             }
             .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .overlay {
+                if verdicts == nil { ProgressView().controlSize(.small) }
+            }
 
             if pending.plan.items.isEmpty {
                 Label("The tool decides what to remove; SpaceKit measures what was freed afterwards.", systemImage: "terminal")
@@ -156,9 +168,13 @@ struct CleanupSheet: View {
 
     @ViewBuilder
     private func done(_ report: CleanupReport) -> some View {
+        let problems = report.skipped + report.failures
         VStack(alignment: .leading, spacing: 12) {
             // Say exactly what happened: moving to the Trash doesn't free space yet.
-            if report.deletedBytes > 0 || report.trashedBytes == 0 {
+            if !report.removedAnything && (report.hasProblems || !problems.isEmpty) {
+                Label("Nothing was removed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.title2.weight(.semibold)).foregroundStyle(Theme.warning)
+            } else if report.deletedBytes > 0 || report.trashedBytes == 0 {
                 Label("Freed \(report.deletedBytes.bytesText)", systemImage: "checkmark.circle.fill")
                     .font(.title2.weight(.semibold)).foregroundStyle(Theme.good)
             }
@@ -183,7 +199,6 @@ struct CleanupSheet: View {
                 )
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            let problems = report.skipped + report.failures
             if !problems.isEmpty {
                 Text("Left alone").font(.headline)
                 List(problems, id: \.item.id) { problem in
@@ -194,10 +209,12 @@ struct CleanupSheet: View {
                 }
                 .listStyle(.bordered)
             }
-            ForEach(Array(report.commands.enumerated()), id: \.offset) { _, entry in
-                if case .failed(let reason) = entry.outcome {
-                    Label("\(entry.command.displayString): \(reason)", systemImage: "xmark.octagon").foregroundStyle(Theme.critical)
-                }
+            ForEach(Array(report.unfinishedCommands.enumerated()), id: \.offset) { _, problem in
+                Label("\(problem.command.displayString): \(problem.reason)", systemImage: "xmark.octagon").foregroundStyle(Theme.critical)
+            }
+            ForEach(report.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             HStack {
@@ -209,14 +226,50 @@ struct CleanupSheet: View {
 
     private func run() {
         let plan = selectedPlan
+        let confirmed = needsAcknowledgement && acknowledged
         phase = .running
         progress = (0, plan.items.count + plan.commands.count, "")
         Task {
-            let report = await model.execute(plan) { done, total, current in
-                Task { @MainActor in progress = (done, total, current) }
-            }
-            pending.completion?(report)
+            let report = await model.execute(
+                plan, confirmed: confirmed, completion: pending.completion,
+                onProgress: { done, total, current in
+                    Task { @MainActor in progress = (done, total, current) }
+                })
             phase = .done(report)
+        }
+    }
+}
+
+struct CommandRow: View {
+    let command: PlannedCommand
+    let verdict: SafetyVerdict
+    @Binding var isIncluded: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Toggle("", isOn: $isIncluded).labelsHidden().toggleStyle(.checkbox).disabled(verdict.isBlocked)
+            Image(systemName: "terminal").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(command.displayString).font(.callout.monospaced())
+                Text("Runs the tool's own cleanup, which removes only what the tool knows is unused · up to \(command.estimatedBytes.bytesText)")
+                    .font(.caption).foregroundStyle(.secondary)
+                VerdictReasons(verdict: verdict)
+            }
+        }
+        .opacity(verdict.isBlocked ? 0.6 : 1)
+        .padding(.vertical, 2)
+    }
+}
+
+/// The guard's reasons for a verdict: a lock for what's blocked, a warning for what needs confirmation.
+struct VerdictReasons: View {
+    let verdict: SafetyVerdict
+
+    var body: some View {
+        ForEach(verdict.reasons, id: \.self) { reason in
+            Label(reason, systemImage: verdict.isBlocked ? "lock.fill" : "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(verdict.isBlocked ? Theme.critical : Theme.warning)
         }
     }
 }
@@ -239,11 +292,7 @@ struct CleanupRow: View {
                     Text(item.size.bytesText).monospacedDigit().foregroundStyle(.secondary)
                 }
                 Text(PathUtil.abbreviate(item.path)).font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
-                ForEach(verdict.reasons, id: \.self) { reason in
-                    Label(reason, systemImage: verdict.isBlocked ? "lock.fill" : "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(verdict.isBlocked ? Theme.critical : Theme.warning)
-                }
+                VerdictReasons(verdict: verdict)
             }
         }
         .opacity(verdict.isBlocked ? 0.6 : 1)

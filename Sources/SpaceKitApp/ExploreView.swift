@@ -350,7 +350,7 @@ struct SelectionInspector: View {
                     Text("\(directory.fileCount.formatted()) files").foregroundStyle(.secondary)
                 }
                 if let modified = item.modified {
-                    Text("Modified \(modified.shortRelative)").foregroundStyle(.secondary)
+                    Text("Modified \(modified.relativeDescription())").foregroundStyle(.secondary)
                 }
             }
             .font(.caption)
@@ -379,8 +379,8 @@ struct ScanningView: View {
 
     var body: some View {
         HStack(spacing: 32) {
-            if let root = model.liveRoot {
-                LiveScanMap(root: root).frame(width: 320, height: 320)
+            if let scan = model.scanProgress {
+                LiveScanMap(progress: scan).frame(width: 320, height: 320)
             }
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -395,9 +395,9 @@ struct ScanningView: View {
                     .middle
                 )
                 .frame(maxWidth: 420, alignment: .leading)
-                if let root = model.liveRoot, root.isListed {
+                let listed = model.liveChildren.filter(\.isListed)
+                if !listed.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        let listed = root.children.filter(\.isListed)
                         let colorIndex = Dictionary(uniqueKeysWithValues: listed.enumerated().map { ($0.element.address, $0.offset) })
                         let children = listed.sorted { $0.liveSize > $1.liveSize }.prefix(6)
                         ForEach(children, id: \.address) { child in

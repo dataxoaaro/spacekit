@@ -139,7 +139,7 @@ struct FindingCard: View {
                         }
                     }
                     if let recreatedBy = rule.recreatedBy { fact("Recreated by", recreatedBy) }
-                    if let used = finding.lastUsed { fact("Last used", used.shortRelative) }
+                    if let used = finding.lastUsed { fact("Last used", used.relativeDescription()) }
                     if finding.items.count > 1 || rule.isPattern {
                         fact(rule.isPattern ? "Projects" : "Items", "\(finding.items.count)")
                     }
@@ -199,7 +199,7 @@ struct FindingCard: View {
                         Button("Automate…") { model.jobDraft = JobDraft(rule: rule) }
                             .help("Create a scheduled job for this rule")
                         Spacer()
-                        if let docs = rule.docs, let url = URL(string: docs) {
+                        if let url = rule.docsURL {
                             Link("Docs", destination: url).font(.callout)
                         }
                     }

@@ -15,15 +15,12 @@ struct MapGeometry: Sendable {
 final class MapColorer: @unchecked Sendable {
     let mode: UISettings.ColorMode
     let rules: RuleLookupCache
-    let categories: [String: StorageCategory]
+    let locations = CategoryBreakdown.locations(home: PathUtil.home)
     private var categoryCache: [String: StorageCategory] = [:]
 
     init(mode: UISettings.ColorMode, ruleIndex: RuleIndex) {
         self.mode = mode
         self.rules = RuleLookupCache(index: ruleIndex)
-        var categories: [String: StorageCategory] = [:]
-        for (path, category) in CategoryBreakdown.builtinLocations(home: PathUtil.home) { categories[path] = category }
-        self.categories = categories
     }
 
     func color(item: MapItem, branch: Int, depth: Int) -> Color {
@@ -49,21 +46,9 @@ final class MapColorer: @unchecked Sendable {
 
     func category(of item: MapItem) -> StorageCategory {
         guard let path = item.path else { return .other }
-        if let rule = rules.rule(containing: path) {
-            switch rule.topCategory {
-            case "developer": return .developer
-            case "ai": return .ai
-            case "cache": return .caches
-            default: break
-            }
-        }
-        return locationCategory(path)
-    }
-
-    private func locationCategory(_ path: String) -> StorageCategory {
-        if let category = categories[path] { return category }
+        if let rule = rules.rule(containing: path), let category = StorageCategory(ruleCategory: rule.category) { return category }
         if let cached = categoryCache[path] { return cached }
-        let result = path == "/" || path.isEmpty ? StorageCategory.other : locationCategory(PathUtil.parent(path))
+        let result = CategoryBreakdown.nearestCategory(for: path, in: locations) ?? .other
         categoryCache[path] = result
         return result
     }
@@ -141,7 +126,7 @@ struct DiskMapView: View {
         let depth = model.mapDepth
         let colorer = MapColorer(mode: model.colorMode, ruleIndex: model.ruleIndex)
         let key = self.key
-        let result = await Task.detached(priority: .userInitiated) { () -> MapGeometry in
+        let layout = try? await model.readingTrees { () -> MapGeometry in
             var geometry = MapGeometry(key: key, size: size)
             switch visualization {
             case .sunburst:
@@ -153,9 +138,9 @@ struct DiskMapView: View {
                 geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
             }
             return geometry
-        }.value
-        guard !Task.isCancelled else { return }
-        geometry = result
+        }
+        guard let layout, !Task.isCancelled else { return }
+        geometry = layout
     }
 
     // MARK: Sunburst
@@ -168,15 +153,9 @@ struct DiskMapView: View {
 
     private func arcPath(_ arc: SunburstArc, center: CGPoint, inner: CGFloat, ring: CGFloat) -> Path {
         let r0 = inner + CGFloat(arc.ring - 1) * ring
-        let r1 = r0 + ring
         // Layout angles start at 12 o'clock; SwiftUI's start at 3 o'clock.
-        let start = Angle(radians: arc.startAngle - .pi / 2)
-        let end = Angle(radians: arc.endAngle - .pi / 2)
-        var path = Path()
-        path.addArc(center: center, radius: r1, startAngle: start, endAngle: end, clockwise: false)
-        path.addArc(center: center, radius: r0, startAngle: end, endAngle: start, clockwise: true)
-        path.closeSubpath()
-        return path
+        return annularSector(
+            center: center, inner: r0, outer: r0 + ring, start: .radians(arc.startAngle - .pi / 2), end: .radians(arc.endAngle - .pi / 2))
     }
 
     private func drawSunburst(_ context: inout GraphicsContext, size: CGSize) {
@@ -276,15 +255,24 @@ struct DiskMapView: View {
     }
 }
 
+/// A ring segment between two radii, from `start` to `end` clockwise on screen.
+private func annularSector(center: CGPoint, inner: CGFloat, outer: CGFloat, start: Angle, end: Angle) -> Path {
+    var path = Path()
+    path.addArc(center: center, radius: outer, startAngle: start, endAngle: end, clockwise: false)
+    path.addArc(center: center, radius: inner, startAngle: end, endAngle: start, clockwise: true)
+    path.closeSubpath()
+    return path
+}
+
 /// Progressive map while a scan runs: top-level folders grow as their sizes come in.
 struct LiveScanMap: View {
-    let root: DirNode
+    let progress: ScanProgress
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
             Canvas { context, size in
                 // Colors follow listing order, which never changes, so sectors don't repaint as sizes come in.
-                let children = root.isListed ? root.children.filter(\.isListed) : []
+                let children = progress.liveChildren.filter(\.isListed)
                 let total = Double(max(children.reduce(0) { $0 + $1.liveSize }, 1))
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 let outer = min(size.width, size.height) / 2 - 6
@@ -292,12 +280,7 @@ struct LiveScanMap: View {
                 var angle = -Double.pi / 2
                 for (index, child) in children.enumerated() where child.liveSize > 0 {
                     let sweep = Double(child.liveSize) / total * 2 * .pi
-                    var path = Path()
-                    path.addArc(
-                        center: center, radius: outer, startAngle: .radians(angle), endAngle: .radians(angle + sweep), clockwise: false)
-                    path.addArc(
-                        center: center, radius: inner, startAngle: .radians(angle + sweep), endAngle: .radians(angle), clockwise: true)
-                    path.closeSubpath()
+                    let path = annularSector(center: center, inner: inner, outer: outer, start: .radians(angle), end: .radians(angle + sweep))
                     context.fill(path, with: .color(Theme.categorical(index).opacity(0.85)))
                     context.stroke(path, with: .color(Theme.surface), lineWidth: 1)
                     angle += sweep

@@ -79,7 +79,7 @@ private struct ToolCard: View {
                         .width(min: 70, ideal: 80, max: 100)
                     TableColumn("Status") { model in status(model) }
                         .width(min: 80, ideal: 90, max: 110)
-                    TableColumn("Last used") { model in Text(model.lastUsed?.shortRelative ?? "—").foregroundStyle(.secondary) }
+                    TableColumn("Last used") { model in Text(model.lastUsed?.relativeDescription() ?? "—").foregroundStyle(.secondary) }
                         .width(min: 90, ideal: 110, max: 140)
                     TableColumn("") { item in
                         Button("Remove…") { remove(item) }

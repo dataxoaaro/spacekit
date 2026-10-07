@@ -6,14 +6,7 @@ extension AppModel {
     // MARK: Cleanup
 
     func cleanupItem(for item: DiskItem) -> CleanupItem? {
-        guard let path = item.path else { return nil }
-        let git = tree?.markers.bit(for: ".git") ?? 0
-        return CleanupItem(
-            path: path, kind: item.isDirectory ? .directory : .file, name: item.name, size: item.size,
-            ruleID: rule(for: path)?.id,
-            isRepository: (item.directory?.markers ?? 0) & git != 0,
-            containsRepository: (item.directory?.subtreeMarkers ?? 0) & git != 0,
-            lastUsed: item.modified)
+        CleanupItem(item, markers: tree?.markers, ruleID: rule(for: item.path)?.id)
     }
 
     func addToCleanupList(_ items: [CleanupItem]) {
@@ -35,8 +28,6 @@ extension AppModel {
             errorMessage = "Another cleanup is open. Finish or cancel it first."
             return
         }
-        var plan = plan
-        if context.config.safety.trash == .always { plan.useTrash = true }
         pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
     }
 
@@ -55,7 +46,7 @@ extension AppModel {
         let executor = context.executor
         return await Task.detached(priority: .userInitiated) {
             PlanVerdicts(
-                items: plan.items.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
+                items: plan.itemsLargestFirst.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
                 commands: plan.commands.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) })
         }.value
     }
@@ -69,7 +60,7 @@ extension AppModel {
         _ plan: CleanupPlan, confirmed: Bool, completion: (@MainActor (CleanupReport) -> Void)? = nil,
         onProgress: @escaping @Sendable (Int, Int, String) -> Void
     ) async -> CleanupReport {
-        runningCleanups += 1
+        beginCleanup()
         defer { endCleanup() }
         let executor = context.executor
         let report = await Task.detached(priority: .userInitiated) {
@@ -83,50 +74,15 @@ extension AppModel {
         return report
     }
 
-    private func endCleanup() {
-        runningCleanups -= 1
-        if runningCleanups == 0 && quitWhenCleanupsFinish {
-            quitWhenCleanupsFinish = false
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
-    }
-
     /// Brings every view up to date after a cleanup without re-scanning or re-analysing everything:
     /// the trees shrink in place, findings lose only the cleaned items, the AI report and category
     /// totals update only if they were affected, and rules whose tool command ran are re-evaluated alone.
     private func applyRemovals(_ report: CleanupReport) {
         let removals = Removal.from(report)
-
-        // Explore tree. Trashed items move into the Trash folder: they still use space until it's emptied.
-        var exploreChanged = false
-        if let tree {
-            for removal in removals where removal.apply(to: tree) { exploreChanged = true }
-        }
-
-        // Findings (and the analysis tree, if it's a separate scan).
-        var touched = Set<String>()
-        if var updated = analysis {
-            if updated.tree !== tree {
-                for removal in removals { removal.apply(to: updated.tree) }
-            }
-            touched = updated.apply(removals)
-            if !touched.isEmpty { analysis = updated }
-        }
-        if !touched.isEmpty { rebuildAIReportIfNeeded(touchedRules: touched) }
-
-        // Categories: subtract instead of recomputing.
-        if exploreChanged {
-            categories = CategoryBreakdown.subtracting(removals, from: categories, findings: analysis?.findings ?? [])
-            treeRevision += 1
-        }
+        applyToTreesAndFindings(removals)
 
         // Tool commands free space their own way; re-evaluate just those rules.
-        let commandRules = Set(
-            report.commands.compactMap { entry -> String? in
-                if case .removed = entry.outcome { return entry.command.ruleID }
-                return nil
-            })
-        if !commandRules.isEmpty { refreshFindings(ruleIDs: commandRules) }
+        refreshFindings(ruleIDs: report.rulesToReevaluate)
 
         // Navigation and selection.
         let removedPaths = Set(removals.filter { $0.kind != .looseFiles }.map(\.path))
@@ -152,33 +108,5 @@ extension AppModel {
         // Re-measure the Trash exactly (and resync it in the map) once the move has settled.
         refreshTrash(resync: report.trashedBytes > 0 || removals.contains { PathUtil.isStrictAncestor(trashPath, of: $0.path) })
         refreshSnapshots()
-    }
-
-    /// Re-evaluates a few rules with a targeted scan of only their locations, then merges the results.
-    func refreshFindings(ruleIDs: Set<String>) {
-        let rules = ruleIDs.compactMap { library.rule(id: $0) }
-        guard !rules.isEmpty, analysis != nil else { return }
-        refreshingRules.formUnion(ruleIDs)
-        let analyzer = context.analyzer
-        Task {
-            let fresh = try? await analyzer.analyze(rules: rules)
-            refreshingRules.subtract(ruleIDs)
-            guard let fresh, var updated = analysis else { return }
-            updated.replaceFindings(for: ruleIDs, with: fresh.findings)
-            analysis = updated
-            // The targeted scan only covers these rules, so merge its AI models into the existing report.
-            if ruleIDs.contains(where: { library.rule(id: $0)?.ai != nil }), let current = aiReport {
-                let partial = AIInspector.report(findings: fresh.findings, tree: fresh.tree, activeWindow: current.activeWindow)
-                aiReport = current.replacingModels(from: ruleIDs, with: partial)
-            }
-        }
-    }
-
-    /// Rebuilds the AI report from the (already updated) analysis tree, if an AI rule was affected.
-    private func rebuildAIReportIfNeeded(touchedRules: Set<String>) {
-        guard let analysis, touchedRules.contains(where: { library.rule(id: $0)?.ai != nil }) else { return }
-        aiReport = AIInspector.report(
-            findings: analysis.findings, tree: analysis.tree,
-            activeWindow: context.config.automation.activeModelWindow)
     }
 }

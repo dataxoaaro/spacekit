@@ -9,7 +9,7 @@ enum CleanupOutput {
     /// anything that isn't simply allowed, and the manual steps.
     static func planLines(_ plan: CleanupPlan, executor: CleanupExecutor, context: CleanupContext, limit: Int = .max) -> [String] {
         var lines: [String] = []
-        let items = plan.items.sorted { $0.size > $1.size }
+        let items = plan.itemsLargestFirst
         for item in items.prefix(limit) {
             let label = item.kind == .looseFiles ? "files in " + Output.path(item.path) : Output.path(item.path)
             lines += verdictLines(executor.verdict(for: item, context: context), Output.size(item.size) + "  " + label)
@@ -26,15 +26,9 @@ enum CleanupOutput {
     }
 
     private static func verdictLines(_ verdict: SafetyVerdict, _ text: String) -> [String] {
-        let symbol: String
-        switch verdict.decision {
-        case .allow: symbol = "✓".fg(ANSI.safe)
-        case .confirm: symbol = "!".fg(ANSI.review)
-        case .block: symbol = "✗".fg(ANSI.protected)
-        }
         let reasons = verdict.decision == .allow ? [] : verdict.reasons.map(Output.safe)
-        return ["  \(symbol) " + text]
-            + reasons.map { "        " + (verdict.decision == .block ? "Blocked: \($0)".fg(ANSI.protected) : $0.fg(ANSI.review)) }
+        return ["  \(verdict.decision.mark) " + text]
+            + reasons.map { "        " + (verdict.decision == .block ? "Blocked: \($0)" : $0).fg(verdict.decision.color) }
     }
 
     /// The summary, then everything that didn't go as planned.

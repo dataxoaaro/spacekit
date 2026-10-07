@@ -123,14 +123,9 @@ struct RulesCommand: ParsableCommand {
         }
 
         func run() throws {
-            let level = safety
-            let id = "custom." + Rule.slug(name)
-            var rule = Rule(
-                id: id, name: name, group: group, category: "personal.custom",
-                description: "Describe what this is and what happens if it's removed.",
-                paths: path, safety: SafetySpec(level: level), action: level == .protected ? ActionSpec() : ActionSpec(remove: true))
-            if let match { rule.match = PatternSpec(names: [match], sibling: sibling.map { [$0] } ?? []) }
-            let yaml = "# Schema: docs/RULES.md\n" + (try YAMLEncoder().encode(rule))
+            let rule = RuleScaffold.rule(name: name, paths: path, match: match, sibling: sibling, safety: safety, group: group)
+            let id = rule.id
+            let yaml = try RuleScaffold.yaml(rule)
             let issues = RuleLibrary(rules: [rule]).validate()
             for issue in issues { Output.warn(Output.safe(issue.message)) }
             if printOnly {
@@ -155,9 +150,7 @@ struct RulesCommand: ParsableCommand {
         func run() throws {
             let context = global.loadContext()
             print("built-in: \(RuleLibrary.builtinDirectory.map(Output.safe) ?? "not found")")
-            var directories = context.config.rules.directories.map { PathUtil.expand($0) }
-            if !directories.contains(context.paths.userRulesDirectory) { directories.append(context.paths.userRulesDirectory) }
-            for directory in directories {
+            for directory in context.ruleDirectories {
                 let missing = FileManager.default.fileExists(atPath: directory) ? "" : " (not created yet)".dim
                 print("user:     \(Output.safe(directory))" + missing)
             }

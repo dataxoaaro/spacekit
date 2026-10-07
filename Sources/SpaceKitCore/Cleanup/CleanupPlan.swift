@@ -48,14 +48,20 @@ public struct PlannedCommand: Codable, Sendable, Hashable, Identifiable {
     /// For a rule's `itemCommand`: the item substituted for `{path}` and `{name}`. The executor checks it with
     /// the `SafetyGuard` like any other item. `nil` for whole-rule commands.
     public var itemPath: String?
+    /// For a rule's `ai.removeCommand`: the model substituted for `{name}`. `nil` otherwise.
+    public var modelName: String?
     public var id: String { ruleID + ":" + arguments.joined(separator: " ") }
 
-    public init(ruleID: String, arguments: [String], estimatedBytes: UInt64, measurePaths: [String] = [], itemPath: String? = nil) {
+    public init(
+        ruleID: String, arguments: [String], estimatedBytes: UInt64, measurePaths: [String] = [], itemPath: String? = nil,
+        modelName: String? = nil
+    ) {
         self.ruleID = ruleID
         self.arguments = arguments
         self.estimatedBytes = estimatedBytes
         self.measurePaths = measurePaths
         self.itemPath = itemPath
+        self.modelName = modelName
     }
 
     public var displayString: String {
@@ -92,6 +98,9 @@ public struct CleanupPlan: Codable, Sendable {
     }
 
     public var isEmpty: Bool { items.isEmpty && commands.isEmpty }
+
+    /// The order every preview lists items in.
+    public var itemsLargestFirst: [CleanupItem] { items.sorted { $0.size > $1.size } }
 
     /// Builds a plan from findings. `select` chooses which items of each finding to include (all by default).
     /// `trashPreference`: `true` forces the Trash; `nil` follows each rule's `safety.trash`.

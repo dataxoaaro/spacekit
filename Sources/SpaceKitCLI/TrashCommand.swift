@@ -28,10 +28,8 @@ struct TrashCommand: ParsableCommand {
         // Entries moved to the Trash after this weren't in the preview, so the executor leaves them.
         let started = Date()
         let context = global.loadContext()
-        let path = PathUtil.home + "/.Trash"
-        var options = context.scanOptions
-        options.boundary = .device
-        let tree = try Scanner(options: options).scan(path)
+        let path = Trash.path()
+        let tree = try Scanner(options: Trash.scanOptions(context.scanOptions)).scan(path)
         guard !tree.root.flags.contains(.unreadable) else {
             Output.warn("Can't read the Trash. Give your terminal Full Disk Access (see `spacekit doctor`), or empty it in Finder.")
             throw ExitCode.failure
@@ -42,22 +40,14 @@ struct TrashCommand: ParsableCommand {
             if json { try Output.json(status) } else if status.bytes > 0 { print("Empty it with: ".dim + "spacekit trash --empty".bold) }
             return
         }
-        let rule = context.library.rules.first { $0.paths.contains { PathUtil.expand($0) == path } }
-        var plan = CleanupPlan(useTrash: false, created: started)
-        plan.items = tree.root.children.filter { $0.size > 0 }.map {
-            CleanupItem(path: $0.path, kind: .directory, name: $0.name, size: $0.size, ruleID: rule?.id)
-        }
-        if tree.root.directFileSize > 0 {
-            plan.items.append(
-                CleanupItem(path: path, kind: .looseFiles, name: "Files in the Trash", size: tree.root.directFileSize, ruleID: rule?.id))
-        }
+        let plan = Trash.emptyingPlan(tree, rules: context.library.rules, created: started)
         guard
             let report = try CleanupOutput.session(
                 plan, executor: context.executor, yes: yes, json: json, interactive: true, heading: "Empty the Trash",
                 verb: "Delete", hint: "Nothing deleted. Run with --yes to empty the Trash.")
         else { return }
         if !json, let capacity = VolumeCapacity.of(path: "/"), capacity.purgeable > 1_000_000_000,
-            !LocalSnapshots.list(volume: "/").isEmpty
+            !LocalSnapshots.list().isEmpty
         {
             print("Local Time Machine snapshots still reference these files; the space shows as purgeable until macOS releases it.".dim)
         }

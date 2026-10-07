@@ -53,7 +53,11 @@ struct CapacityBar: View {
     var height: CGFloat = 8
 
     var tint: Color {
-        capacity.usedFraction > 0.9 ? Theme.critical : capacity.usedFraction > 0.8 ? Theme.warning : Theme.categorical[0]
+        switch capacity.fullness {
+        case .nearlyFull: return Theme.critical
+        case .filling: return Theme.warning
+        case .comfortable: return Theme.categorical[0]
+        }
     }
 
     var body: some View {
@@ -64,7 +68,7 @@ struct CapacityBar: View {
             }
         }
         .frame(height: height)
-        .accessibilityLabel("\(capacity.name): \(capacity.used.bytesText) of \(capacity.total.bytesText) used")
+        .accessibilityLabel("\(capacity.name): \(capacity.used.formattedBytes) of \(capacity.total.formattedBytes) used")
     }
 }
 
@@ -157,5 +161,16 @@ struct FlowLayout: Layout {
         }
         if !current.indices.isEmpty { rows.append(current) }
         return rows
+    }
+}
+
+/// "Create Starter Config" and "Open in Editor", as onboarding and Settings show them.
+struct ConfigFileButtons: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button("Create Starter Config") { model.createStarterConfig() }
+            .disabled(model.configFileExists)
+        Button("Open in Editor") { model.openConfigInEditor() }
     }
 }

@@ -209,7 +209,6 @@ public struct JobRunner: Sendable {
             state.lastOutcome = result.summary
             state.lastMatchedBytes = result.evaluation?.matchedBytes
             state.lastEligibleBytes = result.evaluation?.eligibleBytes
-            if case .cleaned(let report) = result.action { state.lastFreedBytes = report.freedBytes }
         }
     }
 

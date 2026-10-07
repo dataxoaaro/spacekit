@@ -26,7 +26,7 @@ struct HistoryCommand: ParsableCommand {
             let context = global.loadContext()
             let history = context.history
             if json {
-                try Output.json(history.records(since: Date().addingTimeInterval(-Double(days) * 86_400)))
+                try Output.json(history.records(since: Age.days(Double(days)).ago()))
                 return
             }
             let daily = history.dailyUsage(days: days)
@@ -43,19 +43,14 @@ struct HistoryCommand: ParsableCommand {
                 daily.first!.date.formatted(.dateTime.month(.abbreviated).day()).dim + " → "
                     + daily.last!.date.formatted(.dateTime.month(.abbreviated).day()).dim)
             print()
-            if let month = history.usedDelta(over: 30 * 86_400) {
+            if let month = history.usedDelta(over: .days(30)) {
                 print((ByteCount.formatDelta(month) + " this month").bold.fg(month > 0 ? ANSI.review : ANSI.safe))
             }
-            let grew = history.whatGrew(over: Double(days) * 86_400)
+            let grew = history.whatGrew(over: .days(Double(days)))
             if !grew.isEmpty {
                 print()
                 print("WHAT GREW?".bold)
-                for item in grew {
-                    print(
-                        "  " + ANSI.pad(Output.safe(item.name), to: 26)
-                            + ANSI.pad(ByteCount.formatDelta(item.delta), to: 10, alignRight: true).fg(
-                                item.delta > 0 ? ANSI.review : ANSI.safe))
-                }
+                for item in grew { print(item.terminalLine) }
             }
         }
     }
@@ -88,7 +83,7 @@ struct JournalCommand: ParsableCommand {
 
     func run() throws {
         let context = global.loadContext()
-        let since = Date().addingTimeInterval(-Double(days) * 86_400)
+        let since = Age.days(Double(days)).ago()
         let entries = context.journal.entries(since: since)
         if json {
             try Output.json(entries)
@@ -273,12 +268,12 @@ struct DoctorCommand: ParsableCommand {
         checks.append(
             Check(
                 check: "Trash", ok: true,
-                detail: context.config.safety.trash == .always
+                detail: context.config.safety.trashesEverything
                     ? "everything goes to the Trash" : "regenerable caches may be deleted directly"))
         if let capacity = VolumeCapacity.of(path: "/") {
             checks.append(
                 Check(
-                    check: "Startup disk", ok: capacity.usedFraction < 0.9,
+                    check: "Startup disk", ok: capacity.fullness != .nearlyFull,
                     detail: "\(ByteCount.format(capacity.available)) available of \(ByteCount.format(capacity.total))"
                         + (capacity.purgeable > 0
                             ? " (\(ByteCount.format(capacity.freeNow)) free now, \(ByteCount.format(capacity.purgeable)) purgeable)" : "")))

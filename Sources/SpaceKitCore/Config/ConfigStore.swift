@@ -54,8 +54,9 @@ public struct ConfigStore: Sendable {
         }
     }
 
-    /// Saves the config, keeping the previous file as `config.yaml.bak`.
-    public func save(_ config: SpaceKitConfig) throws {
+    /// Saves the config, keeping the previous file as `config.yaml.bak`. Front ends call `update(_:)` instead,
+    /// which applies one change to the file as it is now and never overwrites a file that doesn't parse.
+    func save(_ config: SpaceKitConfig) throws {
         try ConfigStore.validate(config)
         let body = try YAMLEncoder().encode(config)
         let text = ConfigStore.savedHeader + body
@@ -102,15 +103,15 @@ public struct ConfigStore: Sendable {
           trash: always             # always = move to Trash; rules = regenerable caches may be deleted directly
           maxBytesPerRun: 100GB     # an automatic run never removes more than this
           protectedPaths: []        # your own never-touch list, e.g. [~/Work/client-archive]
-          allowedCommands: []       # extra tools rule commands may run (built-ins: brew, docker, xcrun, npm, …)
+          allowedCommands: []       # tools your own rules' commands may run; built-in rules also trust brew, docker, xcrun, npm, …
 
         rules:
           disabled: []              # rule ids to ignore, e.g. [node.node-modules]
           directories: [~/.config/spacekit/rules]   # your own rule files (same format as the built-in library)
 
         automation:
-          notifications: true
-          checkEvery: 1h            # how often the background agent looks for due jobs
+          notifications: true       # for observe and suggest jobs; automatic runs that clean always notify
+          checkEvery: 1h            # how often the background agent looks for due jobs (5m to 24h)
           snapshot: sunday 04:00    # full storage snapshot for History ("what grew?"); or: never
           activeModelWindow: 90d    # AI models used within this window count as active
 
@@ -145,72 +146,4 @@ public struct ConfigStore: Sendable {
           mapDepth: 4
 
         """
-}
-
-/// Everything a front end needs, wired up from the config. CLI, TUI, app and agent all start here.
-public struct SpaceKitContext: Sendable {
-    public var paths: SpaceKitPaths
-    public var config: SpaceKitConfig
-    public var library: RuleLibrary
-    /// Set when the config file exists but couldn't be read. Read-only features use the defaults instead; the
-    /// executor refuses every removal and command until the file is fixed.
-    public var configError: String?
-
-    public init(paths: SpaceKitPaths, config: SpaceKitConfig, library: RuleLibrary, configError: String? = nil) {
-        self.paths = paths
-        self.config = config
-        self.library = library
-        self.configError = configError
-    }
-
-    public static func load(paths: SpaceKitPaths = .standard) -> SpaceKitContext {
-        var configError: String?
-        let config: SpaceKitConfig
-        do {
-            config = try ConfigStore(file: paths.configFile).load()
-        } catch {
-            configError = error.localizedDescription
-            config = SpaceKitConfig()
-        }
-        var directories = config.rules.directories
-        if !directories.contains(where: { PathUtil.expand($0) == paths.userRulesDirectory }) {
-            directories.append(paths.userRulesDirectory)
-        }
-        let library = RuleLibrary.load(directories: directories, disabled: Set(config.rules.disabled))
-        return SpaceKitContext(paths: paths, config: config, library: library, configError: configError)
-    }
-
-    public var configStore: ConfigStore { ConfigStore(file: paths.configFile) }
-    public var journal: Journal { Journal(file: paths.journalFile) }
-    public var history: HistoryStore { HistoryStore(file: paths.historyFile) }
-    public var jobStates: JobStateStore { JobStateStore(file: paths.jobStateFile) }
-    public var suggestions: SuggestionStore { SuggestionStore(file: paths.suggestionsFile) }
-
-    public var scanOptions: ScanOptions { config.scan.options(markers: library.markerRegistry) }
-
-    public var analyzer: StorageAnalyzer {
-        StorageAnalyzer(library: library, scanOptions: scanOptions, devRoots: config.scan.devRoots)
-    }
-
-    public var safetyGuard: SafetyGuard {
-        SafetyGuard(userProtectedPaths: config.safety.protectedPaths, protectedRules: library.rules, patternRoots: config.scan.devRoots)
-    }
-
-    public var executor: CleanupExecutor {
-        CleanupExecutor(
-            safety: safetyGuard, journal: journal, rules: library.rules,
-            extraAllowedCommands: Set(config.safety.allowedCommands),
-            maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes, configError: configError)
-    }
-
-    /// `true` to force the Trash, `nil` to follow rules.
-    public func trashPreference(for action: Job.Action = .trash) -> Bool? {
-        if config.safety.trash == .always { return true }
-        switch action {
-        case .trash: return true
-        case .delete: return false
-        case .rule: return nil
-        }
-    }
-
 }

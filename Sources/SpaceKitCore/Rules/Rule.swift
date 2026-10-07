@@ -360,11 +360,22 @@ public struct AISpec: Codable, Sendable, Hashable {
     /// How models are laid out on disk: `ollama`, `huggingface`, `lmstudio`, `children` (each entry is a model) or `cache`.
     public var layout: String
 
+    /// How the tool removes one model, e.g. `[ollama, rm, "{name}"]`; `{name}` is the model's name as the AI view
+    /// shows it. Use this when a model's files are shared with others (Ollama blobs), so only the tool can tell
+    /// what may go.
+    public var removeCommand: [String]?
+
     /// Every `layout` the AI view understands; anything else is shown as a cache.
     public static let layouts: Set<String> = ["ollama", "huggingface", "lmstudio", "children", "cache"]
 
-    public init(tool: String, layout: String) {
+    public init(tool: String, layout: String, removeCommand: [String]? = nil) {
         self.tool = tool
         self.layout = layout
+        self.removeCommand = removeCommand
+    }
+
+    /// `removeCommand` filled in for one model, or `nil` if the rule has none.
+    public func removeArguments(forModel name: String) -> [String]? {
+        removeCommand?.map { $0.replacingOccurrences(of: "{name}", with: name) }
     }
 }

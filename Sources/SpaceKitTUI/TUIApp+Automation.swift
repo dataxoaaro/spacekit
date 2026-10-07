@@ -28,7 +28,7 @@ extension TUIApp {
         let runner = JobRunner(context: context)
         let states = context.jobStates.load()
         state.automation = AutomationSnapshot(
-            recovered: context.journal.recovered(since: Date().addingTimeInterval(-90 * 86_400)),
+            recovered: context.journal.recovered(since: Age.days(90).ago()),
             states: states, nextRuns: runner.nextRuns(), agent: LaunchAgent(paths: context.paths).status(),
             estimate: runner.estimatedRecovery(states: states))
     }
@@ -36,8 +36,8 @@ extension TUIApp {
     func refreshHistory() {
         let history = context.history
         state.history = HistorySnapshot(
-            days: history.dailyUsage(days: 120), monthDelta: history.usedDelta(over: 30 * 86_400),
-            grew: history.whatGrew(over: 90 * 86_400))
+            days: history.dailyUsage(days: 120), monthDelta: history.usedDelta(over: .days(30)),
+            grew: history.whatGrew(over: .days(90)))
     }
 
     func handleJobs(_ key: Key) {
@@ -82,16 +82,9 @@ extension TUIApp {
             flash("\(name) can't be cleaned automatically")
             return
         }
-        var job = Job.suggested(for: rule)
+        let job = Job.suggested(for: rule)
         saveConfig("Created job “\(name)” (\(job.mode.rawValue), \(job.schedule)) — see Automation") { config in
-            let taken = Set(config.jobs.map(\.id))
-            var suffix = 2
-            let base = job.id
-            while taken.contains(job.id) {
-                job.id = "\(base)-\(suffix)"
-                suffix += 1
-            }
-            config.jobs.append(job)
+            config.upsertJob(job, replacing: nil)
         }
     }
 
@@ -109,10 +102,7 @@ extension TUIApp {
             if let error = context.configError {
                 throw TUIError(message: "Config file is invalid: \(error). Fix it (spacekit config validate) first")
             }
-            var config = context.configStore.exists ? try context.configStore.load() : context.config
-            try change(&config)
-            try context.configStore.save(config)
-            context.config = config
+            context.config = try context.configStore.update(change)
             flash(message)
         } catch {
             flash("Couldn't save config: \(TerminalText.sanitize(error.localizedDescription))")
@@ -177,8 +167,7 @@ extension TUIApp {
             }
             return
         }
-        // launchd keeps the path it's given; a symlink (Homebrew, /usr/local/bin) could later point elsewhere.
-        guard let executable = Bundle.main.executablePath.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }) else {
+        guard let executable = LaunchAgent.spacekitExecutable() else {
             flash("Can't locate the spacekit executable")
             return
         }
@@ -187,7 +176,7 @@ extension TUIApp {
             var lines = [
                 "Checks for due jobs every \(Age(seconds: TimeInterval(seconds))).", "Runs: " + TerminalText.sanitize(executable),
             ]
-            if executable.contains("/.build/") {
+            if LaunchAgent.isDevelopmentBuild(executable) {
                 lines.append("That's a development build. Run `make install` for a stable path, then install again.".fg(ANSI.review))
             }
             lines += [

@@ -140,3 +140,23 @@ extension SafetyLevel {
         return "\(symbol) \(title)".fg(ANSI.color(for: self))
     }
 }
+
+extension SafetyVerdict.Decision {
+    /// The color of a verdict in the terminal front ends: green allowed, amber needs confirmation, red blocked.
+    public var color: UInt8 {
+        switch self {
+        case .allow: return ANSI.safe
+        case .confirm: return ANSI.review
+        case .block: return ANSI.protected
+        }
+    }
+
+    /// The mark before an item in a cleanup preview: ✓ allowed, ! needs confirmation, ✗ blocked.
+    public var mark: String {
+        switch self {
+        case .allow: return "✓".fg(color)
+        case .confirm: return "!".fg(color)
+        case .block: return "✗".fg(color)
+        }
+    }
+}

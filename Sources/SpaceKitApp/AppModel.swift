@@ -65,10 +65,12 @@ final class AppModel {
     var selection: MapItem?
     var hovered: MapItem?
     var backStack: [DirNode] = []
-    var categories: [CategorySlice] = []
-    private(set) var ruleIndex: RuleIndex {
+    private(set) var categories: [CategorySlice] = []
+    /// Labels folders until an analysis exists.
+    private var libraryIndex: RuleIndex {
         didSet { ruleCache.removeAll() }
     }
+    var ruleIndex: RuleIndex { analysisResult?.ruleIndex ?? libraryIndex }
     var visualization: UISettings.Visualization
     var colorMode: UISettings.ColorMode
     var mapDepth: Int
@@ -81,9 +83,13 @@ final class AppModel {
     @ObservationIgnored private var treeWriters: [CheckedContinuation<Void, Never>] = []
 
     // MARK: Intelligence
-    var analysis: Analysis?
+    /// The latest analysis with its AI report and rule index.
+    private(set) var analysisResult: AnalysisResult? {
+        didSet { ruleCache.removeAll() }
+    }
+    var analysis: Analysis? { analysisResult?.analysis }
+    var aiReport: AIReport? { analysisResult?.aiReport }
     private(set) var analysisProgress: ScanProgress?
-    var aiReport: AIReport?
     @ObservationIgnored private var analysisRequests = RequestGeneration()
 
     // MARK: Cleanup
@@ -94,13 +100,13 @@ final class AppModel {
     /// The job currently open in the job editor.
     var jobDraft: JobDraft?
     /// Bumped whenever the tree changes in place, so cached map layouts are rebuilt.
-    var treeRevision = 0 {
+    private(set) var treeRevision = 0 {
         didSet { itemsCache.removeAll() }
     }
     /// Rules currently being re-evaluated after a tool command ran (cards show a spinner).
-    var refreshingRules: Set<String> = []
+    private(set) var refreshingRules: Set<String> = []
     /// Cleanups removing things right now. Quitting waits for them (see `AppDelegate`).
-    var runningCleanups = 0
+    private(set) var runningCleanups = 0
     /// Set when the person chose to quit while a cleanup ran; the app quits once the last one finishes.
     @ObservationIgnored var quitWhenCleanupsFinish = false
 
@@ -110,22 +116,22 @@ final class AppModel {
     @ObservationIgnored private var rulesIncludingDisabledCache: [Rule]?
 
     // MARK: Automation & history
-    var jobStates: [String: JobState] = [:]
-    var suggestions: [Suggestion] = []
-    var agentStatus: LaunchAgent.Status?
-    var recovered90Days: UInt64 = 0
-    var journal: [JournalEntry] = []
-    var history: [HistoryRecord] = []
-    var volumes: [VolumeCapacity] = []
+    private(set) var jobStates: [String: JobState] = [:]
+    private(set) var suggestions: [Suggestion] = []
+    private(set) var agentStatus: LaunchAgent.Status?
+    private(set) var recovered90Days: UInt64 = 0
+    private(set) var journal: [JournalEntry] = []
+    private(set) var history: [HistoryRecord] = []
+    private(set) var volumes: [VolumeCapacity] = []
     /// Live capacity of the volume being explored, refreshed every few seconds while the app is active.
-    var scanCapacity: VolumeCapacity?
+    private(set) var scanCapacity: VolumeCapacity?
     /// Size of the Trash, once measured (nil if it can't be read without Full Disk Access).
-    var trashBytes: UInt64?
+    private(set) var trashBytes: UInt64?
     /// Local Time Machine snapshots on the startup disk; they hold deleted files' space as "purgeable".
-    var localSnapshotCount = 0
+    private(set) var localSnapshotCount = 0
     @ObservationIgnored var capacityMonitor: Task<Void, Never>?
     @ObservationIgnored var observers: [NSObjectProtocol] = []
-    var runningJobID: String?
+    private(set) var runningJobID: String?
 
     struct PendingCleanup: Identifiable {
         let id = UUID()
@@ -139,7 +145,7 @@ final class AppModel {
         let context = SpaceKitContext.load()
         self.context = context
         scanPath = PathUtil.expand(context.config.scan.defaultPath)
-        ruleIndex = RuleIndex(rules: context.library.rules)
+        libraryIndex = RuleIndex(rules: context.library.rules)
         visualization = context.config.ui.visualization
         colorMode = context.config.ui.colorBy
         mapDepth = context.config.ui.mapDepth
@@ -152,6 +158,10 @@ final class AppModel {
 
     var config: SpaceKitConfig { context.config }
     var library: RuleLibrary { context.library }
+    var paths: SpaceKitPaths { context.paths }
+    var historyStore: HistoryStore { context.history }
+    var configFileExists: Bool { context.configStore.exists }
+    var configError: String? { context.configError }
 
     // MARK: Config
 
@@ -180,13 +190,72 @@ final class AppModel {
         }
     }
 
+    /// Writes the commented starter config if there's no config file yet, and loads it.
+    func createStarterConfig() {
+        do {
+            try context.configStore.initialize()
+        } catch {
+            errorMessage = "Couldn't create the config: \(error.localizedDescription)"
+        }
+        reloadContext()
+    }
+
+    /// Opens the config file in the default editor, creating the starter config first if there's none.
+    func openConfigInEditor() {
+        do {
+            try context.configStore.initialize()
+        } catch {
+            errorMessage = "Couldn't create the config: \(error.localizedDescription)"
+            return
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: paths.configFile))
+    }
+
     /// Re-reads config and rules from disk (after edits in the YAML file).
     func reloadContext() {
         rulesIncludingDisabledCache = nil
         context = SpaceKitContext.load(paths: context.paths)
-        ruleIndex = RuleIndex(rules: context.library.rules, findings: analysis?.findings ?? [])
+        libraryIndex = RuleIndex(rules: context.library.rules)
+        analysisResult?.reindex(rules: context.library.rules)
         if let error = context.configError { errorMessage = "Config problem: \(error)" }
         refreshAutomation()
+    }
+
+    // MARK: Automation
+
+    /// Everything on the Automation screen, including the agent status (which asks launchd).
+    func refreshAutomation() {
+        refreshJournal()
+        refreshHistory()
+        refreshAgentStatus()
+    }
+
+    /// Cheap file reads only: job state, suggestions and the journal.
+    func refreshJournal() {
+        let context = self.context
+        jobStates = context.jobStates.load()
+        suggestions = context.suggestions.all()
+        journal = context.journal.entries(since: Age.days(90).ago())
+        recovered90Days = journal.reduce(0) { $0 + $1.bytes }
+    }
+
+    func refreshAgentStatus() {
+        let paths = context.paths
+        Task.detached {
+            let status = LaunchAgent(paths: paths).status()
+            await MainActor.run { self.agentStatus = status }
+        }
+    }
+
+    func refreshHistory() {
+        history = context.history.records(since: Age.days(365).ago())
+    }
+
+    /// Evaluates a job off the main actor, marking it as running meanwhile (cards show a spinner).
+    func evaluate(_ job: Job, with runner: JobRunner) async -> Result<JobEvaluation, Error> {
+        runningJobID = job.id
+        defer { runningJobID = nil }
+        return await Task.detached { Result { try runner.evaluate(job) } }.value
     }
 
     // MARK: Scanning
@@ -249,8 +318,7 @@ final class AppModel {
         focus = tree.root
         scanProgress = nil
         progressSnapshot = nil
-        analysis = nil
-        aiReport = nil
+        analysisResult = nil
         categories = CategoryBreakdown.compute(tree: tree)
         refreshVolumes()
         refreshTrash(resync: false)
@@ -308,11 +376,15 @@ final class AppModel {
         let analyzer = context.analyzer
         let tree = self.tree
         let window = context.config.automation.activeModelWindow
+        let rules = context.library.rules
         let history = context.history
         Task {
-            let analysis: Analysis
+            let result: AnalysisResult
             do {
-                analysis = try await self.readingTrees { try await analyzer.analyze(reusing: tree, progress: progress) }
+                result = try await self.readingTrees {
+                    let analysis = try await analyzer.analyze(reusing: tree, progress: progress)
+                    return AnalysisResult(analysis, rules: rules, activeModelWindow: window)
+                }
             } catch {
                 guard self.analysisRequests.isCurrent(generation) else { return }
                 self.analysisProgress = nil
@@ -321,16 +393,86 @@ final class AppModel {
             }
             guard self.analysisRequests.isCurrent(generation) else { return }
             self.analysisProgress = nil
-            self.analysis = analysis
-            self.aiReport = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: window)
-            self.ruleIndex = RuleIndex(rules: self.context.library.rules, findings: analysis.findings)
+            self.analysisResult = result
+            let analysis = result.analysis
             if let tree = self.tree, tree.covers(PathUtil.home) {
                 self.categories = CategoryBreakdown.compute(tree: tree, findings: analysis.findings)
             }
-            if !analysis.tree.stats.cancelled {
-                try? history.recordSnapshot(analysis: analysis)
-                self.refreshHistory()
+            try? history.recordSnapshot(analysis: analysis)
+            self.refreshHistory()
+        }
+    }
+
+    // MARK: State changes
+    // Extensions in other files read the published state freely but change it only through these methods, so the
+    // properties keep their private setters.
+
+    func beginCleanup() { runningCleanups += 1 }
+
+    func endCleanup() {
+        runningCleanups -= 1
+        if runningCleanups == 0 && quitWhenCleanupsFinish {
+            quitWhenCleanupsFinish = false
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+    }
+
+    /// Shrinks the trees and findings in place after a cleanup: trashed items move into the Trash folder (they
+    /// still use space until it's emptied), the AI report and category totals update only if they were affected.
+    func applyToTreesAndFindings(_ removals: [Removal]) {
+        let exploreChanged = tree.map { Removal.apply(removals, to: $0) } ?? false
+        if var result = analysisResult, !result.apply(removals, exploreTree: tree).isEmpty { analysisResult = result }
+
+        // Categories: subtract instead of recomputing.
+        if exploreChanged {
+            categories = CategoryBreakdown.subtracting(removals, from: categories, findings: analysis?.findings ?? [])
+            treeRevision += 1
+        }
+    }
+
+    /// Re-evaluates a few rules with a targeted scan of only their locations, then merges the results.
+    func refreshFindings(ruleIDs: Set<String>) {
+        let rules = ruleIDs.compactMap { library.rule(id: $0) }
+        guard !rules.isEmpty, analysis != nil else { return }
+        refreshingRules.formUnion(ruleIDs)
+        let context = self.context
+        Task {
+            let fresh = try? await context.analyzer.analyze(rules: rules)
+            refreshingRules.subtract(ruleIDs)
+            guard let fresh else { return }
+            analysisResult?.merge(context.result(of: fresh), for: ruleIDs)
+        }
+    }
+
+    func trashMeasured(_ bytes: UInt64?) {
+        if trashBytes != bytes { trashBytes = bytes }
+    }
+
+    /// The trees changed in place (the Trash folder re-synced): rebuild map layouts and category totals.
+    func treesChangedInPlace() {
+        treeRevision += 1
+        if let tree, tree.roots == ["/"] || tree.covers(PathUtil.home) {
+            categories = CategoryBreakdown.compute(tree: tree, findings: analysis?.findings ?? [], capacity: scanCapacity)
+        }
+    }
+
+    /// Re-reads volume capacities. Values only change (and views only update) when the disk changed.
+    func refreshVolumes() {
+        let fresh = VolumeTable.current().userVisibleVolumes.compactMap { VolumeCapacity.of(path: $0.mountPoint) }
+        if fresh != volumes { volumes = fresh }
+        let live = VolumeCapacity.of(path: scanPath)
+        if live != scanCapacity {
+            scanCapacity = live
+            if let live, let tree, tree.roots == ["/"] {
+                categories = CategoryBreakdown.updatingHidden(categories, capacity: live, scannedBytes: tree.root.size)
             }
+        }
+    }
+
+    func refreshSnapshots() {
+        Task {
+            let count = await Task.detached(priority: .utility) { LocalSnapshots.list().count }.value
+            if count != localSnapshotCount { localSnapshotCount = count }
         }
     }
 
@@ -363,7 +505,7 @@ final class AppModel {
     /// Every rule that loads, disabled ones included, so Settings can turn them back on. Cached until the next reload.
     func rulesIncludingDisabled() -> [Rule] {
         if let cached = rulesIncludingDisabledCache { return cached }
-        let rules = RuleLibrary.load(directories: config.rules.directories).rules
+        let rules = RuleLibrary.load(directories: context.ruleDirectories).rules
         rulesIncludingDisabledCache = rules
         return rules
     }

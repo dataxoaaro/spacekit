@@ -246,7 +246,7 @@ public struct SafetyGuard: Sendable {
                 verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
             }
         case .automatic(let automation):
-            let isCustom = automation.customPaths.contains { PathUtil.isAncestorOrEqual(PathUtil.expand($0, home: home), of: path) }
+            let isCustom = automation.customPaths.contains { PathUtil.isAncestorOrEqual(scopePath($0), of: path) }
             if let rule {
                 if rule.safety.level == .review && !automation.allowReview {
                     verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
@@ -333,18 +333,23 @@ public struct SafetyGuard: Sendable {
     /// True if `path` is one of the places `rule` describes (or inside one). For pattern rules this mirrors
     /// where `RuleEngine` looks: under the rule's roots, outside its exclusions and outside bundles.
     public func isInsideRuleScope(_ path: String, rule: Rule) -> Bool {
-        if rule.paths.contains(where: { PathUtil.isInside(path, pattern: PathUtil.expand($0, home: home)) }) { return true }
+        if rule.paths.contains(where: { PathUtil.isInside(path, pattern: scopePath($0)) }) { return true }
         guard let match = rule.match, match.names.contains(PathUtil.lastComponent(path)) else { return false }
-        let roots = (match.roots ?? patternRoots).map { PathUtil.expand($0, home: home) }
+        let roots = (match.roots ?? patternRoots).map(scopePath)
         guard roots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
         return !isExcludedFromPatterns(path, match: match)
+    }
+
+    /// A rule or job location the way `RuleEngine` resolves it, so it compares with scanned paths.
+    private func scopePath(_ pattern: String) -> String {
+        PathUtil.expand(PathUtil.canonicalPattern(pattern, home: home), home: home)
     }
 
     /// Exclusions are compared by key so a differently spelled path stays excluded.
     private func isExcludedFromPatterns(_ path: String, match: PatternSpec) -> Bool {
         let key = PathUtil.comparisonKey(path)
         let excluded = (RuleEngine.defaultPatternExcludes + match.exclude).contains { exclude in
-            PathUtil.isInside(key, pattern: PathUtil.comparisonKey(PathUtil.expand(exclude, home: home)))
+            PathUtil.isInside(key, pattern: PathUtil.comparisonKey(scopePath(exclude)))
         }
         return excluded
             || PathUtil.components(key).dropLast().contains { component in RuleEngine.bundleSuffixes.contains { component.hasSuffix($0) } }

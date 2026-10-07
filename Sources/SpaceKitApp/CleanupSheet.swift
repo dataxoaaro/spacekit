@@ -24,7 +24,7 @@ struct CleanupSheet: View {
     }
 
     private var rows: [(item: CleanupItem, verdict: SafetyVerdict)] {
-        (verdicts?.items ?? []).sorted { $0.item.size > $1.item.size }
+        verdicts?.items ?? []
     }
 
     private var commandRows: [(command: PlannedCommand, verdict: SafetyVerdict)] { verdicts?.commands ?? [] }
@@ -37,7 +37,7 @@ struct CleanupSheet: View {
         var plan = pending.plan
         plan.items = rows.filter { !$0.verdict.isBlocked && !excluded.contains($0.item.id) }.map(\.item)
         plan.commands = selectedCommandRows.map(\.command)
-        plan.useTrash = useTrash || model.config.safety.trash == .always
+        plan.useTrash = useTrash
         return plan
     }
 
@@ -77,10 +77,10 @@ struct CleanupSheet: View {
                     let fileBytes = selectedPlan.items.reduce(0) { $0 + $1.size }
                     let commandBytes = selectedPlan.commands.reduce(0) { $0 + $1.estimatedBytes }
                     if !selectedPlan.items.isEmpty {
-                        Text(fileBytes.bytesText).font(.title2.weight(.semibold)).monospacedDigit()
+                        Text(fileBytes.formattedBytes).font(.title2.weight(.semibold)).monospacedDigit()
                     }
                     if !selectedPlan.commands.isEmpty {
-                        Text("up to \(commandBytes.bytesText) via tools")
+                        Text("up to \(commandBytes.formattedBytes) via tools")
                             .font(selectedPlan.items.isEmpty ? .title3.weight(.semibold) : .callout)
                             .foregroundStyle(selectedPlan.items.isEmpty ? .primary : .secondary)
                     }
@@ -123,7 +123,7 @@ struct CleanupSheet: View {
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.callout).foregroundStyle(Theme.critical)
-            } else if model.config.safety.trash == .always {
+            } else if model.config.safety.trashesEverything {
                 Label("Items go to the Trash, so you can put them back. Empty the Trash to free the space.", systemImage: "trash")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
@@ -175,11 +175,11 @@ struct CleanupSheet: View {
                 Label("Nothing was removed", systemImage: "exclamationmark.triangle.fill")
                     .font(.title2.weight(.semibold)).foregroundStyle(Theme.warning)
             } else if report.deletedBytes > 0 || report.trashedBytes == 0 {
-                Label("Freed \(report.deletedBytes.bytesText)", systemImage: "checkmark.circle.fill")
+                Label("Freed \(report.deletedBytes.formattedBytes)", systemImage: "checkmark.circle.fill")
                     .font(.title2.weight(.semibold)).foregroundStyle(Theme.good)
             }
             if report.trashedBytes > 0 {
-                Label("Moved \(report.trashedBytes.bytesText) to the Trash", systemImage: "trash.circle.fill")
+                Label("Moved \(report.trashedBytes.formattedBytes) to the Trash", systemImage: "trash.circle.fill")
                     .font(report.deletedBytes > 0 ? .headline : .title2.weight(.semibold))
                     .foregroundStyle(report.deletedBytes > 0 ? Color.primary : Theme.good)
                 HStack {
@@ -251,7 +251,7 @@ struct CommandRow: View {
             Image(systemName: "terminal").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(command.displayString).font(.callout.monospaced())
-                Text("Runs the tool's own cleanup, which removes only what the tool knows is unused · up to \(command.estimatedBytes.bytesText)")
+                Text("Runs the tool's own cleanup, which removes only what the tool knows is unused · up to \(command.estimatedBytes.formattedBytes)")
                     .font(.caption).foregroundStyle(.secondary)
                 VerdictReasons(verdict: verdict)
             }
@@ -289,7 +289,7 @@ struct CleanupRow: View {
                         .truncationMode(.middle)
                     if let rule { SafetyBadge(level: rule.safety.level, compact: true) }
                     Spacer()
-                    Text(item.size.bytesText).monospacedDigit().foregroundStyle(.secondary)
+                    Text(item.size.formattedBytes).monospacedDigit().foregroundStyle(.secondary)
                 }
                 Text(PathUtil.abbreviate(item.path)).font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 VerdictReasons(verdict: verdict)

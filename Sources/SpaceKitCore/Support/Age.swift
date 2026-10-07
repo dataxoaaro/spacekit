@@ -10,6 +10,12 @@ public struct Age: Hashable, Comparable, Sendable, Codable, CustomStringConverti
 
     public var days: Double { seconds / 86_400 }
 
+    /// The moment this long before `now`.
+    public func ago(from now: Date = Date()) -> Date { now.addingTimeInterval(-seconds) }
+
+    /// How long ago `date` was.
+    public static func since(_ date: Date, now: Date = Date()) -> Age { Age(seconds: now.timeIntervalSince(date)) }
+
     public static func < (lhs: Age, rhs: Age) -> Bool { lhs.seconds < rhs.seconds }
 
     private static let units: [(suffixes: [String], seconds: Double)] = [

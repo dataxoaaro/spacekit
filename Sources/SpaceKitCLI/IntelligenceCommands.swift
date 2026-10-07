@@ -110,17 +110,8 @@ struct DevCommand: ParsableCommand {
         print(Output.safe(rule.name).bold + " — " + ByteCount.format(finding.size).bold)
         print()
         if let description = rule.description { print(Output.safe(description)) }
-        if rule.granularity == .children || rule.isPattern {
-            print("\(finding.items.count) item\(finding.items.count == 1 ? "" : "s").".dim)
-        }
         print()
-        let reclaimable = finding.isCleanable ? ByteCount.format(finding.size) : "—"
-        print("  Reclaimable:   ".dim + reclaimable.bold)
-        print("  Risk:          ".dim + rule.safety.level.risk + "  " + rule.safety.level.badge)
-        if let recreatedBy = rule.recreatedBy { print("  Recreated by:  ".dim + Output.safe(recreatedBy)) }
-        if let used = finding.lastUsed { print("  Last used:     ".dim + used.relativeDescription()) }
-        if let command = rule.action.command { print("  Cleans with:   ".dim + Output.safe(command.joined(separator: " "))) }
-        if let manual = rule.action.manual { print("  How to clean:  ".dim + Output.safe(manual)) }
+        for fact in finding.terminalFacts() { print("  " + ANSI.pad(fact.label + ":", to: 15).dim + fact.value) }
         print()
         for item in finding.items.prefix(max(items, 15)) {
             print(
@@ -190,12 +181,7 @@ struct AICommand: ParsableCommand {
             print(ANSI.pad(Output.safe(tool.name).bold, to: 42) + Output.size(tool.size).bold)
             for (index, model) in tool.models.enumerated() {
                 let branch = index == tool.models.count - 1 ? "└ " : "├ "
-                let state: String
-                switch model.kind {
-                case .orphaned: state = "orphaned".fg(ANSI.review)
-                case .cache: state = "cache".dim
-                default: state = model.isActive(within: report.activeWindow) ? "active".fg(ANSI.safe) : "idle".fg(ANSI.review)
-                }
+                let state = model.status(within: report.activeWindow).terminalText
                 let used = model.lastUsed.map { $0.relativeDescription() } ?? ""
                 print(
                     branch.dim + ANSI.pad(ANSI.truncate(Output.safe(model.name), to: 38), to: 40) + Output.size(model.size) + "  "

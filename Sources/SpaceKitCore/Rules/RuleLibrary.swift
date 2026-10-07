@@ -68,7 +68,7 @@ public struct RuleLibrary: Sendable {
                 do {
                     parsed = try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file)
                 } catch {
-                    issues.append(RuleIssue(severity: .error, source: file, message: describe(error)))
+                    issues.append(RuleIssue(severity: .error, source: file, message: DecodingErrorText.describe(error)))
                     continue
                 }
                 for var rule in parsed {
@@ -180,17 +180,9 @@ public struct RuleLibrary: Sendable {
         var rules: [Rule]
     }
 
-    /// Same as `DecodingErrorText.describe(_:)`.
-    public static func describe(_ error: Error) -> String { DecodingErrorText.describe(error) }
-
     // MARK: Lookup
 
     public func rule(id: String) -> Rule? { rules.first { $0.id == id } }
-
-    public var groups: [String] {
-        var seen = Set<String>()
-        return rules.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
-    }
 
     public func rules(inCategory prefix: String) -> [Rule] {
         rules.filter { $0.category == prefix || $0.category.hasPrefix(prefix + ".") }
@@ -254,6 +246,12 @@ public struct RuleLibrary: Sendable {
         }
         if let ai = rule.ai, !AISpec.layouts.contains(ai.layout) {
             issue(.warning, "unknown ai.layout '\(ai.layout)'; it is shown as a cache. Use one of \(AISpec.layouts.sorted().joined(separator: ", "))")
+        }
+        if let command = rule.ai?.removeCommand {
+            commandIssues(command, rule: rule).forEach { issue($0.severity, $0.message) }
+            if command.contains(where: { $0.contains("{path}") }) {
+                issue(.error, "ai.removeCommand names a model with {name}; {path} isn't available there")
+            }
         }
         return issues
     }

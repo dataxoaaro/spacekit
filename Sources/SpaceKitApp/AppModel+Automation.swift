@@ -5,44 +5,13 @@ import SpaceKitCore
 extension AppModel {
     // MARK: Automation
 
-    /// Everything on the Automation screen, including the agent status (which asks launchd).
-    func refreshAutomation() {
-        refreshJournal()
-        refreshHistory()
-        refreshAgentStatus()
-    }
-
-    /// Cheap file reads only: job state, suggestions and the journal.
-    func refreshJournal() {
-        let context = self.context
-        jobStates = context.jobStates.load()
-        suggestions = context.suggestions.all()
-        journal = context.journal.entries(since: Date().addingTimeInterval(-90 * 86_400))
-        recovered90Days = journal.reduce(0) { $0 + $1.bytes }
-    }
-
-    func refreshAgentStatus() {
-        let paths = context.paths
-        Task.detached {
-            let status = LaunchAgent(paths: paths).status()
-            await MainActor.run { self.agentStatus = status }
-        }
-    }
-
-    func refreshHistory() {
-        history = context.history.records(since: Date().addingTimeInterval(-365 * 86_400))
-    }
-
     var jobRunner: JobRunner { JobRunner(context: context) }
 
     /// Evaluates a job in the background and opens the review sheet with its plan.
     func previewJob(_ job: Job) {
-        runningJobID = job.id
         let runner = jobRunner
         Task {
-            let result = await Task.detached { Result { try runner.evaluate(job) } }.value
-            self.runningJobID = nil
-            switch result {
+            switch await self.evaluate(job, with: runner) {
             case .success(let evaluation):
                 let plan = runner.plan(for: evaluation)
                 if plan.isEmpty {
@@ -70,12 +39,9 @@ extension AppModel {
             errorMessage = "The job “\(suggestion.jobName)” that prepared this cleanup no longer exists. Dismiss the suggestion."
             return
         }
-        runningJobID = job.id
         let runner = jobRunner
         Task {
-            let result = await Task.detached { Result { try runner.evaluate(job) } }.value
-            self.runningJobID = nil
-            switch result {
+            switch await self.evaluate(job, with: runner) {
             case .success(let evaluation):
                 let plan = suggestion.plan.keeping(onlyEligible: evaluation.eligible).plan
                 guard !plan.isEmpty else {
@@ -105,7 +71,7 @@ extension AppModel {
     }
 
     func installAgent() {
-        guard let executable = AppModel.cliExecutable else {
+        guard let executable = LaunchAgent.spacekitExecutable() else {
             errorMessage =
                 "Couldn't find the spacekit command-line tool. Build it with `make install`, or use the app bundle from `make app`."
             return
@@ -125,13 +91,6 @@ extension AppModel {
             errorMessage = error.localizedDescription
         }
         refreshAutomation()
-    }
-
-    /// The `spacekit` CLI the agent runs: bundled in `SpaceKit.app/Contents/Helpers`, or installed on PATH.
-    static var cliExecutable: String? {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/spacekit").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return Shell.which("spacekit")
     }
 
     /// Saves a job: in place of the job `id` when editing, otherwise as a new job whose id doesn't clash with another.

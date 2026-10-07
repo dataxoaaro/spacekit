@@ -74,6 +74,9 @@ public struct SafetySettings: Codable, Sendable, Equatable {
     }
 
     public var trash: TrashMode = .always
+    /// `trash: always`: nothing outside the Trash is deleted permanently. `CleanupExecutor` enforces it whatever the
+    /// plan says; front ends read it only to explain what will happen.
+    public var trashesEverything: Bool { trash == .always }
     /// Most an automatic run may remove.
     public var maxBytesPerRun: ByteCount = .gb(100)
     /// Extra paths that may never be removed (added to the built-in list, which can't be reduced).

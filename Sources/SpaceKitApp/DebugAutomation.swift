@@ -54,8 +54,9 @@
                 case "confirm-cleanup":
                     // Only ever inside a throwaway sandbox home, so a debug hook can't touch real data:
                     // the home must be a temp folder, every item must live inside it, and tool commands
-                    // (which act system-wide, e.g. `brew cleanup`) are refused outright.
-                    let home = PathUtil.home
+                    // (which act system-wide, e.g. `brew cleanup`) are refused outright. The home is resolved
+                    // because scanned paths are: a `/tmp/…` sandbox shows up as `/private/tmp/…` in the plan.
+                    let home = PathUtil.realpath(PathUtil.home) ?? PathUtil.home
                     guard home.hasPrefix("/private/tmp/") || home.hasPrefix("/private/var/folders/"),
                         let pending = model.pendingCleanup,
                         pending.plan.commands.isEmpty,
@@ -67,7 +68,8 @@
                     }
                     let started = Date()
                     Task {
-                        _ = await model.execute(pending.plan, confirmed: false, onProgress: { _, _, _ in })
+                        // Confirmed on the person's behalf only because the gate above confined the plan to a sandbox.
+                        _ = await model.execute(pending.plan, confirmed: true, onProgress: { _, _, _ in })
                         model.pendingCleanup = nil
                         let elapsed = Date().timeIntervalSince(started)
                         try? "cleanup applied in \(elapsed)s; analysing=\(model.isAnalysing)\n"

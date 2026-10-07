@@ -47,7 +47,7 @@ struct CleanCommand: ParsableCommand {
     func run() throws {
         let started = Date()
         let context = global.loadContext()
-        if permanent && context.config.safety.trash == .always {
+        if permanent && context.config.safety.trashesEverything {
             throw ValidationError("--permanent is turned off because your config sets safety.trash: always.")
         }
         let (rules, paths) = try resolve(targets, in: context)
@@ -133,9 +133,9 @@ struct CleanCommand: ParsableCommand {
         guard isFolder, let tree = try? Scanner(options: options).scan(path) else {
             return CleanupItem(path: path, kind: kind, size: FileSize.allocated(st), ruleID: rule?.id)
         }
-        let git = tree.markers.bit(for: ".git")
+        let repository = tree.root.repositoryFlags(tree.markers)
         return CleanupItem(
             path: path, kind: .directory, size: tree.root.size, ruleID: rule?.id,
-            isRepository: tree.root.markers & git != 0, containsRepository: tree.root.subtreeMarkers & git != 0)
+            isRepository: repository.isRepository, containsRepository: repository.containsRepository)
     }
 }

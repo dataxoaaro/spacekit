@@ -5,19 +5,6 @@ import SpaceKitCore
 extension AppModel {
     // MARK: Volumes and Trash
 
-    /// Re-reads volume capacities. Values only change (and views only update) when the disk changed.
-    func refreshVolumes() {
-        let fresh = VolumeTable.current().userVisibleVolumes.compactMap { VolumeCapacity.of(path: $0.mountPoint) }
-        if fresh != volumes { volumes = fresh }
-        let live = VolumeCapacity.of(path: scanPath)
-        if live != scanCapacity {
-            scanCapacity = live
-            if let live, let tree, tree.roots == ["/"] {
-                categories = CategoryBreakdown.updatingHidden(categories, capacity: live, scannedBytes: tree.root.size)
-            }
-        }
-    }
-
     /// Keeps capacity live: every few seconds (one cheap system call per volume), and immediately when SpaceKit
     /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder).
     func startMonitoring() {
@@ -45,13 +32,9 @@ extension AppModel {
         }
     }
 
-    var trashPath: String { PathUtil.home + "/.Trash" }
+    var trashPath: String { Trash.path() }
 
-    private var trashScanOptions: ScanOptions {
-        var options = context.scanOptions
-        options.boundary = .device
-        return options
-    }
+    private var trashScanOptions: ScanOptions { Trash.scanOptions(context.scanOptions) }
 
     /// Measures the Trash. With `resync`, the Trash folder in the map is replaced by the fresh scan, so
     /// emptying the Trash anywhere (Finder, Terminal, SpaceKit) shows up without a full rescan.
@@ -67,10 +50,10 @@ extension AppModel {
                 (try? Scanner(options: options).scan(path), needsSecondScan ? try? Scanner(options: options).scan(path) : nil)
             }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {
-                trashBytes = nil
+                trashMeasured(nil)
                 return
             }
-            if trashBytes != fresh.root.size { trashBytes = fresh.root.size }
+            trashMeasured(fresh.root.size)
             guard resync else { return }
             await untilTreesAreFree()
             var changed = false
@@ -84,19 +67,9 @@ extension AppModel {
                 changed = true
             }
             guard changed else { return }
-            treeRevision += 1
-            if let tree, tree.roots == ["/"] || tree.covers(PathUtil.home) {
-                categories = CategoryBreakdown.compute(tree: tree, findings: analysis?.findings ?? [], capacity: scanCapacity)
-            }
-            let trashRules = Set(library.rules.filter { $0.paths.contains { PathUtil.expand($0) == path } }.map(\.id))
+            treesChangedInPlace()
+            let trashRules = Set(Trash.rules(in: library.rules).map(\.id))
             if !trashRules.isEmpty { refreshFindings(ruleIDs: trashRules) }
-        }
-    }
-
-    func refreshSnapshots() {
-        Task {
-            let count = await Task.detached(priority: .utility) { LocalSnapshots.list(volume: "/").count }.value
-            if count != localSnapshotCount { localSnapshotCount = count }
         }
     }
 
@@ -104,26 +77,20 @@ extension AppModel {
     func emptyTrash() {
         let options = trashScanOptions
         let path = trashPath
-        let rule = library.rules.first { $0.paths.contains { PathUtil.expand($0) == path } }
+        let rules = library.rules
+        let started = Date()
         Task {
             let fresh = await Task.detached(priority: .userInitiated) { try? Scanner(options: options).scan(path) }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {
                 errorMessage = "SpaceKit can't read the Trash. Grant Full Disk Access, or empty it in Finder."
                 return
             }
-            var items = fresh.root.children.filter { $0.size > 0 }.map {
-                CleanupItem(path: $0.path, kind: .directory, name: $0.name, size: $0.size, ruleID: rule?.id)
-            }
-            if fresh.root.directFileSize > 0 {
-                items.append(
-                    CleanupItem(
-                        path: path, kind: .looseFiles, name: "Files in the Trash", size: fresh.root.directFileSize, ruleID: rule?.id))
-            }
-            guard !items.isEmpty else {
+            let plan = Trash.emptyingPlan(fresh, rules: rules, created: started)
+            guard !plan.isEmpty else {
                 errorMessage = "The Trash is already empty."
                 return
             }
-            review(CleanupPlan(items: items, useTrash: false), title: "Empty Trash")
+            review(plan, title: "Empty Trash")
         }
     }
 

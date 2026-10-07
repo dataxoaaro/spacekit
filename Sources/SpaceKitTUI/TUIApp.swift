@@ -80,12 +80,6 @@ public final class TUIApp {
         case cleaned(CleanupReport, JobEvaluation?)
     }
 
-    struct AnalysisResult: Sendable {
-        var analysis: Analysis
-        var aiReport: AIReport
-        var ruleIndex: RuleIndex
-    }
-
     struct State {
         var tab: Tab = .explore
         var rootPath: String
@@ -100,9 +94,10 @@ public final class TUIApp {
         var mapMode = false
         var marked: [String: CleanupItem] = [:]
 
-        var analysis: Analysis?
+        var result: AnalysisResult?
+        var analysis: Analysis? { result?.analysis }
+        var aiReport: AIReport? { result?.aiReport }
         var analysisProgress: ScanProgress?
-        var aiReport: AIReport?
         var dev = ListCursor()
         var markedRules: Set<String> = []
         var ai = ListCursor()
@@ -115,7 +110,9 @@ public final class TUIApp {
         var activity: Activity?
         var quitWhenIdle = false
 
-        var ruleIndex: RuleIndex
+        /// Labels folders before an analysis exists.
+        var libraryIndex: RuleIndex
+        var ruleIndex: RuleIndex { result?.ruleIndex ?? libraryIndex }
         var modal: Modal?
         var flash: String?
         var flashUntil = Date.distantPast
@@ -139,7 +136,7 @@ public final class TUIApp {
 
     public init(context: SpaceKitContext, path: String?) {
         let root = PathUtil.expand(path ?? context.config.scan.defaultPath)
-        state = State(rootPath: root, ruleIndex: RuleIndex(rules: context.library.rules))
+        state = State(rootPath: root, libraryIndex: RuleIndex(rules: context.library.rules))
         self.context = context
     }
 
@@ -173,9 +170,8 @@ public final class TUIApp {
         state.tree = nil
         state.current = nil
         state.explore = ListCursor()
-        state.analysis = nil
+        state.result = nil
         state.analysisProgress = nil
-        state.aiReport = nil
         state.pendingRemovals = []
         state.dev = ListCursor()
         state.ai = ListCursor()
@@ -196,7 +192,7 @@ public final class TUIApp {
             let result = Result { () throws -> AnalysisResult in
                 let analysis = try context.analyzer.analyzeSync(reusing: tree, progress: progress)
                 try? context.history.recordSnapshot(analysis: analysis)
-                return TUIApp.result(of: analysis, context: context)
+                return context.result(of: analysis)
             }
             inbox.post(.analysed(generation: generation, result))
         }
@@ -208,17 +204,9 @@ public final class TUIApp {
         guard !rules.isEmpty, state.analysis != nil else { return }
         let (context, generation, inbox) = (context, state.generation, inbox)
         Thread.detachNewThread {
-            let result = Result { TUIApp.result(of: try context.analyzer.analyzeSync(rules: rules), context: context) }
+            let result = Result { context.result(of: try context.analyzer.analyzeSync(rules: rules)) }
             inbox.post(.refreshed(generation: generation, ruleIDs: ruleIDs, result))
         }
-    }
-
-    static func result(of analysis: Analysis, context: SpaceKitContext) -> AnalysisResult {
-        AnalysisResult(
-            analysis: analysis,
-            aiReport: AIInspector.report(
-                findings: analysis.findings, tree: analysis.tree, activeWindow: context.config.automation.activeModelWindow),
-            ruleIndex: RuleIndex(rules: context.library.rules, findings: analysis.findings))
     }
 
     func handle(_ event: Event) {
@@ -239,9 +227,7 @@ public final class TUIApp {
             state.analysisProgress = nil
             switch result {
             case .success(let fresh):
-                state.analysis = fresh.analysis
-                state.aiReport = fresh.aiReport
-                state.ruleIndex = fresh.ruleIndex
+                state.result = fresh
             case .failure(let error):
                 state.error = TerminalText.sanitize(error.localizedDescription)
             }
@@ -250,7 +236,7 @@ public final class TUIApp {
             applyRemovals(pending)
         case .refreshed(let generation, let ruleIDs, let result):
             guard generation == state.generation, case .success(let fresh) = result else { return }
-            mergeRefreshed(fresh, ruleIDs: ruleIDs)
+            state.result?.merge(fresh, for: ruleIDs)
         case .evaluated(let job, let result):
             jobEvaluated(job, result)
         case .cleaned(let report, let job):

@@ -75,6 +75,26 @@ public enum PathUtil {
         return realParent == "/" ? "/" + name : realParent + "/" + name
     }
 
+    /// `pattern` with symlinks resolved in the part of its glob-free prefix that exists, so it names locations
+    /// the way a scan reports them (`/tmp/x/*` → `/private/tmp/x/*`). Globs stay as written, and the last
+    /// component of a glob-free pattern isn't followed: a pattern naming a symlink means the link. Returns
+    /// `pattern` itself when nothing resolves differently, or when it isn't an absolute or `~` path.
+    public static func canonicalPattern(_ pattern: String, home: String = PathUtil.home) -> String {
+        guard pattern.hasPrefix("/") || pattern == "~" || pattern.hasPrefix("~/") else { return pattern }
+        let expanded = expand(pattern, home: home)
+        let parts = components(expanded).map(String.init)
+        let literal = parts.prefix { !isGlob($0) }.count
+        var used = literal == parts.count ? literal - 1 : literal
+        while used > 0 {
+            if let base = realpath("/" + parts[0..<used].joined(separator: "/")) {
+                let result = parts[used...].reduce(base) { join($0, $1) }
+                return result == expanded ? pattern : result
+            }
+            used -= 1
+        }
+        return pattern
+    }
+
     /// The form two paths are compared in when deciding whether one is protected. APFS is case-insensitive
     /// and normalization-insensitive by default, so `~/library` and `~/Library` are the same folder; comparing
     /// keys means a different spelling can't slip past a protected list. On a case-sensitive volume this

@@ -50,7 +50,7 @@ public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
 
     /// Days since last use, if known.
     public func idleDays(now: Date = Date()) -> Int? {
-        lastUsed.map { max(0, Int(now.timeIntervalSince($0) / 86_400)) }
+        lastUsed.map { max(0, Int(Age.since($0, now: now).days)) }
     }
 }
 
@@ -92,22 +92,33 @@ public struct RuleEngine: Sendable {
 
     /// Never searched by pattern rules: tool homes and app data where a `node_modules` or `build`
     /// folder belongs to an installed tool rather than to one of your projects.
-    public static let defaultPatternExcludes: [String] = [
-        "~/Library", "~/.Trash", "~/Applications", "~/.cache", "~/.local", "~/.config",
-        "~/.npm", "~/.pnpm-store", "~/.nvm", "~/.volta", "~/.fnm", "~/.bun", "~/.deno", "~/.yarn",
-        "~/.cargo", "~/.rustup", "~/go", "~/.gradle", "~/.m2", "~/.sdkman", "~/.android",
-        "~/.vscode", "~/.vscode-insiders", "~/.cursor", "~/.windsurf", "~/.zed", "~/.antigravity",
-        "~/.pyenv", "~/.rbenv", "~/.gem", "~/.docker", "~/.orbstack", "~/.ollama", "~/.lmstudio",
-        "~/miniconda3", "~/anaconda3", "~/miniforge3", "~/.conda", "~/.mamba", "~/.pub-cache", "~/fvm",
-        "~/.claude", "~/.codex", "~/.gemini", "~/.Spotlight-V100", "~/.cocoapods", "~/jan",
-    ]
+    public static let defaultPatternExcludes: [String] =
+        [
+            "~/Library", "~/.Trash", "~/Applications", "~/.cache", "~/.local", "~/.config",
+            "~/.vscode", "~/.vscode-insiders", "~/.cursor", "~/.windsurf", "~/.zed", "~/.antigravity",
+            "~/.claude", "~/.codex", "~/.gemini", "~/.Spotlight-V100",
+        ] + ToolHomes.developer + ToolHomes.ai
 
     /// Bundles are opaque: never search inside them.
     static let bundleSuffixes = [".app", ".photoslibrary", ".bundle", ".framework", ".xcarchive", ".musiclibrary", ".tvlibrary"]
 
+    /// Rule and root paths are resolved through symlinks once here (`PathUtil.canonicalPattern`), because
+    /// the scan tree holds resolved paths: a rule for `/tmp/x` must match a scan of `/tmp`, stored as `/private/tmp`.
     public init(rules: [Rule], devRoots: [String] = ["~"]) {
-        self.rules = rules
-        self.devRoots = devRoots
+        self.rules = rules.map(RuleEngine.canonical)
+        self.devRoots = devRoots.map { PathUtil.canonicalPattern($0) }
+    }
+
+    static func canonical(_ rule: Rule) -> Rule {
+        var rule = rule
+        rule.paths = rule.paths.map { PathUtil.canonicalPattern($0) }
+        rule.exclusions = rule.exclusions.map { PathUtil.canonicalPattern($0) }
+        if var match = rule.match {
+            match.roots = match.roots?.map { PathUtil.canonicalPattern($0) }
+            match.exclude = match.exclude.map { PathUtil.canonicalPattern($0) }
+            rule.match = match
+        }
+        return rule
     }
 
     static func isActiveProjectsToken(_ token: String) -> Bool {
@@ -192,7 +203,7 @@ public struct RuleEngine: Sendable {
     }
 
     static func item(for node: DirNode, markers: MarkerRegistry, project: String? = nil, lastUsed: Date? = nil) -> FindingItem {
-        let git = markers.bit(for: ".git")
+        let repository = node.repositoryFlags(markers)
         return FindingItem(
             path: node.path,
             kind: .directory,
@@ -201,8 +212,8 @@ public struct RuleEngine: Sendable {
             fileCount: node.fileCount,
             lastModified: node.lastUsed,
             lastUsed: lastUsed ?? node.lastUsed,
-            isRepository: node.markers & git != 0,
-            containsRepository: node.subtreeMarkers & git != 0,
+            isRepository: repository.isRepository,
+            containsRepository: repository.containsRepository,
             project: project
         )
     }
@@ -245,7 +256,7 @@ public struct RuleEngine: Sendable {
             allRoots.formUnion(roots)
             for name in rule.match!.names { byName[name, default: []].append((index, rule, roots)) }
         }
-        var excluded = Set(RuleEngine.defaultPatternExcludes.map { PathUtil.expand($0) })
+        var excluded = Set(RuleEngine.defaultPatternExcludes.map { PathUtil.expand(PathUtil.canonicalPattern($0)) })
         for (_, rule) in patternRules {
             for glob in rule.match!.exclude where !glob.contains("*") { excluded.insert(PathUtil.expand(glob)) }
         }

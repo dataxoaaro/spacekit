@@ -29,7 +29,7 @@ struct RulesView: View {
                                 Text(rule.name)
                                 Spacer()
                                 if let finding = model.analysis?.finding(ruleID: rule.id) {
-                                    Text(finding.size.bytesText).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                    Text(finding.size.formattedBytes).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                                 }
                             }
                             .tag(rule.id)
@@ -55,7 +55,7 @@ struct RulesView: View {
                 Button("Reload", systemImage: "arrow.clockwise") { model.reloadContext() }
                     .help("Re-read rule files and the config from disk")
                 Button("Open Rules Folder", systemImage: "folder") {
-                    let directory = model.context.paths.userRulesDirectory
+                    let directory = model.paths.userRulesDirectory
                     try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
                     model.reveal(directory)
                 }
@@ -98,7 +98,7 @@ struct RulesView: View {
     }
 
     private func newRule() {
-        let directory = model.context.paths.userRulesDirectory
+        let directory = model.paths.userRulesDirectory
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         var path = directory + "/my-rule.yaml"
         var index = 2
@@ -106,22 +106,8 @@ struct RulesView: View {
             path = directory + "/my-rule-\(index).yaml"
             index += 1
         }
-        let template = """
-            # Schema: docs/RULES.md — save, then click Reload in SpaceKit.
-            id: custom.my-cache
-            name: My tool's cache
-            group: Custom
-            category: developer.cache
-            description: What this is, and what happens if it's removed.
-            path: ~/Library/Caches/com.example.tool
-            granularity: whole        # or children: each entry inside is an item
-            recreatedBy: My tool
-            safety:
-              level: safe             # safe | review | protected
-              trash: true
-            action: remove
-
-            """
+        let rule = RuleScaffold.rule(name: "My tool's cache", paths: ["~/Library/Caches/com.example.tool"])
+        guard let template = try? RuleScaffold.yaml(rule, note: "save, then click Reload in SpaceKit") else { return }
         try? template.write(toFile: path, atomically: true, encoding: .utf8)
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }

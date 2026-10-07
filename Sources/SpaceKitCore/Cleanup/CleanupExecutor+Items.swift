@@ -15,7 +15,7 @@ extension CleanupExecutor {
         let isFolder = (st.st_mode & S_IFMT) == S_IFDIR
         let rule = item.ruleID.flatMap { rules[$0] }
         let inTrash = isInsideTrash(item.path, orTrashItself: item.kind == .looseFiles)
-        guard let removal = removal(useTrash: plan.useTrash, rule: rule, inTrash: inTrash, context: context) else {
+        guard let removal = removal(useTrash: plan.useTrash || alwaysTrash, rule: rule, inTrash: inTrash, context: context) else {
             return .skipped(reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them")
         }
         let context = CleanupExecutor.context(context, trashing: removal == .trash)
@@ -166,7 +166,7 @@ extension CleanupExecutor {
         return .automatic(automation)
     }
 
-    var trashDirectory: String { PathUtil.join(safety.home, ".Trash") }
+    var trashDirectory: String { Trash.path(home: safety.home) }
 
     /// True inside the guard's home Trash, whatever the spelling or symlinks in the parent path.
     func isInsideTrash(_ path: String, orTrashItself: Bool) -> Bool {

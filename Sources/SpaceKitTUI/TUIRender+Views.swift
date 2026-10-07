@@ -54,10 +54,8 @@ extension TUIApp {
         let size = ByteCount.format(finding.size).bold
         var lines = ["", " " + TerminalText.sanitize(rule.name).bold + " — " + size + "  " + finding.safety.badge]
         if let description = rule.description { lines.append(" " + TerminalText.sanitize(description).dim) }
-        var facts: [String] = ["Risk: \(finding.safety.risk)"]
-        if let recreated = rule.recreatedBy { facts.append("Recreated by: \(TerminalText.sanitize(recreated))") }
-        if let used = finding.lastUsed { facts.append("Last used: \(used.relativeDescription())") }
-        lines.append(" " + facts.joined(separator: "  ·  ").dim)
+        let summary = finding.facts().filter { [.risk, .recreatedBy, .lastUsed].contains($0.kind) }
+        lines.append(" " + summary.map { "\($0.label): \(TerminalText.sanitize($0.value))" }.joined(separator: "  ·  ").dim)
         return lines
     }
 
@@ -86,12 +84,7 @@ extension TUIApp {
                         + ByteCount.format(tools[row.tool]?.size ?? 0).bold)
                 continue
             }
-            let status: String
-            switch model.kind {
-            case .orphaned: status = "orphaned".fg(ANSI.review)
-            case .cache: status = "cache".dim
-            case .model, .dataset: status = model.isActive(within: report.activeWindow) ? "active".fg(ANSI.safe) : "idle".fg(ANSI.review)
-            }
+            let status = model.status(within: report.activeWindow).terminalText
             let used = model.lastUsed.map { $0.relativeDescription() } ?? "–"
             let line =
                 "   ├ " + ANSI.pad(ANSI.truncate(TerminalText.sanitize(model.name), to: 40), to: 40)
@@ -131,9 +124,9 @@ extension TUIApp {
         let visibleJobs = window.follow(selection: state.jobSelection, visible: (height - lines.count - 1) / 3, count: jobs.count)
         for index in visibleJobs {
             let job = jobs[index]
-            let toggle = job.enabled ? "ON ●".fg(ANSI.safe) : "OFF ○".dim
+            let toggle = job.terminalToggle
             let mode = ANSI.pad(job.mode.title, to: 10).fg(job.mode == .automatic ? ANSI.accent : 250)
-            let nextText = job.enabled ? (next[job.id].map { "next " + $0.relativeDescription() } ?? "") : ""
+            let nextText = job.nextRunText(next[job.id])
             let name = ANSI.truncate(TerminalText.sanitize(job.name), to: 33).bold
             let title =
                 " " + ANSI.pad(name, to: 34) + mode + ANSI.pad(job.schedule.description, to: 27) + ANSI.pad(nextText.dim, to: 18) + toggle
@@ -188,12 +181,7 @@ extension TUIApp {
         if !snapshot.grew.isEmpty {
             lines.append("")
             lines.append("  " + "WHAT GREW?".bold)
-            for item in snapshot.grew.prefix(max(0, height - lines.count - 1)) {
-                lines.append(
-                    "  " + ANSI.pad(ANSI.truncate(TerminalText.sanitize(item.name), to: 27), to: 28)
-                        + ANSI.pad(ByteCount.formatDelta(item.delta), to: 10, alignRight: true).fg(item.delta > 0 ? ANSI.review : ANSI.safe)
-                )
-            }
+            lines += snapshot.grew.prefix(max(0, height - lines.count - 1)).map(\.terminalLine)
         }
         return lines
     }

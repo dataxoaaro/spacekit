@@ -185,8 +185,8 @@ struct HistoryTests {
             HistoryRecord(
                 date: now, kind: .snapshot, total: 1000, used: 773, available: 227, purgeable: 0,
                 categories: nil, groups: ["Xcode": 131, "Ollama": 68, "Docker": 70]))
-        #expect(store.usedDelta(over: 30 * 86_400, now: now) == 73)
-        let grew = store.whatGrew(over: 30 * 86_400, now: now)
+        #expect(store.usedDelta(over: .days(30), now: now) == 73)
+        let grew = store.whatGrew(over: .days(30), now: now)
         #expect(grew.map(\.name) == ["Xcode", "Ollama", "Docker"])
         #expect(grew.first?.delta == 31)
     }

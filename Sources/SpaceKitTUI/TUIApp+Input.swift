@@ -154,7 +154,7 @@ extension TUIApp {
             if state.marked[path] != nil {
                 state.marked[path] = nil
             } else {
-                state.marked[path] = cleanupItem(for: item, path: path)
+                state.marked[path] = cleanupItem(for: item)
             }
             state.explore.move(by: 1, count: items.count)
         case .character("o"):
@@ -163,8 +163,8 @@ extension TUIApp {
             guard !refuseWhileBusy() else { return }
             var plan = CleanupPlan(items: Array(state.marked.values), created: state.scanStarted)
             if plan.items.isEmpty {
-                guard let item = selectedItem(items), let path = item.path else { return }
-                plan.items = [cleanupItem(for: item, path: path)]
+                guard let item = selectedItem(items).flatMap(cleanupItem(for:)) else { return }
+                plan.items = [item]
             }
             plan.useTrash = context.trashPreference(for: .trash) ?? true
             confirmCleanup(plan, title: "Clean selected items")
@@ -177,13 +177,8 @@ extension TUIApp {
         items.indices.contains(state.explore.selection) ? items[state.explore.selection] : nil
     }
 
-    func cleanupItem(for item: DiskItem, path: String) -> CleanupItem {
-        let git = state.tree?.markers.bit(for: ".git") ?? 0
-        return CleanupItem(
-            path: path, kind: item.isDirectory ? .directory : .file, name: item.name, size: item.size,
-            ruleID: state.ruleIndex.rule(for: path)?.id,
-            isRepository: (item.directory?.markers ?? 0) & git != 0,
-            containsRepository: (item.directory?.subtreeMarkers ?? 0) & git != 0, lastUsed: item.modified)
+    func cleanupItem(for item: DiskItem) -> CleanupItem? {
+        CleanupItem(item, markers: state.tree?.markers, ruleID: item.path.flatMap { state.ruleIndex.rule(for: $0)?.id })
     }
 
     // MARK: Dev Intelligence
@@ -207,8 +202,7 @@ extension TUIApp {
                 flash("Already analysing")
                 return
             }
-            state.analysis = nil
-            state.aiReport = nil
+            state.result = nil
             startAnalysis()
             return
         }
@@ -255,25 +249,13 @@ extension TUIApp {
         var lines: [String] = []
         if let description = rule.description { lines.append(clean(description)) }
         lines.append("")
-        lines.append("Reclaimable: ".dim + ByteCount.format(finding.size).bold)
-        lines.append("Risk: ".dim + rule.safety.level.badge)
-        if let recreatedBy = rule.recreatedBy { lines.append("Recreated by: ".dim + clean(recreatedBy)) }
-        if let used = finding.lastUsed { lines.append("Last used: ".dim + used.relativeDescription()) }
-        lines.append("Items: ".dim + "\(finding.items.count)")
+        lines += finding.terminalFacts().map { "\($0.label): ".dim + $0.value }
         lines.append("")
         for item in finding.items {
             let age = item.idleDays().map { "\($0)d" } ?? "–"
             lines.append(
                 ANSI.pad(ByteCount.format(item.size), to: 9, alignRight: true) + "  " + ANSI.pad(age, to: 5, alignRight: true) + "  "
                     + clean(PathUtil.abbreviate(item.path)))
-        }
-        if let command = rule.action.command {
-            lines.append("")
-            lines.append("Cleans with: ".dim + clean(command.joined(separator: " ")))
-        }
-        if let manual = rule.action.manual {
-            lines.append("")
-            lines.append("How to clean: ".dim + clean(manual))
         }
         state.modal = Modal(title: clean(rule.name), lines: lines)
     }
@@ -303,7 +285,7 @@ extension TUIApp {
         case .pageDown: select(position + 10)
         case .character("d"), .character("x"):
             guard !refuseWhileBusy(), let model = rows[selectable[position]].model else { return }
-            guard let plan = removalPlan(for: model) else {
+            guard let plan = CleanupPlan.removing(model, created: state.scanStarted) else {
                 flash("\(TerminalText.sanitize(model.name)) can't be removed on its own; remove the models that use it")
                 return
             }
@@ -311,27 +293,5 @@ extension TUIApp {
         default:
             break
         }
-    }
-
-    /// The tool's own remove command when it has one (it knows which files other models still share),
-    /// otherwise the model's files and folders as they are on disk now. `nil` when there's nothing to remove,
-    /// like the blobs several models share.
-    func removalPlan(for model: AIModel) -> CleanupPlan? {
-        var plan = CleanupPlan(useTrash: context.trashPreference(for: .trash) ?? true, created: state.scanStarted)
-        if let command = model.removeCommand {
-            plan.commands = [PlannedCommand(ruleID: model.ruleID, arguments: command, estimatedBytes: model.size)]
-            return plan
-        }
-        guard !model.paths.isEmpty else { return nil }
-        plan.items = model.paths.map { path in
-            var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-            let size = model.paths.count == 1 ? model.size : FileSize.allocated(atPath: path) ?? 0
-            return CleanupItem(
-                path: path, kind: isDirectory.boolValue ? .directory : .file,
-                name: model.paths.count == 1 ? model.name : PathUtil.lastComponent(path),
-                size: size, ruleID: model.ruleID, lastUsed: model.lastUsed)
-        }
-        return plan
     }
 }

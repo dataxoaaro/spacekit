@@ -66,12 +66,11 @@ final class ProgressReporter: Sendable {
         guard enabled else { return }
         running.store(true, ordering: .sequentiallyConsistent)
         Thread { [self] in
-            let frames = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
             var tick = 0
             while running.load(ordering: .sequentiallyConsistent) {
                 let p = progress.snapshot
                 let line =
-                    "\r\u{1B}[2K\(frames[tick % frames.count]) \(label) \(ByteCount.format(p.bytes)) · \(p.files.formatted()) files · \(p.directories.formatted()) folders"
+                    "\r\u{1B}[2K\(Spinner.frame(tick)) \(label) \(ByteCount.format(p.bytes)) · \(p.files.formatted()) files · \(p.directories.formatted()) folders"
                 FileHandle.standardError.write(Data(line.utf8))
                 tick += 1
                 Thread.sleep(forTimeInterval: 0.1)

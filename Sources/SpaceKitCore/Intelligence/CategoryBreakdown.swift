@@ -73,7 +73,10 @@ public enum CategoryBreakdown {
     /// Built-in locations. More specific paths win over their ancestors.
     public static func builtinLocations(home: String) -> [(String, StorageCategory)] {
         let h = home
-        return [
+        let toolHomes =
+            ToolHomes.developer.map { (PathUtil.expand($0, home: h), StorageCategory.developer) }
+            + ToolHomes.ai.map { (PathUtil.expand($0, home: h), StorageCategory.ai) }
+        return toolHomes + [
             ("/Applications", .applications), ("\(h)/Applications", .applications),
             ("/System/Applications", .system), ("/System", .system), ("/usr", .system), ("/bin", .system), ("/sbin", .system),
             ("/private/var/vm", .system), ("/System/Volumes/VM", .system), ("/System/Volumes/Preboot", .system),
@@ -95,11 +98,7 @@ public enum CategoryBreakdown {
             ("\(h)/Developer", .developer), ("\(h)/Projects", .developer), ("\(h)/projects", .developer),
             ("\(h)/code", .developer), ("\(h)/Code", .developer), ("\(h)/src", .developer), ("\(h)/dev", .developer),
             ("\(h)/repos", .developer), ("\(h)/workspace", .developer), ("\(h)/git", .developer), ("\(h)/GitHub", .developer),
-            ("\(h)/go", .developer), ("\(h)/.cargo", .developer), ("\(h)/.rustup", .developer),
-            ("\(h)/.gradle", .developer), ("\(h)/.m2", .developer), ("\(h)/.npm", .developer), ("\(h)/.nvm", .developer),
-            ("\(h)/.bun", .developer), ("\(h)/.pnpm-store", .developer), ("\(h)/.android", .developer),
-            ("\(h)/.pyenv", .developer), ("\(h)/.docker", .developer), ("\(h)/.orbstack", .developer),
-            ("\(h)/.ollama", .ai), ("\(h)/.lmstudio", .ai), ("\(h)/.cache/huggingface", .ai), ("\(h)/.cache/lm-studio", .ai),
+            ("\(h)/.cache/huggingface", .ai), ("\(h)/.cache/lm-studio", .ai),
         ]
     }
 

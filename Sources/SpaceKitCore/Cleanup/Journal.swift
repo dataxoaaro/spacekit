@@ -39,22 +39,11 @@ public struct Journal: Sendable {
     public init(file: String) { self.file = file }
 
     public func append(_ entries: [JournalEntry]) throws {
-        guard !entries.isEmpty else { return }
-        let encoder = JSONEncoder.spaceKit
-        var text = ""
-        for entry in entries {
-            text += String(decoding: try encoder.encode(entry), as: UTF8.self) + "\n"
-        }
-        try LockedFile.append(text, to: file)
+        try JSONLines.append(entries, to: file)
     }
 
     public func entries(since: Date? = nil) -> [JournalEntry] {
-        let decoder = JSONDecoder.spaceKit
-        return LockedFile.readLines(file).compactMap { line in
-            guard let entry = try? decoder.decode(JournalEntry.self, from: Data(line.utf8)) else { return nil }
-            if let since, entry.date < since { return nil }
-            return entry
-        }
+        JSONLines.read(file, since: since, date: \JournalEntry.date)
     }
 
     /// Bytes recovered since a date.

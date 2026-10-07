@@ -47,7 +47,7 @@ private struct RecoveredBanner: View {
             Image(systemName: "arrow.uturn.backward.circle.fill").font(.system(size: 36)).foregroundStyle(Theme.good)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Your Mac has recovered").foregroundStyle(.secondary)
-                Text(model.recovered90Days.bytesText).font(.system(size: 30, weight: .semibold)).monospacedDigit()
+                Text(model.recovered90Days.formattedBytes).font(.system(size: 30, weight: .semibold)).monospacedDigit()
                 Text("over the last 3 months · \(model.journal.count) cleanups").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -108,7 +108,7 @@ private struct SuggestionsSection: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(suggestion.plan.totalBytes.bytesText).monospacedDigit()
+                    Text(suggestion.plan.totalBytes.formattedBytes).monospacedDigit()
                     Button("Dismiss") { model.dismiss(suggestion) }
                     Button("Review…") { model.approve(suggestion) }.buttonStyle(.borderedProminent)
                         .disabled(model.runningJobID != nil)
@@ -161,7 +161,7 @@ struct JobCard: View {
                 Text(job.mode.explanation).font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 14) {
                     Label(job.schedule.description, systemImage: "calendar")
-                    if let matched = state?.lastMatchedBytes { Label(matched.bytesText, systemImage: "chart.bar") }
+                    if let matched = state?.lastMatchedBytes { Label(matched.formattedBytes, systemImage: "chart.bar") }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -195,7 +195,7 @@ private struct NextRunFooter: View {
                     "\(next.date.formatted(.dateTime.weekday(.wide))) · \(next.date.formatted(date: .omitted, time: .shortened)) — \(next.job.name)"
                 )
                 if estimate.high > 0 {
-                    Text("Estimated recovery: \(estimate.low.bytesText)–\(estimate.high.bytesText)").foregroundStyle(.secondary)
+                    Text("Estimated recovery: \(estimate.low.formattedBytes)–\(estimate.high.formattedBytes)").foregroundStyle(.secondary)
                 }
             }
         }

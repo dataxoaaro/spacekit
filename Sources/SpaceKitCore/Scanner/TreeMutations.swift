@@ -158,7 +158,7 @@ extension ScanTree {
         for name in names {
             var st = stat()
             guard lstat(PathUtil.join(path, name), &st) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
-            remaining[name] = UInt64(max(0, st.st_blocks)) * 512
+            remaining[name] = FileSize.allocated(st)
         }
         let files = node.files.filter { remaining[$0.name] != nil }
         let tracked = Set(node.files.map(\.name))

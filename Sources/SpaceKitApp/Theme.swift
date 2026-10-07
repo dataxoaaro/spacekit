@@ -66,7 +66,7 @@ enum Theme {
 
     static func ageColor(_ date: Date?) -> Color {
         guard let date else { return other }
-        let days = Date().timeIntervalSince(date) / 86_400
+        let days = Age.since(date).days
         return (ageBuckets.first { days < $0.maxDays } ?? ageBuckets[ageBuckets.count - 1]).color
     }
 
@@ -96,8 +96,4 @@ extension NSColor {
             srgbRed: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
             blue: CGFloat(hex & 0xff) / 255, alpha: 1)
     }
-}
-
-extension UInt64 {
-    var bytesText: String { ByteCount.format(self) }
 }

@@ -31,6 +31,17 @@ struct TreeConsistencyTests {
         }
     }
 
+    /// Where "Move to Trash" puts `name`: the Trash renames on collision, like Finder does.
+    func trashDestination(for name: String, in tree: TempTree) -> String {
+        var destination = tree.path(".Trash/" + name)
+        var counter = 2
+        while FileManager.default.fileExists(atPath: destination) {
+            destination = tree.path(".Trash/\(name) \(counter)")
+            counter += 1
+        }
+        return destination
+    }
+
     @Test("Random deletes and moves to the Trash always match a full rescan", arguments: [UInt64(0), 50_000])
     func randomOperations(minFileSize: UInt64) throws {
         var rng = SeededRandom(seed: 42 &+ minFileSize)
@@ -47,10 +58,18 @@ struct TreeConsistencyTests {
                 try tree.file("\(folder)/f\(file).bin", bytes: size)
             }
         }
+        // Hard links across folders: the tree credits each file's bytes to one of its links.
+        let fm = FileManager.default
+        for index in 0..<10 {
+            let files: [String] = (fm.enumerator(atPath: tree.root)?.allObjects as? [String] ?? []).filter { $0.hasSuffix(".bin") }
+            guard !files.isEmpty else { break }
+            let source = files[Int(rng.next() % UInt64(files.count))]
+            let folder = folders[Int(rng.next() % UInt64(folders.count))]
+            try tree.link(source, (folder.isEmpty ? "" : folder + "/") + "h\(index).bin")
+        }
         let scanned = try scan(tree.root, minFileSize: minFileSize)
         try expectMatchesRescan(scanned, root: tree.root, minFileSize: minFileSize, "initial")
 
-        let fm = FileManager.default
         for step in 0..<40 {
             // Pick a random existing item outside the Trash.
             let candidates = (fm.enumerator(atPath: tree.root)?.allObjects as? [String] ?? [])
@@ -67,25 +86,26 @@ struct TreeConsistencyTests {
 
             let removal: Removal
             if operation == 0 && isDirectory.boolValue {
-                // Remove only the loose files of a folder.
+                // Remove only the loose files of a folder, deleting them or moving them to the Trash.
+                let toTrash = rng.next() % 2 == 0
                 var bytes: UInt64 = 0
+                var trashed: [String] = []
                 for name in try fm.contentsOfDirectory(atPath: path) {
                     var child = stat()
                     lstat(path + "/" + name, &child)
-                    if (child.st_mode & S_IFMT) != S_IFDIR {
-                        bytes += UInt64(child.st_blocks) * 512
+                    guard (child.st_mode & S_IFMT) != S_IFDIR else { continue }
+                    bytes += UInt64(child.st_blocks) * 512
+                    if toTrash {
+                        let destination = trashDestination(for: name, in: tree)
+                        try fm.moveItem(atPath: path + "/" + name, toPath: destination)
+                        trashed.append(destination)
+                    } else {
                         try fm.removeItem(atPath: path + "/" + name)
                     }
                 }
-                removal = Removal(path: path, kind: .looseFiles, bytes: bytes)
+                removal = Removal(path: path, kind: .looseFiles, bytes: bytes, trashedFiles: trashed)
             } else if operation == 1 {
-                // "Move to Trash": the Trash renames on collision, like Finder does.
-                var destination = tree.path(".Trash/" + PathUtil.lastComponent(relative))
-                var counter = 2
-                while fm.fileExists(atPath: destination) {
-                    destination = tree.path(".Trash/\(PathUtil.lastComponent(relative)) \(counter)")
-                    counter += 1
-                }
+                let destination = trashDestination(for: PathUtil.lastComponent(relative), in: tree)
                 let bytes = isDirectory.boolValue ? (scanned.node(at: path)?.size ?? 0) : fileBytes
                 try fm.moveItem(atPath: path, toPath: destination)
                 removal = Removal(path: path, kind: isDirectory.boolValue ? .directory : .file, bytes: bytes, trashedTo: destination)
@@ -151,6 +171,35 @@ struct TreeConsistencyTests {
         #expect(taken == removed)
         try expectMatchesRescan(scanned, root: tree.root, minFileSize: minFileSize, "partial loose files")
         #expect(scanned.node(at: tree.path("cache"))?.directFileCount == 2)
+    }
+
+    @Test("Loose files moved to the Trash reappear in the Trash", arguments: [UInt64(0), 50_000])
+    func trashedLooseFiles(minFileSize: UInt64) throws {
+        let tree = try TempTree()
+        try tree.file("cache/big.bin", bytes: 200_000)
+        try tree.file("cache/small.tmp", bytes: 5_000)
+        try tree.file("cache/kept.bin", bytes: 150_000)
+        try tree.file("cache/linked.bin", bytes: 90_000)
+        try tree.link("cache/linked.bin", "docs/linked.bin")
+        try tree.file("cache/sub/inner.bin", bytes: 100_000)
+        try tree.file(".Trash/big.bin", bytes: 4_000)
+        let scanned = try scan(tree.root, minFileSize: minFileSize)
+        let moves = [("big.bin", "big 2.bin"), ("small.tmp", "small.tmp"), ("linked.bin", "linked.bin")]
+        var bytes: UInt64 = 0
+        for (name, destination) in moves {
+            bytes += tree.allocated("cache/\(name)")
+            try FileManager.default.moveItem(atPath: tree.path("cache/\(name)"), toPath: tree.path(".Trash/\(destination)"))
+        }
+
+        var report = CleanupReport(dryRun: false)
+        report.items = [(CleanupItem(path: tree.path("cache"), kind: .looseFiles, size: bytes), .removed(bytes: bytes, trashedTo: nil))]
+        report.trashedLooseFiles = [tree.path("cache"): moves.map { tree.path(".Trash/\($0.1)") }]
+        let removals = Removal.from(report)
+        #expect(removals.first?.trashedFiles == moves.map { tree.path(".Trash/\($0.1)") })
+        for removal in removals { removal.apply(to: scanned) }
+        try expectMatchesRescan(scanned, root: tree.root, minFileSize: minFileSize, "trashed loose files")
+        #expect(scanned.node(at: tree.path(".Trash"))?.directFileCount == 4)
+        #expect(scanned.node(at: tree.path("cache"))?.directFileCount == 1)
     }
 
     @Test("A fresh scan of a folder replaces its old contents")

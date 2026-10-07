@@ -17,6 +17,9 @@ public struct AIModel: Sendable, Identifiable, Hashable {
     public var isRegenerable: Bool = false
     /// `paths` may hold files other models use too (Ollama blobs), so only `removeCommand` may remove it.
     public var filesAreShared: Bool = false
+    /// The findings' own items when `paths` alone would say too much: a folder's loose files (only the names
+    /// counted) or the rest of a folder whose other entries belong to models or rules. Removal plans exactly these.
+    public var items: [FindingItem] = []
     public var id: String { ruleID + ":" + name }
 
     /// Whether `CleanupPlan.removing(_:)` has anything to plan for it.
@@ -84,11 +87,11 @@ public enum AIInspector {
             case "lmstudio": models = nestedModels(finding: finding, tree: tree, depth: 2)
             case "children": models = nestedModels(finding: finding, tree: tree, depth: 1)
             default:
-                models = [
-                    AIModel(
-                        name: finding.rule.name, kind: .cache, size: finding.size, lastUsed: finding.lastUsed,
-                        paths: finding.items.map(\.path), removeCommand: nil, ruleID: finding.rule.id)
-                ]
+                var cache = AIModel(
+                    name: finding.rule.name, kind: .cache, size: finding.size, lastUsed: finding.lastUsed,
+                    paths: finding.items.map(\.path), removeCommand: nil, ruleID: finding.rule.id)
+                cache.items = finding.items
+                models = [cache]
             }
             let regenerable = finding.rule.safety.level == .safe
             tools[ai.tool, default: []] += models.map { model in
@@ -210,27 +213,48 @@ public enum AIInspector {
     static func huggingFaceModels(finding: Finding, tree: ScanTree) -> [AIModel] {
         var models: [AIModel] = []
         for item in finding.items {
-            guard let node = tree.node(at: item.path) else { continue }
+            guard item.kind == .directory, let node = tree.node(at: item.path) else {
+                models.append(itemModel(item, kind: .cache, rule: finding.rule))
+                continue
+            }
             let hub = node.child(named: "hub") ?? node
-            var accounted: UInt64 = 0
+            var rest: [FindingItem] = []
             for child in hub.children where child.size > 0 {
                 let parts = child.name.components(separatedBy: "--")
-                guard parts.count >= 2, ["models", "datasets", "spaces"].contains(parts[0]) else { continue }
+                guard parts.count >= 2, ["models", "datasets", "spaces"].contains(parts[0]) else {
+                    rest.append(RuleEngine.item(for: child, markers: tree.markers))
+                    continue
+                }
                 let name = parts.dropFirst().joined(separator: "/")
                 models.append(
                     AIModel(
                         name: name, kind: parts[0] == "datasets" ? .dataset : .model, size: child.size,
                         lastUsed: accessOrModified(child), paths: [child.path], removeCommand: nil, ruleID: finding.rule.id))
-                accounted &+= child.size
             }
-            if node.size > accounted {
-                models.append(
-                    AIModel(
-                        name: "\(PathUtil.lastComponent(item.path)) cache", kind: .cache, size: node.size - accounted,
-                        lastUsed: node.lastUsed, paths: [item.path], removeCommand: nil, ruleID: finding.rule.id))
+            if hub !== node {
+                rest += node.children.filter { $0 !== hub && $0.size > 0 }.map { RuleEngine.item(for: $0, markers: tree.markers) }
+                rest += [RuleEngine.looseFilesItem(of: node)].compactMap { $0 }
+            }
+            rest += [RuleEngine.looseFilesItem(of: hub)].compactMap { $0 }
+            let size = rest.reduce(UInt64(0)) { $0 &+ $1.size }
+            if size > 0 {
+                // The folder minus its models: only its other entries go, never the folder holding the models.
+                var cache = AIModel(
+                    name: "\(PathUtil.lastComponent(item.path)) cache", kind: .cache, size: size, lastUsed: node.lastUsed,
+                    paths: rest.map(\.path), removeCommand: nil, ruleID: finding.rule.id)
+                cache.items = rest
+                models.append(cache)
             }
         }
         return models
+    }
+
+    /// A finding item that isn't a whole folder (loose files, a single file) as a model of its own.
+    private static func itemModel(_ item: FindingItem, kind: AIModel.Kind, rule: Rule) -> AIModel {
+        var model = AIModel(
+            name: item.name, kind: kind, size: item.size, lastUsed: item.lastUsed, paths: [item.path], removeCommand: nil, ruleID: rule.id)
+        model.items = [item]
+        return model
     }
 
     // MARK: Folder-per-model layouts
@@ -239,11 +263,8 @@ public enum AIInspector {
     static func nestedModels(finding: Finding, tree: ScanTree, depth: Int) -> [AIModel] {
         var models: [AIModel] = []
         for item in finding.items {
-            guard let node = tree.node(at: item.path) else {
-                models.append(
-                    AIModel(
-                        name: item.name, kind: .model, size: item.size, lastUsed: item.lastUsed,
-                        paths: [item.path], removeCommand: nil, ruleID: finding.rule.id))
+            guard item.kind == .directory, let node = tree.node(at: item.path) else {
+                models.append(itemModel(item, kind: .model, rule: finding.rule))
                 continue
             }
             var level: [(DirNode, String)] = [(node, "")]

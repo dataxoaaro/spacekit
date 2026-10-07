@@ -64,6 +64,10 @@ public struct RuleLibrary: Sendable {
 
         for (directory, isBuiltin) in sources {
             for file in yamlFiles(in: directory) {
+                if let problem = FileTrust.problem(with: file) {
+                    issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
+                    continue
+                }
                 let parsed: [Rule]
                 do {
                     parsed = try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file)
@@ -121,9 +125,24 @@ public struct RuleLibrary: Sendable {
     /// Where the built-in rule library lives, searched in this order:
     /// `$SPACEKIT_RULES_DIR`, the app bundle's `Resources/rules`, `<prefix>/share/spacekit/rules` next to
     /// the executable (Homebrew, `make install`), the bundle's resources when the CLI runs from
-    /// `SpaceKit.app/Contents/Helpers`, and finally the `rules/` folder of a source checkout.
+    /// `SpaceKit.app/Contents/Helpers`, a `rules` folder beside the executable, and, in debug builds only, the
+    /// `rules/` folder of the source checkout the binary was built from.
     public static var builtinDirectory: String? {
-        let fm = FileManager.default
+        builtinCandidates(includingSourceCheckout: searchesSourceCheckout).first { path in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+    }
+
+    /// Rules found in the built-in directory get built-in trust (their commands may run trusted tools). A release
+    /// binary must not grant that to whatever sits at the path it was compiled from on some build machine.
+    #if DEBUG
+        static let searchesSourceCheckout = true
+    #else
+        static let searchesSourceCheckout = false
+    #endif
+
+    static func builtinCandidates(includingSourceCheckout: Bool) -> [String] {
         var candidates: [String] = []
         if let env = ProcessInfo.processInfo.environment["SPACEKIT_RULES_DIR"], !env.isEmpty { candidates.append(env) }
         if let resources = Bundle.main.resourceURL?.path { candidates.append(resources + "/rules") }
@@ -131,14 +150,14 @@ public struct RuleLibrary: Sendable {
         candidates.append(executable + "/../share/spacekit/rules")
         candidates.append(executable + "/../Resources/rules")  // SpaceKit.app/Contents/Helpers/spacekit
         candidates.append(executable + "/rules")
-        // Source checkout: Sources/SpaceKitCore/Rules/RuleLibrary.swift → <repo>/rules
-        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().path
-        candidates.append(repo + "/rules")
-        return candidates.map(PathUtil.standardize).first { path in
-            var isDirectory: ObjCBool = false
-            return fm.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
-        }
+        if includingSourceCheckout { candidates.append(sourceCheckoutRules) }
+        return candidates.map(PathUtil.standardize)
+    }
+
+    /// Sources/SpaceKitCore/Rules/RuleLibrary.swift → <repo>/rules
+    static var sourceCheckoutRules: String {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("rules").path
     }
 
     static func yamlFiles(in directory: String) -> [String] {
@@ -261,11 +280,18 @@ public struct RuleLibrary: Sendable {
     static func isTooBroad(_ path: String, home: String) -> Bool {
         let expanded = PathUtil.expand(path, home: home)
         let components = PathUtil.components(expanded)
-        let literal = components.prefix { component in !component.contains(where: { "*?[".contains($0) }) }
+        let literal = components.prefix { !PathUtil.isGlob(String($0)) }
         // APFS ignores case and Unicode normalization, so `~/library/..` names the same folders as `~/Library/..`.
-        func folded(_ text: String) -> String { text.precomposedStringWithCanonicalMapping.lowercased() }
-        let prefix = folded("/" + literal.joined(separator: "/"))
-        return components.count < 2 || prefix == "/" || prefix == folded(home) || folded(expanded) == folded(home)
+        let prefix = PathUtil.comparisonKey("/" + literal.joined(separator: "/"))
+        let homeKey = PathUtil.comparisonKey(home)
+        return components.count < 2 || prefix == "/" || prefix == homeKey || PathUtil.comparisonKey(expanded) == homeKey
+    }
+
+    /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
+    /// executor's refusal say the same thing.
+    static func untrustedRuleCommand(_ executable: String) -> String {
+        "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
+            + "Add it to safety.allowedCommands to allow it"
     }
 
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
@@ -278,8 +304,7 @@ public struct RuleLibrary: Sendable {
                 issues.append((.warning, "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"))
             }
         } else {
-            issues.append(
-                (.warning, "command '\(executable)' only runs if listed in safety.allowedCommands; built-in trust covers SpaceKit's own rules only"))
+            issues.append((.warning, untrustedRuleCommand(executable)))
         }
         if command.contains(where: { $0.contains(";") || $0.contains("&&") || $0.contains("|") || $0.contains("`") || $0.contains("$(") }) {
             issues.append((.error, "commands run without a shell; remove shell syntax (; && | ` $( )"))

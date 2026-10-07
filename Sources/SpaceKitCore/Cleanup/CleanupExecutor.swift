@@ -18,6 +18,21 @@ public enum CleanupOutcome: Sendable, Equatable {
         return false
     }
 
+    public var isWouldRemove: Bool {
+        if case .wouldRemove = self { return true }
+        return false
+    }
+
+    public var isSkipped: Bool {
+        if case .skipped = self { return true }
+        return false
+    }
+
+    public var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
     /// Where a trashed item went. `nil` if it was deleted permanently (or not removed).
     public var trashedTo: String? {
         if case .removed(_, let trashedTo) = self { return trashedTo }
@@ -32,6 +47,8 @@ public struct CleanupReport: Sendable {
     /// Problems that didn't stop an item but must not go unnoticed: journal writes that failed, and loose
     /// files that couldn't be removed while the rest of their folder was.
     public var warnings: [String] = []
+    /// Trash destinations of loose files moved to the Trash, keyed by the folder (the loose-files item's `path`).
+    public var trashedLooseFiles: [String: [String]] = [:]
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {
@@ -53,14 +70,6 @@ public struct CleanupReport: Sendable {
         if deletedBytes > 0 || trashedBytes == 0 { parts.append("Freed \(ByteCount.format(deletedBytes))") }
         if trashedBytes > 0 { parts.append("\(parts.isEmpty ? "Moved" : "moved") \(ByteCount.format(trashedBytes)) to the Trash") }
         return parts.joined(separator: " and ")
-    }
-
-    public var wouldFreeBytes: UInt64 {
-        let all = items.map(\.outcome) + commands.map(\.outcome)
-        return all.reduce(0) { total, outcome in
-            if case .wouldRemove(let bytes) = outcome { return total &+ bytes }
-            return total
-        }
     }
 
     public var skipped: [(item: CleanupItem, reason: String)] {
@@ -97,6 +106,8 @@ public struct CleanupExecutor: Sendable {
     public var alwaysTrash: Bool
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
+    /// Resolves the folder an item is removed from. Tests replace it to swap symlinks at the worst moment.
+    var resolve: @Sendable (String) -> String? = PathUtil.realpath
 
     public static let commandTimeout: TimeInterval = 600
 
@@ -119,14 +130,25 @@ public struct CleanupExecutor: Sendable {
             for: item, size: item.size, isRepository: item.isRepository, containsRepository: item.containsRepository, context: context)
     }
 
+    /// `checkedDirectory`: the resolved folder the removal will act in. The item is judged there too, so the guard
+    /// has seen the exact location that changes, whatever a symlink in the item's path points at by then.
     func verdict(
-        for item: CleanupItem, size: UInt64, isRepository: Bool, containsRepository: Bool, context: CleanupContext
+        for item: CleanupItem, size: UInt64, isRepository: Bool, containsRepository: Bool, context: CleanupContext,
+        checkedDirectory: String? = nil
     ) -> SafetyVerdict {
+        let rule = item.ruleID.flatMap { rules[$0] }
+        func evaluate(_ path: String) -> SafetyVerdict {
+            safety.evaluate(
+                path: path, size: size, rule: rule, context: context, isRepository: isRepository, containsRepository: containsRepository)
+        }
         // Loose files are judged as "something inside the folder", not as the folder itself.
         let path = item.kind == .looseFiles ? CleanupItem.looseFilesPath(in: item.path) : item.path
-        var verdict = safety.evaluate(
-            path: path, size: size, rule: item.ruleID.flatMap { rules[$0] }, context: context,
-            isRepository: isRepository, containsRepository: containsRepository)
+        var verdict = evaluate(path)
+        if let checkedDirectory {
+            let name = item.kind == .looseFiles ? "*" : PathUtil.lastComponent(item.path)
+            let resolved = PathUtil.join(checkedDirectory, name)
+            if resolved != path { verdict = verdict.merging(evaluate(resolved)) }
+        }
         refuseIfConfigInvalid(&verdict)
         return verdict
     }

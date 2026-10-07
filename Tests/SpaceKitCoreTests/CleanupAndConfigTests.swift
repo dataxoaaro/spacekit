@@ -7,9 +7,11 @@ import Testing
 struct CleanupExecutorTests {
     func executor(_ tree: TempTree, rules: [Rule] = [], budget: ByteCount = .gb(100)) -> CleanupExecutor {
         let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
-        return CleanupExecutor(
+        var executor = CleanupExecutor(
             safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules,
             maxBytesPerAutomaticRun: budget.bytes)
+        executor.trash = sandboxTrash(home: tree.path("home"))
+        return executor
     }
 
     @Test("Dry runs touch nothing")
@@ -18,7 +20,7 @@ struct CleanupExecutorTests {
         try tree.file("home/Projects/app/build/out.o", bytes: 10_000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/app/build"), size: 10_000)], useTrash: false)
         let report = executor(tree).execute(plan, context: .manual(confirmed: true), dryRun: true)
-        #expect(report.wouldFreeBytes == 10_000)
+        #expect(report.items.map(\.outcome) == [.wouldRemove(bytes: 10_000)])
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app/build/out.o")))
         #expect(Journal(file: tree.path("state/journal.jsonl")).entries().isEmpty)
     }
@@ -80,7 +82,8 @@ struct CleanupExecutorTests {
         try tree.file("home/cache/a.tmp", bytes: 1000)
         try tree.file("home/cache/b.tmp", bytes: 1000)
         try tree.file("home/cache/sub/keep.bin", bytes: 1000)
-        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000)], useTrash: false)
+        let item = CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"])
+        let plan = CleanupPlan(items: [item], useTrash: false)
         let report = executor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.freedBytes > 0)
         #expect(!FileManager.default.fileExists(atPath: tree.path("home/cache/a.tmp")))

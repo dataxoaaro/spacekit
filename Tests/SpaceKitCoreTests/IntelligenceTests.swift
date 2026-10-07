@@ -44,6 +44,94 @@ struct OverlapTests {
     }
 }
 
+@Suite("Rule index scope")
+struct RuleIndexScopeTests {
+    @Test("A pattern match outside the rule's roots or inside an excluded tool home isn't recognised")
+    func patternScope() throws {
+        let tree = try TempTree()
+        try tree.file("home/Code/app/package.json", bytes: 10)
+        try tree.directory("home/Code/app/node_modules")
+        try tree.file("home/.vscode/extensions/ext/package.json", bytes: 10)
+        try tree.directory("home/.vscode/extensions/ext/node_modules")
+        try tree.file("other/app/package.json", bytes: 10)
+        try tree.directory("other/app/node_modules")
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"], sibling: ["package.json"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let index = RuleIndex(rules: [rule], home: tree.path("home"))
+        #expect(index.rule(for: tree.path("home/Code/app/node_modules"))?.id == "node.modules")
+        #expect(index.rule(for: tree.path("home/.vscode/extensions/ext/node_modules")) == nil)
+        #expect(index.rule(for: tree.path("other/app/node_modules")) == nil)
+        let rooted = RuleIndex(rules: [rule], home: tree.path("home"), patternRoots: [tree.path("other")])
+        #expect(rooted.rule(for: tree.path("other/app/node_modules"))?.id == "node.modules")
+    }
+}
+
+@Suite("Loose files name what they counted")
+struct LooseFileNameTests {
+    @Test("A children rule's loose files leave out a single file another rule claims")
+    func childrenRuleLeavesClaimedFile() throws {
+        let tree = try TempTree()
+        try tree.file("Logs/big.log", bytes: 300_000)
+        try tree.file("Logs/small.log", bytes: 20_000)
+        try tree.file("Logs/app/x.log", bytes: 50_000)
+        let outer = Rule(id: "logs", name: "Logs", paths: [tree.path("Logs")], granularity: .children)
+        let inner = Rule(id: "big", name: "Big log", paths: [tree.path("Logs/big.log")])
+        let result = try scan(tree.root)
+
+        let findings = RuleEngine(rules: [outer, inner]).evaluate(result)
+        let total = findings.reduce(UInt64(0)) { $0 + $1.size }
+        #expect(total == result.node(at: tree.path("Logs"))!.size)
+        let loose = try #require(findings.first { $0.rule.id == "logs" }?.items.first { $0.kind == .looseFiles })
+        #expect(loose.size == tree.allocated("Logs/small.log"))
+        #expect(loose.looseFileNames == ["small.log"])
+    }
+
+    @Test("Removing an outer rule's loose files leaves a file an inner rule claims")
+    func removalLeavesClaimedFile() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/big.log", bytes: 300_000)
+        try tree.file("home/cache/small.tmp", bytes: 20_000)
+        try tree.file("home/cache/sub/x.bin", bytes: 50_000)
+        let outer = Rule(
+            id: "cache", name: "Cache", paths: [tree.path("home/cache")], safety: SafetySpec(level: .safe, trash: false),
+            action: ActionSpec(remove: true))
+        let inner = Rule(
+            id: "logs", name: "Logs", paths: [tree.path("home/cache/big.log")], safety: SafetySpec(level: .review),
+            action: ActionSpec(remove: true))
+        let result = try scan(tree.root)
+        let findings = RuleEngine(rules: [outer, inner]).evaluate(result).filter { $0.rule.id == "cache" }
+        let plan = CleanupPlan.make(findings: findings, trashPreference: false, created: Date())
+        #expect(plan.items.first { $0.kind == .looseFiles }?.looseFileNames == ["small.tmp"])
+
+        let report = sandboxExecutor(tree, rules: [outer, inner]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.removedAnything)
+        #expect(onDisk(tree.path("home/cache/big.log")))
+        #expect(!onDisk(tree.path("home/cache/small.tmp")))
+    }
+
+    @Test("A saved loose-files item without names can't remove anything")
+    func itemWithoutNames() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/a.tmp", bytes: 1_000)
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let plan = CleanupPlan(
+            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1_000, ruleID: "cache")], useTrash: false)
+        let report = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.skipped.first?.reason.contains("refresh") == true)
+        #expect(onDisk(tree.path("home/cache/a.tmp")))
+    }
+
+    @Test("Emptying the Trash names the loose files it saw")
+    func trashNamesFiles() throws {
+        let tree = try TempTree()
+        try tree.file("home/.Trash/a.tmp", bytes: 1_000)
+        try tree.file("home/.Trash/dir/b", bytes: 1_000)
+        let plan = Trash.emptyingPlan(try scan(tree.path("home/.Trash")), rules: [], created: Date(), home: tree.path("home"))
+        #expect(plan.items.first { $0.kind == .looseFiles }?.looseFileNames == ["a.tmp"])
+    }
+}
+
 @Suite("Incremental updates with loose files")
 struct LooseFilesUpdateTests {
     func analysis() throws -> (TempTree, Analysis) {
@@ -170,7 +258,8 @@ struct StorageCategoryTests {
         #expect(size(.systemData) == tree.allocated("Documents/app-logs/run.log"))
         #expect(size(.media) == tree.allocated("Documents/Photos Backup/img.heic"))
         #expect(size(.documents) == tree.allocated("Documents/report.pdf"))
-        let lookup = { (relative: String) in CategoryBreakdown.category(for: tree.path(relative), findings: findings, home: tree.root) }
+        let locations = CategoryBreakdown.locations(home: tree.root, findings: findings)
+        let lookup = { (relative: String) in CategoryBreakdown.nearestCategory(for: tree.path(relative), in: locations) ?? .other }
         #expect(lookup("Documents/app-logs/run.log") == .systemData)
         #expect(lookup("Documents/Photos Backup/img.heic") == .media)
         #expect(lookup("Documents/report.pdf") == .documents)

@@ -8,8 +8,11 @@ public struct RuleIndex: Sendable {
     /// Glob locations with their literal prefix (the part before the first wildcard), checked first.
     private var globRules: [(glob: String, prefix: String, rule: Rule)] = []
     private var byName: [String: [Rule]] = [:]
+    private let scope: RuleScope
 
-    public init(rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home) {
+    /// `patternRoots`: where pattern rules without their own `roots` look (the config's `scan.devRoots`).
+    public init(rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home, patternRoots: [String] = ["~"]) {
+        scope = RuleScope(home: home, patternRoots: patternRoots)
         for rule in rules {
             for pattern in rule.paths {
                 let expanded = PathUtil.expand(pattern, home: home)
@@ -37,13 +40,15 @@ public struct RuleIndex: Sendable {
         return patternRule(for: path)
     }
 
-    /// A pattern rule matching this folder, verified against the disk (e.g. `node_modules` next to a `package.json`).
+    /// A pattern rule matching this folder, verified against the disk (e.g. `node_modules` next to a `package.json`),
+    /// and only where the engine would look for it.
     public func patternRule(for path: String) -> Rule? {
         guard let candidates = byName[PathUtil.lastComponent(path)] else { return nil }
         let fm = FileManager.default
         let parent = PathUtil.parent(path)
         return candidates.first { rule in
-            rule.match?.markersPresent(
+            guard scope.contains(path, rule: rule) else { return false }
+            return rule.match?.markersPresent(
                 sibling: { fm.fileExists(atPath: PathUtil.join(parent, $0)) },
                 inside: { fm.fileExists(atPath: PathUtil.join(path, $0)) }) ?? false
         }

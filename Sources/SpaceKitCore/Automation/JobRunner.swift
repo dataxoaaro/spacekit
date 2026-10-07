@@ -61,8 +61,8 @@ extension CleanupReport {
         func note(_ count: Int, _ noun: String, _ what: String) -> String? {
             count > 0 ? "\(count) \(noun)\(count == 1 ? "" : "s") \(what)" : nil
         }
-        let skippedCommands = commands.filter { if case .skipped = $0.outcome { true } else { false } }.count
-        let failedCommands = commands.filter { if case .failed = $0.outcome { true } else { false } }.count
+        let skippedCommands = commands.filter(\.outcome.isSkipped).count
+        let failedCommands = commands.filter(\.outcome.isFailed).count
         return [
             note(skipped.count, "item", "skipped"), note(failures.count, "item", "failed"),
             note(skippedCommands, "command", "skipped"), note(failedCommands, "command", "failed"),

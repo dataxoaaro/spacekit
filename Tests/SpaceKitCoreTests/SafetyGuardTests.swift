@@ -176,6 +176,35 @@ struct SafetyGuardTests {
 
 /// APFS treats `Library`, `library` and `LIBRARY` (and NFC/NFD spellings of a name) as the same folder,
 /// so every protected list must match regardless of how the path is spelled.
+@Suite("Safety verdict reasons")
+struct VerdictEntryTests {
+    @Test("Each reason keeps its own decision, whatever order they were raised in")
+    func decisionPerReason() {
+        let rule = Rule(id: "db", name: "Database", paths: ["~/db"], safety: SafetySpec(level: .protected))
+        let verdict = testGuard().evaluate(
+            path: "/Users/tester/Projects/app", rule: rule, context: .manual(confirmed: false), isRepository: true)
+        #expect(verdict.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("Don't touch") }?.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
+        #expect(verdict.reasons == verdict.entries.map(\.reason))
+    }
+
+    @Test("A command's item reasons keep their own decisions")
+    func commandItemReasons() throws {
+        let tree = try TempTree()
+        try tree.directory("home/tools/a/.git")
+        var rule = Rule(
+            id: "tools", name: "Tools", paths: [tree.path("home/tools")], granularity: .children, safety: SafetySpec(level: .protected),
+            action: ActionSpec(itemCommand: ["swift", "{path}"]))
+        rule.isBuiltin = true
+        let command = PlannedCommand(
+            ruleID: "tools", arguments: ["swift", tree.path("home/tools/a")], estimatedBytes: 1, itemPath: tree.path("home/tools/a"))
+        let verdict = sandboxExecutor(tree, rules: [rule]).verdict(for: command, context: .manual(confirmed: false))
+        #expect(verdict.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
+    }
+}
+
 @Suite("Safety guard: case and Unicode spellings")
 struct SafetyGuardSpellingTests {
     let manual = CleanupContext.manual(confirmed: true)
@@ -406,6 +435,54 @@ struct SafetyGuardAutomationTests {
             safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
         #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: ownRoots, context: automatic).decision == .allow)
         #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
+    }
+
+    @Test("A path is checked exactly as given: trailing spaces name a different item")
+    func noTrimming() throws {
+        let guardian = testGuard()
+        let manual = CleanupContext.manual(confirmed: false)
+        #expect(guardian.evaluate(path: "/Users/tester/Documents", context: manual).isBlocked)
+        let spaced = guardian.evaluate(path: "/Users/tester/Documents ", context: manual)
+        #expect(spaced.decision == .confirm)
+
+        let tree = try TempTree()
+        try tree.file("report /a", bytes: 50_000)
+        try tree.file("report/b", bytes: 4_000)
+        #expect(try scan(tree.path("report ")).root.size == tree.allocated("report /a"))
+    }
+
+    @Test("By hand, a safe rule outside its own locations counts as no rule: the person confirms")
+    func manualOutsideScope() {
+        let rule = Rule(
+            id: "node.modules", name: "node_modules", match: PatternSpec(names: ["node_modules"]),
+            safety: SafetySpec(level: .safe), action: ActionSpec(remove: true))
+        let guardian = testGuard()
+        let manual = CleanupContext.manual(confirmed: false)
+        #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: rule, context: manual).decision == .allow)
+        let tool = guardian.evaluate(path: "/Users/tester/.vscode/extensions/ext/node_modules", rule: rule, context: manual)
+        #expect(tool.decision == .confirm)
+        #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: rule, context: manual).decision == .confirm)
+    }
+
+    @Test("Automatic scope must hold for the path with its parent's symlinks resolved, not only as written")
+    func scopeOfResolvedParent() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/real/x", bytes: 100)
+        try tree.file("home/jobs/old/keep/x", bytes: 100)
+        try tree.file("home/Important/data/x", bytes: 100)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache/link"), withDestinationPath: tree.path("home/Important"))
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/jobs/old/link"), withDestinationPath: tree.path("home/Important"))
+        let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
+
+        let rule = Rule(
+            id: "c", name: "c", paths: [tree.path("home/cache")], granularity: .children, safety: SafetySpec(level: .safe),
+            action: ActionSpec(remove: true))
+        #expect(guardian.evaluate(path: tree.path("home/cache/real"), rule: rule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: tree.path("home/cache/link/data"), rule: rule, context: automatic).isBlocked)
+
+        let job = CleanupContext.automatic(AutomationContext(jobID: "j", customPaths: [tree.path("home/jobs/old")]))
+        #expect(guardian.evaluate(path: tree.path("home/jobs/old/keep"), context: job).decision == .allow)
+        #expect(guardian.evaluate(path: tree.path("home/jobs/old/link/data"), context: job).isBlocked)
     }
 
     @Test("Automatic scope checks see rule and job paths written through a symlink as the scanned, resolved paths")

@@ -37,8 +37,23 @@ public struct SafetyVerdict: Sendable, Equatable {
         public static func < (lhs: Decision, rhs: Decision) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
+    /// One reason with the decision it calls for on its own, so a front end can label a confirm reason as a
+    /// warning even when another reason blocks the item.
+    public struct Entry: Sendable, Equatable {
+        public var decision: Decision
+        public var reason: String
+    }
+
+    /// The strongest decision of all entries (`allow` with none).
     public var decision: Decision
-    public var reasons: [String]
+    public private(set) var entries: [Entry]
+
+    public var reasons: [String] { entries.map(\.reason) }
+
+    init(decision: Decision, reasons: [String]) {
+        self.decision = decision
+        entries = reasons.map { Entry(decision: decision, reason: $0) }
+    }
 
     public static let allow = SafetyVerdict(decision: .allow, reasons: [])
 
@@ -49,9 +64,21 @@ public struct SafetyVerdict: Sendable, Equatable {
         decision == .allow || (decision == .confirm && confirmed)
     }
 
+    /// Adds `reason`. A reason raised again keeps the stronger of its decisions.
     mutating func raise(_ decision: Decision, _ reason: String) {
         if decision > self.decision { self.decision = decision }
-        if !reasons.contains(reason) { reasons.append(reason) }
+        if let index = entries.firstIndex(where: { $0.reason == reason }) {
+            entries[index].decision = max(entries[index].decision, decision)
+        } else {
+            entries.append(Entry(decision: decision, reason: reason))
+        }
+    }
+
+    /// The stricter of two verdicts, with the reasons of both.
+    func merging(_ other: SafetyVerdict) -> SafetyVerdict {
+        var merged = self
+        for entry in other.entries { merged.raise(entry.decision, entry.reason) }
+        return merged
     }
 }
 
@@ -77,6 +104,7 @@ public struct SafetyGuard: Sendable {
     private let userProtected: [Location]
     private let mountKeys: [String]
     private let protectedPatterns: [ProtectedPattern]
+    private let scope: RuleScope
 
     /// An automatic job may not remove a single item bigger than this share of the volume's used space.
     public static let maxAutomaticVolumeShare = 0.25
@@ -95,6 +123,7 @@ public struct SafetyGuard: Sendable {
         self.isRunningAsRoot = isRunningAsRoot
         self.patternRoots = patternRoots
         self.volumeCapacity = volumeCapacity
+        scope = RuleScope(home: home, patternRoots: patternRoots)
         critical = SafetyGuard.criticalPaths(home: home).map(Location.init)
         sealed = SafetyGuard.sealedTrees(home: home).map(Location.init)
         personal = SafetyGuard.personalAreas(home: home).map(Location.init)
@@ -116,15 +145,6 @@ public struct SafetyGuard: Sendable {
 
     /// Never removed, and nothing that *contains* them is ever removed either. This is what makes
     /// "delete the whole disk", "delete my home folder" or "delete /Users" impossible.
-    public var criticalPaths: [String] { SafetyGuard.criticalPaths(home: home) }
-
-    /// Nothing inside these, nor the folders themselves, is ever removed: the OS, credentials, and app
-    /// databases that break when edited.
-    public var sealedTrees: [String] { SafetyGuard.sealedTrees(home: home) }
-
-    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
-    public var personalAreas: [String] { SafetyGuard.personalAreas(home: home) }
-
     static func criticalPaths(home h: String) -> [String] {
         [
             "/", "/System", "/System/Volumes", "/System/Volumes/Data", "/System/Volumes/Preboot", "/System/Volumes/VM",
@@ -143,6 +163,8 @@ public struct SafetyGuard: Sendable {
         ]
     }
 
+    /// Nothing inside these, nor the folders themselves, is ever removed: the OS, credentials, and app
+    /// databases that break when edited.
     static func sealedTrees(home h: String) -> [String] {
         [
             "/System", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/private/etc",
@@ -161,6 +183,7 @@ public struct SafetyGuard: Sendable {
         ]
     }
 
+    /// Personal areas. A person may remove things inside them after confirming; automation only under strict terms.
     static func personalAreas(home h: String) -> [String] {
         [
             "\(h)/Documents", "\(h)/Desktop", "\(h)/Downloads", "\(h)/Pictures", "\(h)/Movies", "\(h)/Music",
@@ -197,7 +220,8 @@ public struct SafetyGuard: Sendable {
         guard rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/") else {
             return SafetyVerdict(decision: .block, reasons: ["Path must be absolute"])
         }
-        let path = PathUtil.expand(rawPath, home: home)
+        // Exactly as given: the executor removes this spelling, trailing spaces and all.
+        let path = PathUtil.expandArgument(rawPath, home: home)
         let candidates = SafetyGuard.spellings(of: path)
 
         if isRunningAsRoot {
@@ -236,7 +260,9 @@ public struct SafetyGuard: Sendable {
 
         switch context {
         case .manual:
-            if let rule {
+            // A rule speaks only for its own locations; elsewhere (a node_modules inside a tool's folder) the item
+            // is as unknown as one no rule matched.
+            if let rule, candidates.allSatisfy({ scope.contains($0, rule: rule) }) {
                 if rule.safety.level == .review {
                     verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
                 }
@@ -246,12 +272,14 @@ public struct SafetyGuard: Sendable {
                 verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
             }
         case .automatic(let automation):
-            let isCustom = automation.customPaths.contains { PathUtil.isAncestorOrEqual(scopePath($0), of: path) }
+            // Every spelling must be in scope: a symlinked parent can put the real location somewhere else.
+            let customRoots = automation.customPaths.map(scope.resolve)
+            let isCustom = candidates.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
             if let rule {
                 if rule.safety.level == .review && !automation.allowReview {
                     verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
                 }
-                if !isInsideRuleScope(path, rule: rule) {
+                if !candidates.allSatisfy({ isInsideRuleScope($0, rule: rule) }) {
                     verdict.raise(.block, "Path is outside the locations rule \(rule.id) covers")
                 }
             } else if !isCustom {
@@ -330,29 +358,9 @@ public struct SafetyGuard: Sendable {
         }
     }
 
-    /// True if `path` is one of the places `rule` describes (or inside one). For pattern rules this mirrors
-    /// where `RuleEngine` looks: under the rule's roots, outside its exclusions and outside bundles.
+    /// True if `path` is one of the places `rule` describes (or inside one). See `RuleScope`.
     public func isInsideRuleScope(_ path: String, rule: Rule) -> Bool {
-        if rule.paths.contains(where: { PathUtil.isInside(path, pattern: scopePath($0)) }) { return true }
-        guard let match = rule.match, match.names.contains(PathUtil.lastComponent(path)) else { return false }
-        let roots = (match.roots ?? patternRoots).map(scopePath)
-        guard roots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
-        return !isExcludedFromPatterns(path, match: match)
-    }
-
-    /// A rule or job location the way `RuleEngine` resolves it, so it compares with scanned paths.
-    private func scopePath(_ pattern: String) -> String {
-        PathUtil.expand(PathUtil.canonicalPattern(pattern, home: home), home: home)
-    }
-
-    /// Exclusions are compared by key so a differently spelled path stays excluded.
-    private func isExcludedFromPatterns(_ path: String, match: PatternSpec) -> Bool {
-        let key = PathUtil.comparisonKey(path)
-        let excluded = (RuleEngine.defaultPatternExcludes + match.exclude).contains { exclude in
-            PathUtil.isInside(key, pattern: PathUtil.comparisonKey(scopePath(exclude)))
-        }
-        return excluded
-            || PathUtil.components(key).dropLast().contains { component in RuleEngine.bundleSuffixes.contains { component.hasSuffix($0) } }
+        scope.contains(path, rule: rule)
     }
 }
 
@@ -360,14 +368,11 @@ public struct SafetyGuard: Sendable {
 private struct Location: Sendable {
     let path: String
     let key: String
+}
 
+extension Location {
     init(_ path: String) {
         self.init(path: path, key: PathUtil.comparisonKey(path))
-    }
-
-    init(path: String, key: String) {
-        self.path = path
-        self.key = key
     }
 }
 

@@ -25,7 +25,7 @@ extension CleanupExecutor {
             let item = safety.evaluate(
                 path: itemPath, size: command.estimatedBytes, rule: rule, context: context,
                 isRepository: RepositoryProbe.isRepository(itemPath), containsRepository: RepositoryProbe.containsRepository(itemPath))
-            for reason in item.reasons { verdict.raise(item.decision, reason) }
+            verdict = verdict.merging(item)
         } else {
             switch rule.safety.level {
             case .protected:
@@ -67,9 +67,7 @@ extension CleanupExecutor {
                 verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
             }
         } else {
-            verdict.raise(
-                .block,
-                "'\(executable)' comes from a rule outside SpaceKit's built-in library; add it to safety.allowedCommands to allow it")
+            verdict.raise(.block, RuleLibrary.untrustedRuleCommand(executable))
         }
     }
 

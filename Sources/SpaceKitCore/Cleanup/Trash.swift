@@ -30,7 +30,9 @@ public enum Trash {
         }
         if root.directFileSize > 0 {
             plan.items.append(
-                CleanupItem(path: root.path, kind: .looseFiles, name: "Files in the Trash", size: root.directFileSize, ruleID: ruleID))
+                CleanupItem(
+                    path: root.path, kind: .looseFiles, name: "Files in the Trash", size: root.directFileSize, ruleID: ruleID,
+                    looseFileNames: FindingItem.plainFileNames(in: root.path)))
         }
         return plan
     }

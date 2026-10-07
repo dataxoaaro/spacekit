@@ -31,7 +31,8 @@ public struct Scanner: Sendable {
         let clock = ContinuousClock.now
         var resolved: [String] = []
         for path in paths {
-            let expanded = PathUtil.expand(path)
+            // Exactly as given: `report ` and `report` are different folders.
+            let expanded = PathUtil.expandArgument(path)
             guard let real = PathUtil.realpath(expanded) else { throw ScanError.notFound(expanded) }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: real, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -63,7 +64,7 @@ public struct Scanner: Sendable {
         progress.root.withLock { $0 = root }
 
         job.run()
-        job.resolveHardLinks()
+        let hardLinks = job.resolveHardLinks()
         Scanner.aggregate(root)
 
         let snapshot = progress.snapshot
@@ -76,7 +77,7 @@ public struct Scanner: Sendable {
         )
         return ScanTree(
             root: root, roots: resolved, stats: stats, options: options,
-            capacity: VolumeCapacity.of(path: resolved[0])
+            capacity: VolumeCapacity.of(path: resolved[0]), hardLinks: hardLinks
         )
     }
 
@@ -149,14 +150,9 @@ private struct WorkItem {
     let anchors: [DirNode]
 }
 
-private struct HardLinkKey: Hashable {
-    let device: Int32
-    let inode: UInt64
-}
-
 /// One multiply-linked file. During the scan its bytes go to the first link a worker reaches, so live totals
-/// stay right; afterwards they move to the link in the folder whose path sorts first (then by name), so the
-/// same disk always gives the same tree whatever the thread timing.
+/// stay right; afterwards they move to the link `HardLinkGroup.precedes` puts first, so the same disk always
+/// gives the same tree whatever the thread timing.
 private struct HardLinkEntry {
     let size: UInt64
     let modified: Int64
@@ -165,9 +161,10 @@ private struct HardLinkEntry {
     var owner: DirNode
     var ownerFolder: String
     var ownerName: String
+    var links: [HardLink]
 
     func sortsBeforeOwner(folder: String, name: String) -> Bool {
-        folder != ownerFolder ? folder < ownerFolder : name < ownerName
+        HardLinkGroup.precedes(folder: folder, name: name, folder: ownerFolder, name: ownerName)
     }
 }
 
@@ -308,12 +305,15 @@ private final class ScanJob: @unchecked Sendable {
     /// Records one link of a multiply-linked file. Returns true if this is the first link seen, which gets
     /// the bytes for now.
     private func recordHardLink(_ key: HardLinkKey, node: DirNode, folder: String, name: String, size: UInt64, modified: Int64) -> Bool {
-        hardLinks.withLock { table in
+        let link = HardLink(node: node, name: name, hasBytes: false)
+        return hardLinks.withLock { table in
             guard let index = table.index(forKey: key) else {
                 table[key] = HardLinkEntry(
-                    size: size, modified: modified, credited: node, creditedName: name, owner: node, ownerFolder: folder, ownerName: name)
+                    size: size, modified: modified, credited: node, creditedName: name, owner: node, ownerFolder: folder, ownerName: name,
+                    links: [link])
                 return true
             }
+            table.values[index].links.append(link)
             if table.values[index].sortsBeforeOwner(folder: folder, name: name) {
                 table.values[index].owner = node
                 table.values[index].ownerFolder = folder
@@ -323,30 +323,34 @@ private final class ScanJob: @unchecked Sendable {
         }
     }
 
-    /// Moves each multiply-linked file's bytes from the link credited during the scan to its owner.
-    /// Runs once, single-threaded, after every worker has finished and before aggregation.
-    func resolveHardLinks() {
-        let entries = hardLinks.withLock { table in
+    /// Moves each multiply-linked file's bytes from the link credited during the scan to its owner, and returns
+    /// the links for the tree to keep. Runs once, single-threaded, after every worker has finished and before
+    /// aggregation.
+    func resolveHardLinks() -> [HardLinkKey: HardLinkGroup] {
+        let table = hardLinks.withLock { table in
             defer { table = [:] }
-            return Array(table.values)
+            return table
         }
-        for entry in entries where entry.owner !== entry.credited || entry.ownerName != entry.creditedName {
-            let from = entry.credited
-            let to = entry.owner
+        let minFileSize = options.minFileSize
+        var groups: [HardLinkKey: HardLinkGroup] = [:]
+        groups.reserveCapacity(table.count)
+        for (key, entry) in table {
+            var holder: DirNode = entry.credited
+            var holderName: String = entry.creditedName
+            let moves = entry.owner !== entry.credited || entry.ownerName != entry.creditedName
             // The links themselves stay counted where they are; only the bytes (and the tracked leaf) move.
-            if entry.size >= options.minFileSize && entry.size > 0 {
-                guard let index = from.files.firstIndex(where: { $0.name == entry.creditedName }) else { continue }
-                from.files.remove(at: index)
-                from.otherFilesCount += 1
-                to.otherFilesCount -= min(to.otherFilesCount, 1)
-                to.files.append(FileLeaf(name: entry.ownerName, size: entry.size, modified: entry.modified))
-            } else {
-                from.otherFilesSize -= min(from.otherFilesSize, entry.size)
-                to.otherFilesSize &+= entry.size
+            if moves && entry.credited.dropLinkBytes(named: entry.creditedName, size: entry.size, minFileSize: minFileSize) {
+                entry.owner.addLinkBytes(named: entry.ownerName, size: entry.size, modified: entry.modified, minFileSize: minFileSize)
+                holder = entry.owner
+                holderName = entry.ownerName
             }
-            from.directFileSize -= min(from.directFileSize, entry.size)
-            to.directFileSize &+= entry.size
+            var links: [HardLink] = entry.links
+            for index in links.indices {
+                links[index].hasBytes = links[index].node === holder && links[index].name == holderName
+            }
+            groups[key] = HardLinkGroup(size: entry.size, modified: entry.modified, links: links)
         }
+        return groups
     }
 
     // MARK: Listing one directory

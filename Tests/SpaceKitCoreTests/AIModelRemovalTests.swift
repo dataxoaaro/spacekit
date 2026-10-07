@@ -111,4 +111,54 @@ struct AIModelRemovalTests {
         #expect(!issues(["/usr/bin/ollama", "rm", "{name}"]).isEmpty)
         #expect(!issues(["ollama", "rm", "{path}"]).isEmpty)
     }
+
+    func aiRule(_ id: String, _ path: String, layout: String, granularity: Granularity = .whole) -> Rule {
+        Rule(
+            id: id, name: id, paths: [path], granularity: granularity, safety: SafetySpec(level: .safe, trash: false),
+            action: ActionSpec(remove: true), ai: AISpec(tool: "Tool", layout: layout))
+    }
+
+    @Test("A cache spread over a folder's entries removes those entries, never the folder another rule shares")
+    func cacheLayoutKeepsSharedFolder() throws {
+        let tree = try TempTree()
+        try tree.file("home/tool/loose.log", bytes: 20_000)
+        try tree.file("home/tool/sessions/s.json", bytes: 30_000)
+        try tree.file("home/tool/models/m.bin", bytes: 40_000)
+        let cache = aiRule("tool.cache", tree.path("home/tool"), layout: "cache", granularity: .children)
+        let models = Rule(
+            id: "tool.models", name: "Models", paths: [tree.path("home/tool/models")], safety: SafetySpec(level: .review),
+            action: ActionSpec(remove: true))
+        let scanned = try scan(tree.root)
+        let findings = RuleEngine(rules: [cache, models]).evaluate(scanned)
+        let model = try #require(AIInspector.report(findings: findings, tree: scanned).tools.first?.models.first)
+        let plan = try #require(CleanupPlan.removing(model, useTrash: false))
+        #expect(plan.items.map(\.kind).sorted { $0.rawValue < $1.rawValue } == [.directory, .looseFiles])
+        #expect(plan.items.allSatisfy { $0.size > 0 })
+
+        let report = sandboxExecutor(tree, rules: [cache, models]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.removedAnything)
+        #expect(onDisk(tree.path("home/tool/models/m.bin")))
+        #expect(!onDisk(tree.path("home/tool/loose.log")))
+        #expect(!onDisk(tree.path("home/tool/sessions")))
+    }
+
+    @Test("The rest of a Hugging Face cache is removed without the models listed beside it")
+    func huggingFaceRemainderKeepsModels() throws {
+        let tree = try TempTree()
+        try tree.file("home/hf/hub/models--org--name/blob.bin", bytes: 40_000)
+        try tree.file("home/hf/hub/.locks/l", bytes: 8_000)
+        try tree.file("home/hf/token.cache", bytes: 8_000)
+        let rule = aiRule("hf", tree.path("home/hf"), layout: "huggingface")
+        let scanned = try scan(tree.root)
+        let findings = RuleEngine(rules: [rule]).evaluate(scanned)
+        let models = AIInspector.report(findings: findings, tree: scanned).tools.first?.models ?? []
+        let remainder = try #require(models.first { $0.kind == .cache })
+        let plan = try #require(CleanupPlan.removing(remainder, useTrash: false))
+        #expect(plan.totalBytes == remainder.size)
+
+        _ = sandboxExecutor(tree, rules: [rule]).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(onDisk(tree.path("home/hf/hub/models--org--name/blob.bin")))
+        #expect(!onDisk(tree.path("home/hf/hub/.locks")))
+        #expect(!onDisk(tree.path("home/hf/token.cache")))
+    }
 }

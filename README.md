@@ -27,6 +27,7 @@ open build/SpaceKit.app
 
 make install        # CLI → ~/.local/bin/spacekit, rules → ~/.local/share/spacekit/rules
 spacekit doctor     # checks permissions, config, rules and the background agent
+make uninstall      # removes them again; stops the background agent only if it runs this CLI, not the app's
 ```
 
 For complete results, give **Full Disk Access** to SpaceKit (and to your terminal for the CLI and TUI): *System Settings → Privacy & Security → Full Disk Access*. Without it, macOS hides Mail, Messages and other apps' data; SpaceKit reports that space as *Hidden*.
@@ -55,11 +56,11 @@ spacekit config init | show | path | edit | validate
 
 Cleaning always previews first, with the safety guard's verdict for every item. `--yes` runs the cleanup and confirms the warnings the preview printed; without it, `clean` and `trash --empty` ask on a terminal, and `jobs run` and `suggestions approve` only preview. `clean --permanent` deletes instead of using the Trash, and is refused while your config sets `safety.trash: always` (the default). Paths you name on `clean` go to the Trash unless you pass `--permanent`, and so does everything else in that cleanup.
 
-**Scripting.** `scan`, `disk`, `dev`, `ai`, `clean`, `rules list`, `rules show`, `jobs list`, `jobs show`, `jobs next`, `suggestions`, `suggestions approve`, `agent status`, `history`, `journal`, `trash`, `config show` and `doctor` take `--json`. For `clean`, `suggestions approve` and `trash --empty`, stdout carries only JSON: `{"plan": …}` for a preview, and `{"plan": …, "result": …}` when `--yes` ran it. The plan lists each item and command with its verdict (`allow`, `confirm` or `block`) and reasons; the result has each outcome (`removed`, `skipped` or `failed`), the bytes freed and moved to the Trash, warnings, and `ok`. The human-readable preview goes to stderr.
+**Scripting.** `scan`, `disk`, `dev`, `ai`, `clean`, `rules list`, `rules show`, `jobs list`, `jobs show`, `jobs next`, `suggestions`, `suggestions approve`, `agent status`, `history`, `journal`, `trash`, `config show` and `doctor` take `--json`. For `clean`, `suggestions approve` and `trash --empty`, stdout carries only JSON: `{"plan": …}` for a preview (also when the Trash is already empty), and `{"plan": …, "result": …}` when `--yes` ran it. The plan lists each item and command with its verdict (`allow`, `confirm` or `block`) and reasons; the result has each outcome (`removed`, `skipped` or `failed`), the bytes freed and moved to the Trash, warnings, and `ok`. The human-readable preview goes to stderr.
 
-**Exit status.** `clean`, `trash --empty`, `jobs run` and `suggestions approve` exit with status 1 when an item failed, a tool command was skipped or failed, or a warning was raised (such as a failed journal write); `jobs run` and `suggestions approve` also do when the job's state couldn't be saved. Items the guard skipped don't count, because the preview showed them. `config validate` and `rules validate` exit with status 1 on errors, and invalid arguments exit with status 64.
+**Exit status.** `clean`, `trash --empty`, `jobs run` and `suggestions approve` exit with status 1 when an item failed, a tool command was skipped or failed, or a warning was raised (such as a failed journal write); `jobs run` and `suggestions approve` also do when the job's state couldn't be saved. `suggestions approve --yes` records a manual run of the suggestion's job (its last run moves to now), and removes the suggestion only when the cleanup removed something without problems. Items the guard skipped don't count, because the preview showed them. `config validate` and `rules validate` exit with status 1 on errors, and invalid arguments exit with status 64.
 
-In the TUI, `?` lists every key. `d` reviews a cleanup of what you marked; the review accepts `y` only after you've scrolled through the whole list. On the Dev tab, `n` creates a job from the selected rule.
+In the TUI, `?` lists every key. `d` reviews a cleanup of what you marked. Long lines wrap to the dialog, every item shows each reason the safety guard gave, and `y` works only after every line has been on screen: jumping with End doesn't count the lines in between. On the Dev tab, `n` creates a job from the selected rule; on Automation, `x` runs a job now if its conditions are met. While a cleanup runs, `q` and SIGTERM, SIGHUP or SIGINT wait for it to finish, then quit and print what was removed. An invalid config is named in the header until it's fixed.
 
 ## Configuration
 

@@ -36,6 +36,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
+| `Support/` | Shared plumbing: `PathUtil` (expansion, comparison keys), `Shell` (bare-name lookup, no-shell runs with timeouts), `SpaceKitPaths`, ages and byte counts, JSON Lines. Also the terminal helpers both terminal front ends use, kept free of terminal I/O so they can be tested: `TerminalText` (the sanitizer), `TerminalWidth` (column widths), `KeyParser` (raw key bytes to keys), `ScrollWindow` and `Spinner`. |
 
 ## The scanner
 

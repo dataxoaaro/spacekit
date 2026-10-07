@@ -23,15 +23,18 @@ swift run spacekit --help
 
 ### A sandbox for manual testing
 
-While developing, point SpaceKit at throwaway config and state so you don't touch your own:
+While developing, point SpaceKit at a throwaway home, config and state so you don't touch your own:
 
 ```sh
-export SPACEKIT_CONFIG=/private/tmp/sk/config.yaml SPACEKIT_STATE_DIR=/private/tmp/sk/state
+export SPACEKIT_SANDBOX=$(mktemp -d)    # a new folder only your account can write, under /var/folders
+export SPACEKIT_HOME=$SPACEKIT_SANDBOX/home SPACEKIT_CONFIG=$SPACEKIT_SANDBOX/config.yaml SPACEKIT_STATE_DIR=$SPACEKIT_SANDBOX/state
 ```
 
+- **Use a folder of your own, not a fixed path in `/tmp`.** `/tmp` is shared by every account on the Mac, so another account could create `/tmp/sk/config.yaml` before you do, and SpaceKit would load its rules and settings. The background agent also keeps the `SPACEKIT_CONFIG` and `SPACEKIT_STATE_DIR` it was installed with, so don't install the agent from a sandbox shell.
+
 - **`SPACEKIT_HOME` works in debug builds only.** It moves SpaceKit's idea of the home folder, and with it the default config and state locations and every home protection, to a sandbox folder. Release builds (`make app`, `make install`, `swift build -c release`) ignore it, so it can never strip the protections from your real home.
-- **`/tmp` and `/private/tmp` both work.** Rule paths, pattern roots, job paths and the debug sandbox home are resolved through symlinks before they're compared, so either spelling matches what a scan finds.
-- **Keep the real Trash out of it.** Moving to the Trash uses macOS's Trash, whatever the sandbox, so anything you clean with the default `safety.trash: always` lands in your own `~/.Trash`. To test removals without that, set `safety.trash: rules` in the sandbox config and give your fixture rules `safety: { level: safe, trash: false }` and `action: remove`, with paths inside the sandbox. A cleanup made only of such rules deletes directly. Paths you name on `spacekit clean` still go to the Trash unless you pass `--permanent`.
+- **Either spelling works.** `/var/folders/…` and `/private/var/folders/…` (or `/tmp` and `/private/tmp`) name the same folder. Rule paths, pattern roots, job paths and the debug sandbox home are resolved through symlinks before they're compared, so either spelling matches what a scan finds.
+- **Keep the real Trash out of it.** Moving to the Trash uses macOS's Trash, whatever the sandbox, so anything you clean with the default `safety.trash: always` lands in your own `~/.Trash`. To test removals without that, set `safety.trash: rules` in the sandbox config and give your fixture rules `safety: { level: safe, trash: false }` and `action: remove`, with paths inside the sandbox. A cleanup made only of such rules deletes directly. Everything else still goes to the Trash: 🟡 review items, folders no rule recognises, items marked in the TUI's or the app's map, and paths you name on `spacekit clean` (unless you pass `--permanent`). Keep fixtures 🟢 and clean them from Dev Intelligence or by rule id.
 
 ## Adding or fixing a rule
 
@@ -58,12 +61,13 @@ export SPACEKIT_CONFIG=/private/tmp/sk/config.yaml SPACEKIT_STATE_DIR=/private/t
 Debug builds of the app can be driven without Screen Recording permission, which helps when reviewing UI changes:
 
 ```sh
-SPACEKIT_DEBUG_DIR=/tmp/sk/shots swift run SpaceKitApp &
-printf 'scan=~/Library/Developer\n' > /tmp/sk/shots/request
-printf 'section=dev\nsnapshot=dev.png\n' > /tmp/sk/shots/request      # → /tmp/sk/shots/dev.png
+mkdir -p "$SPACEKIT_SANDBOX/shots"
+SPACEKIT_DEBUG_DIR=$SPACEKIT_SANDBOX/shots swift run SpaceKitApp &
+printf 'scan=~/Library/Developer\n' > "$SPACEKIT_SANDBOX/shots/request"
+printf 'section=dev\nsnapshot=dev.png\n' > "$SPACEKIT_SANDBOX/shots/request"      # → $SPACEKIT_SANDBOX/shots/dev.png
 ```
 
-Supported keys: `section`, `visualization`, `color`, `depth`, `scan`, `focus`, `select`, `hover`, `sheet` (`onboarding`, `safety`, `job`, `cleanup`, `cleanup:<rule-id>`, `settings`), `close`, `snapshot`. `confirm-cleanup` runs the open cleanup only when `SPACEKIT_HOME` resolves to a temporary sandbox under `/private/tmp` or `/private/var/folders`, every item lies inside it, and the plan has no tool commands. It never confirms warnings, so it removes only items the guard allows outright, such as items of a 🟢 rule.
+Supported keys: `section`, `visualization`, `color`, `depth`, `scan`, `focus`, `select`, `hover`, `sheet` (`onboarding`, `safety`, `job`, `cleanup`, `cleanup:<rule-id>`, `settings`), `close`, `snapshot` (a bare file name, saved in the debug folder). `confirm-cleanup` runs the open cleanup only when `SPACEKIT_HOME` resolves to a temporary sandbox under `/private/tmp` or `/private/var/folders`, every item lies inside it, the plan has no tool commands and the config doesn't set `safety.trash: always`. It never confirms warnings, so it removes only items the guard allows outright, such as items of a 🟢 rule, and it deletes them instead of moving them to your real Trash.
 
 ## Reporting bugs
 

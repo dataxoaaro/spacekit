@@ -32,6 +32,36 @@ public struct StorageCategory: Sendable, Hashable, Identifiable, Codable {
     public static func byID(_ id: String) -> StorageCategory { all.first { $0.id == id } ?? .other }
 }
 
+extension StorageCategory {
+    /// The breakdown category of what a rule matched, from its dotted category (`developer.build`,
+    /// `system.trash`, `personal.photos`, …). `nil` means the rule says nothing about the kind of data, so
+    /// its location decides (credentials in `~/.ssh` stay "Other", in `~/Library` "System Data").
+    public init?(ruleCategory: String) {
+        let parts = ruleCategory.split(separator: ".", maxSplits: 1).map(String.init)
+        let sub = parts.count > 1 ? parts[1] : ""
+        switch parts.first ?? "" {
+        case "developer": self = .developer
+        case "ai": self = .ai
+        case "cache": self = .caches
+        case "system":
+            switch sub {
+            case "trash": self = .trash
+            case "installers": self = .applications
+            default: self = .systemData
+            }
+        case "personal":
+            switch sub {
+            case "downloads": self = .downloads
+            case "photos", "backups": self = .media
+            case "mail", "messages": self = .mail
+            case "code": self = .developer
+            default: return nil
+            }
+        default: return nil
+        }
+    }
+}
+
 public struct CategorySlice: Sendable, Identifiable, Hashable {
     public let category: StorageCategory
     public var size: UInt64
@@ -73,24 +103,33 @@ public enum CategoryBreakdown {
         ]
     }
 
-    /// Categorises a scan. Rule findings refine the result: anything a `developer.*` or `ai.*` rule matched
-    /// counts as Developer or AI wherever it lives (a `node_modules` in Documents is developer data).
-    public static func compute(tree: ScanTree, findings: [Finding] = [], home: String = PathUtil.home, capacity: VolumeCapacity? = nil)
-        -> [CategorySlice]
-    {
+    /// Path → category for the built-in locations and every folder a rule matched. A rule's category wins
+    /// over the location (a `node_modules` in Documents is developer data); see `StorageCategory(ruleCategory:)`.
+    public static func locations(home: String = PathUtil.home, findings: [Finding] = []) -> [String: StorageCategory] {
         var locations: [String: StorageCategory] = [:]
         for (path, category) in builtinLocations(home: home) { locations[path] = category }
         for finding in findings {
-            let category: StorageCategory?
-            switch finding.rule.topCategory {
-            case "developer": category = .developer
-            case "ai": category = .ai
-            case "cache": category = .caches
-            default: category = nil
-            }
-            guard let category else { continue }
+            guard let category = StorageCategory(ruleCategory: finding.rule.category) else { continue }
             for item in finding.items where item.kind == .directory { locations[item.path] = category }
         }
+        return locations
+    }
+
+    /// The category of `path`'s nearest listed ancestor (or `path` itself), if any.
+    public static func nearestCategory(for path: String, in locations: [String: StorageCategory]) -> StorageCategory? {
+        var current = path
+        while true {
+            if let category = locations[current] { return category }
+            if current == "/" || current.isEmpty { return nil }
+            current = PathUtil.parent(current)
+        }
+    }
+
+    /// Categorises a scan, attributing every byte to exactly one category (see `locations(home:findings:)`).
+    public static func compute(tree: ScanTree, findings: [Finding] = [], home: String = PathUtil.home, capacity: VolumeCapacity? = nil)
+        -> [CategorySlice]
+    {
+        let locations = locations(home: home, findings: findings)
         var ancestors = Set<String>()
         for path in locations.keys {
             var current = PathUtil.parent(path)
@@ -116,21 +155,11 @@ public enum CategoryBreakdown {
             }
         }
 
+        let slices = totals.compactMap { id, size in size > 0 ? CategorySlice(category: .byID(id), size: size) : nil }
         if let capacity = capacity ?? tree.capacity, anchors.contains(where: { $0.path == "/" }) {
-            let scanned = tree.root.size
-            if capacity.used > scanned { totals[StorageCategory.hidden.id] = capacity.used - scanned }
+            return updatingHidden(slices, capacity: capacity, scannedBytes: tree.root.size)
         }
-        return totals.compactMap { id, size in size > 0 ? CategorySlice(category: .byID(id), size: size) : nil }
-            .sorted { $0.size > $1.size }
-    }
-
-    private static func nearestCategory(for path: String, in locations: [String: StorageCategory]) -> StorageCategory? {
-        var current = path
-        while true {
-            if let category = locations[current] { return category }
-            if current == "/" || current.isEmpty { return nil }
-            current = PathUtil.parent(current)
-        }
+        return slices.sorted { $0.size > $1.size }
     }
 }
 

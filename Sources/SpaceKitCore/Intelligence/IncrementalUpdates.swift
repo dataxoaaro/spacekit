@@ -101,21 +101,7 @@ extension Analysis {
 extension CategoryBreakdown {
     /// The category `compute(tree:findings:)` would attribute `path` to.
     public static func category(for path: String, findings: [Finding], home: String = PathUtil.home) -> StorageCategory {
-        var current = path
-        while !current.isEmpty {
-            for finding in findings where finding.items.contains(where: { $0.kind == .directory && $0.path == current }) {
-                switch finding.rule.topCategory {
-                case "developer": return .developer
-                case "ai": return .ai
-                case "cache": return .caches
-                default: break
-                }
-            }
-            if let category = builtinLocations(home: home).first(where: { $0.0 == current })?.1 { return category }
-            if current == "/" { break }
-            current = PathUtil.parent(current)
-        }
-        return .other
+        nearestCategory(for: path, in: locations(home: home, findings: findings)) ?? .other
     }
 
     /// Subtracts removed bytes from the matching categories instead of recomputing the whole breakdown.
@@ -123,9 +109,10 @@ extension CategoryBreakdown {
         _ removals: [Removal], from slices: [CategorySlice], findings: [Finding],
         home: String = PathUtil.home
     ) -> [CategorySlice] {
+        let locations = locations(home: home, findings: findings)
         var result = slices
         for removal in removals {
-            let category = category(for: removal.path, findings: findings, home: home)
+            let category = nearestCategory(for: removal.path, in: locations) ?? .other
             if let index = result.firstIndex(where: { $0.category == category }) {
                 result[index].size -= min(result[index].size, removal.bytes)
             }

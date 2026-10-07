@@ -134,3 +134,45 @@ struct OllamaTests {
         #expect(models.contains { $0.name == "llama:8b" })
     }
 }
+
+@Suite("Storage categories")
+struct StorageCategoryTests {
+    @Test(
+        "Every documented top-level rule category maps to a breakdown category",
+        arguments: [
+            ("developer.build", StorageCategory.developer), ("ai.models", .ai), ("cache.browser", .caches),
+            ("system.logs", .systemData), ("system.trash", .trash), ("system.installers", .applications),
+            ("personal.downloads", .downloads), ("personal.photos", .media), ("personal.backups", .media),
+            ("personal.mail", .mail), ("personal.messages", .mail), ("personal.code", .developer),
+        ])
+    func mapping(ruleCategory: String, expected: StorageCategory) {
+        #expect(StorageCategory(ruleCategory: ruleCategory) == expected)
+    }
+
+    @Test("Categories that say nothing about the data leave it to the location", arguments: ["personal.credentials", "other", "custom", ""])
+    func unmapped(ruleCategory: String) {
+        #expect(StorageCategory(ruleCategory: ruleCategory) == nil)
+    }
+
+    @Test("The full breakdown and the per-path lookup agree")
+    func consistent() throws {
+        let tree = try TempTree()
+        try tree.file("Documents/report.pdf", bytes: 100_000)
+        try tree.file("Documents/app-logs/run.log", bytes: 200_000)
+        try tree.file("Documents/Photos Backup/img.heic", bytes: 300_000)
+        let logs = Rule(id: "logs", name: "Logs", category: "system.logs", paths: [tree.path("Documents/app-logs")])
+        let photos = Rule(id: "photos", name: "Photos", category: "personal.photos", paths: [tree.path("Documents/Photos Backup")])
+        let scanned = try scan(tree.root)
+        let findings = RuleEngine(rules: [logs, photos]).evaluate(scanned)
+
+        let slices = CategoryBreakdown.compute(tree: scanned, findings: findings, home: tree.root)
+        let size = { (category: StorageCategory) in slices.first { $0.category == category }?.size }
+        #expect(size(.systemData) == tree.allocated("Documents/app-logs/run.log"))
+        #expect(size(.media) == tree.allocated("Documents/Photos Backup/img.heic"))
+        #expect(size(.documents) == tree.allocated("Documents/report.pdf"))
+        let lookup = { (relative: String) in CategoryBreakdown.category(for: tree.path(relative), findings: findings, home: tree.root) }
+        #expect(lookup("Documents/app-logs/run.log") == .systemData)
+        #expect(lookup("Documents/Photos Backup/img.heic") == .media)
+        #expect(lookup("Documents/report.pdf") == .documents)
+    }
+}

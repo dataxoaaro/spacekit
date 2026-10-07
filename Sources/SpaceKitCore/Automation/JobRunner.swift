@@ -59,13 +59,11 @@ extension CleanupReport {
         func note(_ count: Int, _ noun: String, _ what: String) -> String? {
             count > 0 ? "\(count) \(noun)\(count == 1 ? "" : "s") \(what)" : nil
         }
-        func count(_ outcomes: [CleanupOutcome], _ match: (CleanupOutcome) -> Bool) -> Int { outcomes.filter(match).count }
-        let commandOutcomes = commands.map(\.outcome)
+        let skippedCommands = commands.filter { if case .skipped = $0.outcome { true } else { false } }.count
+        let failedCommands = commands.filter { if case .failed = $0.outcome { true } else { false } }.count
         return [
-            note(skipped.count, "item", "skipped"),
-            note(failures.count, "item", "failed"),
-            note(count(commandOutcomes) { if case .skipped = $0 { true } else { false } }, "command", "skipped"),
-            note(count(commandOutcomes) { if case .failed = $0 { true } else { false } }, "command", "failed"),
+            note(skipped.count, "item", "skipped"), note(failures.count, "item", "failed"),
+            note(skippedCommands, "command", "skipped"), note(failedCommands, "command", "failed"),
         ].compactMap { $0 }
     }
 }

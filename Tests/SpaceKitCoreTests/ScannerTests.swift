@@ -200,6 +200,24 @@ struct LayoutTests {
         let hit = Sunburst.hitTest(arcs, at: CGPoint(x: 100, y: 40), center: CGPoint(x: 100, y: 100), innerRadius: 20, ringWidth: 30)
         #expect(hit?.ring == 2)
     }
+
+    @Test("Items too small to see merge into one remainder in both layouts")
+    func remainders() throws {
+        let tree = try TempTree()
+        try tree.file("big.bin", bytes: 4_000_000)
+        for index in 0..<30 { try tree.file("d\(index)/tiny.bin", bytes: 4_000) }
+        let result = try scan(tree.root)
+        let arcs = Sunburst.layout(result.root, minSweep: 0.05).filter { $0.ring == 1 }
+        guard case .remainder(_, let count, _) = arcs.last?.item else {
+            Issue.record("no remainder arc")
+            return
+        }
+        #expect(count == 30)
+        #expect(arcs.count == 2)
+        let cells = Treemap.visibleItems(of: result.root, area: 10_000, minCellArea: 100)
+        #expect(cells.count == 2)
+        #expect(cells.last?.name == "30 more items")
+    }
 }
 
 @Suite("Live scan view")

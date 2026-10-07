@@ -9,12 +9,18 @@ public struct AIModel: Sendable, Identifiable, Hashable {
     public var lastUsed: Date?
     /// Files or folders that hold the model. For Ollama these are blobs that may be shared with other models.
     public var paths: [String]
-    /// Preferred way to remove it, when the tool has one (e.g. `ollama rm llama3:8b`).
+    /// Preferred way to remove it, when the tool has one (e.g. `ollama rm llama3:8b`), from the rule's
+    /// `ai.removeCommand`.
     public var removeCommand: [String]?
     public var ruleID: String
     /// The rule says this is regenerable (a true cache), not something you'd want back.
     public var isRegenerable: Bool = false
+    /// `paths` may hold files other models use too (Ollama blobs), so only `removeCommand` may remove it.
+    public var filesAreShared: Bool = false
     public var id: String { ruleID + ":" + name }
+
+    /// Whether `CleanupPlan.removing(_:)` has anything to plan for it.
+    public var isRemovable: Bool { removeCommand != nil || (!filesAreShared && !paths.isEmpty) }
 
     public func isActive(within window: Age, now: Date = Date()) -> Bool {
         guard let lastUsed else { return false }
@@ -106,10 +112,11 @@ public enum AIInspector {
     static func ollamaModels(finding: Finding) -> [AIModel] {
         finding.items.map(\.path)
             .filter { $0.hasSuffix("models") || FileManager.default.fileExists(atPath: $0 + "/manifests") }
-            .flatMap { ollamaModels(root: $0, ruleID: finding.rule.id) }
+            .flatMap { ollamaModels(root: $0, rule: finding.rule) }
     }
 
-    private static func ollamaModels(root: String, ruleID: String) -> [AIModel] {
+    private static func ollamaModels(root: String, rule: Rule) -> [AIModel] {
+        let ruleID = rule.id
         let manifests = root + "/manifests"
         let blobs = root + "/blobs"
         guard let enumerator = FileManager.default.enumerator(atPath: manifests) else { return [] }
@@ -144,10 +151,11 @@ public enum AIInspector {
                 if references[layer.blob, default: 0] > 1 { shared[layer.blob] = layer.size } else { size &+= layer.size }
             }
             let blobPaths = tag.layers.map(\.blob)
-            models.append(
-                AIModel(
-                    name: tag.name, kind: .model, size: size, lastUsed: newestAccess(blobPaths), paths: blobPaths,
-                    removeCommand: ["ollama", "rm", tag.name], ruleID: ruleID))
+            var model = AIModel(
+                name: tag.name, kind: .model, size: size, lastUsed: newestAccess(blobPaths), paths: blobPaths,
+                removeCommand: rule.ai?.removeArguments(forModel: tag.name), ruleID: ruleID)
+            model.filesAreShared = true
+            models.append(model)
         }
         if !shared.isEmpty {
             // No paths or command: removing shared blobs directly would break the models that use them.

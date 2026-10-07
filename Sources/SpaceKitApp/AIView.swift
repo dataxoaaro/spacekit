@@ -84,7 +84,7 @@ private struct ToolCard: View {
                     TableColumn("") { item in
                         Button("Remove…") { remove(item) }
                             .controlSize(.small)
-                            .disabled(item.removeCommand == nil && item.paths.isEmpty)
+                            .disabled(!item.isRemovable)
                     }
                     .width(76)
                 }
@@ -120,25 +120,7 @@ private struct ToolCard: View {
     }
 
     private func remove(_ item: AIModel) {
-        var plan = CleanupPlan(useTrash: true)
-        if let command = item.removeCommand {
-            // The tool knows which blobs other models still share.
-            plan.commands = [PlannedCommand(ruleID: item.ruleID, arguments: command, estimatedBytes: item.size)]
-        } else {
-            plan.items = item.paths.map { path in
-                var isDirectory: ObjCBool = false
-                FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-                var size = item.size
-                if item.paths.count > 1 {
-                    var st = stat()
-                    size = lstat(path, &st) == 0 ? UInt64(max(0, st.st_blocks)) * 512 : 0
-                }
-                return CleanupItem(
-                    path: path, kind: isDirectory.boolValue ? .directory : .file,
-                    name: item.paths.count == 1 ? item.name : PathUtil.lastComponent(path),
-                    size: size, ruleID: item.ruleID, lastUsed: item.lastUsed)
-            }
-        }
+        guard let plan = CleanupPlan.removing(item) else { return }
         model.review(plan, title: "Remove \(item.name)")
     }
 }

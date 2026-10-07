@@ -303,7 +303,7 @@ extension TUIApp {
         case .pageDown: select(position + 10)
         case .character("d"), .character("x"):
             guard !refuseWhileBusy(), let model = rows[selectable[position]].model else { return }
-            guard let plan = removalPlan(for: model) else {
+            guard let plan = CleanupPlan.removing(model, created: state.scanStarted) else {
                 flash("\(TerminalText.sanitize(model.name)) can't be removed on its own; remove the models that use it")
                 return
             }
@@ -311,27 +311,5 @@ extension TUIApp {
         default:
             break
         }
-    }
-
-    /// The tool's own remove command when it has one (it knows which files other models still share),
-    /// otherwise the model's files and folders as they are on disk now. `nil` when there's nothing to remove,
-    /// like the blobs several models share.
-    func removalPlan(for model: AIModel) -> CleanupPlan? {
-        var plan = CleanupPlan(useTrash: context.trashPreference(for: .trash) ?? true, created: state.scanStarted)
-        if let command = model.removeCommand {
-            plan.commands = [PlannedCommand(ruleID: model.ruleID, arguments: command, estimatedBytes: model.size)]
-            return plan
-        }
-        guard !model.paths.isEmpty else { return nil }
-        plan.items = model.paths.map { path in
-            var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-            let size = model.paths.count == 1 ? model.size : FileSize.allocated(atPath: path) ?? 0
-            return CleanupItem(
-                path: path, kind: isDirectory.boolValue ? .directory : .file,
-                name: model.paths.count == 1 ? model.name : PathUtil.lastComponent(path),
-                size: size, ruleID: model.ruleID, lastUsed: model.lastUsed)
-        }
-        return plan
     }
 }

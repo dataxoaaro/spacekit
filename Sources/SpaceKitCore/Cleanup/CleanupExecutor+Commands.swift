@@ -17,6 +17,9 @@ extension CleanupExecutor {
             verdict.raise(.block, "The command no longer matches rule \(rule.id); refresh the plan")
         }
         checkExecutable(command.arguments.first ?? "", rule: rule, into: &verdict)
+        if let model = command.modelName, model.isEmpty || model.hasPrefix("-") {
+            verdict.raise(.block, "'\(model)' isn't a model name the tool can be given safely")
+        }
 
         if let itemPath = command.itemPath {
             let item = safety.evaluate(
@@ -45,6 +48,9 @@ extension CleanupExecutor {
     func expectedArguments(for command: PlannedCommand, rule: Rule) -> [String]? {
         if let itemPath = command.itemPath {
             return rule.action.itemCommand.map { CleanupPlan.itemArguments($0, path: itemPath) }
+        }
+        if let model = command.modelName {
+            return rule.ai?.removeArguments(forModel: model)
         }
         return rule.action.command
     }

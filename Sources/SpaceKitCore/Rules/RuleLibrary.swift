@@ -255,6 +255,12 @@ public struct RuleLibrary: Sendable {
         if let ai = rule.ai, !AISpec.layouts.contains(ai.layout) {
             issue(.warning, "unknown ai.layout '\(ai.layout)'; it is shown as a cache. Use one of \(AISpec.layouts.sorted().joined(separator: ", "))")
         }
+        if let command = rule.ai?.removeCommand {
+            commandIssues(command, rule: rule).forEach { issue($0.severity, $0.message) }
+            if command.contains(where: { $0.contains("{path}") }) {
+                issue(.error, "ai.removeCommand names a model with {name}; {path} isn't available there")
+            }
+        }
         return issues
     }
 

@@ -10,6 +10,9 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
     public var isRepository: Bool
     public var containsRepository: Bool
     public var lastUsed: Date?
+    /// For loose files: the names the preview counted, the only ones the executor removes. `nil` for other kinds,
+    /// and for loose-files items saved before names were recorded (those can't remove anything; refresh them).
+    public var looseFileNames: [String]?
 
     public var id: String { kind == .looseFiles ? CleanupItem.looseFilesPath(in: path) : path }
 
@@ -18,7 +21,7 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
 
     public init(
         path: String, kind: FindingItem.Kind = .directory, name: String? = nil, size: UInt64, ruleID: String? = nil,
-        isRepository: Bool = false, containsRepository: Bool = false, lastUsed: Date? = nil
+        isRepository: Bool = false, containsRepository: Bool = false, lastUsed: Date? = nil, looseFileNames: [String]? = nil
     ) {
         self.path = path
         self.kind = kind
@@ -28,12 +31,14 @@ public struct CleanupItem: Codable, Sendable, Identifiable, Hashable {
         self.isRepository = isRepository
         self.containsRepository = containsRepository
         self.lastUsed = lastUsed
+        self.looseFileNames = looseFileNames
     }
 
     public init(_ item: FindingItem, ruleID: String?) {
         self.init(
             path: item.path, kind: item.kind, name: item.displayName, size: item.size, ruleID: ruleID,
-            isRepository: item.isRepository, containsRepository: item.containsRepository, lastUsed: item.lastUsed)
+            isRepository: item.isRepository, containsRepository: item.containsRepository, lastUsed: item.lastUsed,
+            looseFileNames: item.looseFileNames)
     }
 }
 

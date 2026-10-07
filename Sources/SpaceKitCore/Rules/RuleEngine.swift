@@ -24,12 +24,16 @@ public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
     public var containsRepository: Bool
     /// For pattern matches, the enclosing project folder.
     public var project: String?
+    /// For loose files: the names this item counted. Only these may be removed under it, so a file another rule
+    /// claims (or one that appeared later) stays.
+    public var looseFileNames: [String]?
 
     public var id: String { kind == .looseFiles ? CleanupItem.looseFilesPath(in: path) : path }
 
     public init(
         path: String, kind: Kind, name: String, size: UInt64, fileCount: UInt64 = 0, lastModified: Date? = nil,
-        lastUsed: Date? = nil, isRepository: Bool = false, containsRepository: Bool = false, project: String? = nil
+        lastUsed: Date? = nil, isRepository: Bool = false, containsRepository: Bool = false, project: String? = nil,
+        looseFileNames: [String]? = nil
     ) {
         self.path = path
         self.kind = kind
@@ -41,6 +45,7 @@ public struct FindingItem: Sendable, Hashable, Identifiable, Codable {
         self.isRepository = isRepository
         self.containsRepository = containsRepository
         self.project = project
+        self.looseFileNames = looseFileNames
     }
 
     public var displayName: String {
@@ -227,14 +232,19 @@ public struct RuleEngine: Sendable {
         return result
     }
 
-    /// The plain files directly inside `node` as one item, or `nil` if there are none with any size.
-    static func looseFilesItem(of node: DirNode, path: String? = nil, excludingBytes excluded: UInt64 = 0) -> FindingItem? {
+    /// The plain files directly inside `node` as one item, or `nil` if there are none with any size. `excluded`
+    /// names files another rule claims, with their bytes; they're left out of the size and the names.
+    static func looseFilesItem(
+        of node: DirNode, path: String? = nil, excludingBytes excluded: UInt64 = 0, excludingNames excludedNames: Set<String> = []
+    ) -> FindingItem? {
         guard node.directFileSize > excluded else { return nil }
+        let folder = path ?? node.path
         let date = node.newestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(node.newestModified)) : nil
+        let names = FindingItem.plainFileNames(in: folder).filter { !excludedNames.contains($0) }
         return FindingItem(
-            path: path ?? node.path, kind: .looseFiles, name: "Files in \(node.name)",
+            path: folder, kind: .looseFiles, name: "Files in \(node.name)",
             size: node.directFileSize - excluded, fileCount: UInt64(node.directFileCount),
-            lastModified: date, lastUsed: date)
+            lastModified: date, lastUsed: date, looseFileNames: names)
     }
 
     private func isExcluded(_ item: FindingItem, by rule: Rule) -> Bool {
@@ -320,13 +330,17 @@ public struct RuleEngine: Sendable {
         }
         var wholeClaims = Set<String>()
         var looseClaims = Set<String>()
-        /// Bytes of claimed single files, by the folder that holds them.
+        /// Bytes and names of claimed single files, by the folder that holds them.
         var fileClaims: [String: UInt64] = [:]
+        var fileClaimNames: [String: Set<String>] = [:]
         for claim in best.values {
             switch claim.item.kind {
             case .directory: wholeClaims.insert(claim.item.path)
             case .looseFiles: looseClaims.insert(claim.item.path)
-            case .file: fileClaims[PathUtil.parent(claim.item.path), default: 0] &+= claim.item.size
+            case .file:
+                let folder = PathUtil.parent(claim.item.path)
+                fileClaims[folder, default: 0] &+= claim.item.size
+                fileClaimNames[folder, default: []].insert(PathUtil.lastComponent(claim.item.path))
             }
         }
         // A loose-files claim takes bytes from its folder, so its folder path counts as claimed inside an ancestor.
@@ -345,6 +359,12 @@ public struct RuleEngine: Sendable {
 
         var result: [Claim] = []
         for claim in best.values {
+            if claim.item.kind == .looseFiles {
+                if let loose = RuleEngine.withoutClaimedFiles(claim.item, bytes: fileClaims[claim.item.path], names: fileClaimNames[claim.item.path]) {
+                    result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
+                }
+                continue
+            }
             guard claim.item.kind == .directory, mustSplit(claim.item.path), let node = tree.node(at: claim.item.path) else {
                 result.append(claim)
                 continue
@@ -363,12 +383,38 @@ public struct RuleEngine: Sendable {
                     }
                 }
                 guard !looseClaims.contains(currentPath),
-                    let loose = RuleEngine.looseFilesItem(of: current, path: currentPath, excludingBytes: fileClaims[currentPath] ?? 0)
+                    let loose = RuleEngine.looseFilesItem(
+                        of: current, path: currentPath, excludingBytes: fileClaims[currentPath] ?? 0,
+                        excludingNames: fileClaimNames[currentPath] ?? [])
                 else { continue }
                 result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
             }
         }
         return result
+    }
+}
+
+extension RuleEngine {
+    /// A loose-files claim less the single files other rules claim in the same folder. `nil` if nothing is left.
+    fileprivate static func withoutClaimedFiles(_ item: FindingItem, bytes: UInt64?, names: Set<String>?) -> FindingItem? {
+        guard let bytes, let names else { return item }
+        guard item.size > bytes else { return nil }
+        var loose = item
+        loose.size -= bytes
+        loose.looseFileNames = item.looseFileNames?.filter { !names.contains($0) }
+        return loose
+    }
+}
+
+extension FindingItem {
+    /// Names of the plain files (anything but folders) directly inside `directory`, sorted. Empty if unreadable.
+    static func plainFileNames(in directory: String) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+        return names.filter { name in
+            var st = stat()
+            return lstat(PathUtil.join(directory, name), &st) == 0 && (st.st_mode & S_IFMT) != S_IFDIR
+        }
+        .sorted()
     }
 }
 

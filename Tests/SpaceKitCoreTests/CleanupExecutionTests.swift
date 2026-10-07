@@ -223,7 +223,9 @@ struct TrashAndJournalTests {
         try tree.file("home/cache/a.tmp", bytes: 1000)
         try tree.file("home/cache/b.tmp", bytes: 1000)
         waitForClockTick()
-        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000)], useTrash: true)
+        let plan = CleanupPlan(
+            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 2000, looseFileNames: ["a.tmp", "b.tmp"])],
+            useTrash: true)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.trashedBytes > 0)
         #expect(report.deletedBytes == 0)
@@ -247,7 +249,8 @@ struct TrashAndJournalTests {
         let rule = cacheRule(tree, level: .safe, paths: ["home/cache", "home/cache2"])
         let plan = CleanupPlan(
             items: [
-                CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 16_000, ruleID: "cache"),
+                CleanupItem(
+                    path: tree.path("home/cache"), kind: .looseFiles, size: 16_000, ruleID: "cache", looseFileNames: ["a.tmp", "b.tmp"]),
                 CleanupItem(path: tree.path("home/cache2/c.tmp"), kind: .file, size: 8000, ruleID: "cache"),
             ], useTrash: false)
         let budget = ByteCount(tree.allocated("home/cache/b.tmp") + 1)
@@ -268,7 +271,10 @@ struct PlanCreatedTests {
         let tree = try TempTree()
         try tree.file("home/cache/old.tmp", bytes: 1000)
         waitForClockTick()
-        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000)], useTrash: false)
+        // A file named in the plan but created again after it is a different file, so it stays too.
+        let plan = CleanupPlan(
+            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["new.tmp", "old.tmp"])],
+            useTrash: false)
         waitForClockTick()
         try tree.file("home/cache/new.tmp", bytes: 1000)
         _ = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
@@ -281,7 +287,8 @@ struct PlanCreatedTests {
         let tree = try TempTree()
         try tree.file("home/cache/old.tmp", bytes: 1000)
         let plan = CleanupPlan(
-            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000)], useTrash: false, created: nil)
+            items: [CleanupItem(path: tree.path("home/cache"), kind: .looseFiles, size: 1000, looseFileNames: ["old.tmp"])],
+            useTrash: false, created: nil)
         let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.skipped.first?.reason.contains("refresh") == true)
         #expect(onDisk(tree.path("home/cache/old.tmp")))

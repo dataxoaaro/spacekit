@@ -23,7 +23,9 @@ extension CleanupExecutor {
         // Loose files and Trash entries can appear after the preview; only what existed then may go.
         var created: Date?
         if item.kind == .looseFiles || inTrash {
-            guard let planCreated = plan.created else { return .skipped(reason: CleanupExecutor.stalePlan) }
+            guard let planCreated = plan.created, item.kind != .looseFiles || item.looseFileNames != nil else {
+                return .skipped(reason: CleanupExecutor.stalePlan)
+            }
             created = planCreated
             if inTrash && item.kind != .looseFiles && CleanupExecutor.changed(st, after: planCreated) {
                 return .skipped(reason: "Moved to the Trash after this plan was made")
@@ -88,11 +90,10 @@ extension CleanupExecutor {
     private func removeLooseFiles(
         _ item: CleanupItem, in directory: String, removal: Removal, created: Date, context: CleanupContext, run: inout Run
     ) -> CleanupOutcome {
+        let names = item.looseFileNames ?? []
         let fd: Int32
-        let names: [String]
         do {
             fd = try SafeRemoval.openDirectory(directory)
-            names = try FileManager.default.contentsOfDirectory(atPath: directory).sorted()
         } catch {
             return .failed(reason: error.localizedDescription)
         }

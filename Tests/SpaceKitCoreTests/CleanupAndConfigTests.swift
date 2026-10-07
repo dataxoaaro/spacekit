@@ -28,13 +28,15 @@ struct CleanupExecutorTests {
         let tree = try TempTree()
         try tree.file("home/Projects/app/build/out.o", bytes: 10_000)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/app/build"), size: 10_000)], useTrash: false)
+        // Reported and journaled sizes are measured at removal time: allocated blocks, not the plan's figure.
+        let allocated = tree.allocated("home/Projects/app/build/out.o")
         let report = executor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
-        #expect(report.freedBytes == 10_000)
+        #expect(report.freedBytes == allocated)
         #expect(!FileManager.default.fileExists(atPath: tree.path("home/Projects/app/build")))
         #expect(FileManager.default.fileExists(atPath: tree.path("home/Projects/app")))
         let entries = Journal(file: tree.path("state/journal.jsonl")).entries()
         #expect(entries.count == 1)
-        #expect(entries.first?.bytes == 10_000)
+        #expect(entries.first?.bytes == allocated)
         #expect(entries.first?.automatic == false)
     }
 
@@ -65,9 +67,10 @@ struct CleanupExecutorTests {
             CleanupItem(path: tree.path("home/dd/a"), size: 6000, ruleID: "dd"),
             CleanupItem(path: tree.path("home/dd/b"), size: 6000, ruleID: "dd"),
         ]
+        let allocated = tree.allocated("home/dd/a/x")
         let report = executor(tree, rules: [rule], budget: ByteCount(10_000))
             .execute(CleanupPlan(items: items, useTrash: false), context: .automatic(AutomationContext(jobID: "j")), dryRun: false)
-        #expect(report.freedBytes == 6000)
+        #expect(report.freedBytes == allocated)
         #expect(report.skipped.count == 1)
     }
 

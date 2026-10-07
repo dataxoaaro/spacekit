@@ -25,7 +25,7 @@ extension CleanupExecutor {
             let item = safety.evaluate(
                 path: itemPath, size: command.estimatedBytes, rule: rule, context: context,
                 isRepository: RepositoryProbe.isRepository(itemPath), containsRepository: RepositoryProbe.containsRepository(itemPath))
-            for reason in item.reasons { verdict.raise(item.decision, reason) }
+            verdict = verdict.merging(item)
         } else {
             switch rule.safety.level {
             case .protected:

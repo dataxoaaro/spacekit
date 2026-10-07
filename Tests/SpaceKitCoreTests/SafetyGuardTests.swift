@@ -176,6 +176,35 @@ struct SafetyGuardTests {
 
 /// APFS treats `Library`, `library` and `LIBRARY` (and NFC/NFD spellings of a name) as the same folder,
 /// so every protected list must match regardless of how the path is spelled.
+@Suite("Safety verdict reasons")
+struct VerdictEntryTests {
+    @Test("Each reason keeps its own decision, whatever order they were raised in")
+    func decisionPerReason() {
+        let rule = Rule(id: "db", name: "Database", paths: ["~/db"], safety: SafetySpec(level: .protected))
+        let verdict = testGuard().evaluate(
+            path: "/Users/tester/Projects/app", rule: rule, context: .manual(confirmed: false), isRepository: true)
+        #expect(verdict.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("Don't touch") }?.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
+        #expect(verdict.reasons == verdict.entries.map(\.reason))
+    }
+
+    @Test("A command's item reasons keep their own decisions")
+    func commandItemReasons() throws {
+        let tree = try TempTree()
+        try tree.directory("home/tools/a/.git")
+        var rule = Rule(
+            id: "tools", name: "Tools", paths: [tree.path("home/tools")], granularity: .children, safety: SafetySpec(level: .protected),
+            action: ActionSpec(itemCommand: ["swift", "{path}"]))
+        rule.isBuiltin = true
+        let command = PlannedCommand(
+            ruleID: "tools", arguments: ["swift", tree.path("home/tools/a")], estimatedBytes: 1, itemPath: tree.path("home/tools/a"))
+        let verdict = sandboxExecutor(tree, rules: [rule]).verdict(for: command, context: .manual(confirmed: false))
+        #expect(verdict.decision == .block)
+        #expect(verdict.entries.first { $0.reason.contains("git repository") }?.decision == .confirm)
+    }
+}
+
 @Suite("Safety guard: case and Unicode spellings")
 struct SafetyGuardSpellingTests {
     let manual = CleanupContext.manual(confirmed: true)

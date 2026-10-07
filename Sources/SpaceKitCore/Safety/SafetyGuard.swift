@@ -37,8 +37,23 @@ public struct SafetyVerdict: Sendable, Equatable {
         public static func < (lhs: Decision, rhs: Decision) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
+    /// One reason with the decision it calls for on its own, so a front end can label a confirm reason as a
+    /// warning even when another reason blocks the item.
+    public struct Entry: Sendable, Equatable {
+        public var decision: Decision
+        public var reason: String
+    }
+
+    /// The strongest decision of all entries (`allow` with none).
     public var decision: Decision
-    public var reasons: [String]
+    public private(set) var entries: [Entry]
+
+    public var reasons: [String] { entries.map(\.reason) }
+
+    init(decision: Decision, reasons: [String]) {
+        self.decision = decision
+        entries = reasons.map { Entry(decision: decision, reason: $0) }
+    }
 
     public static let allow = SafetyVerdict(decision: .allow, reasons: [])
 
@@ -49,16 +64,20 @@ public struct SafetyVerdict: Sendable, Equatable {
         decision == .allow || (decision == .confirm && confirmed)
     }
 
+    /// Adds `reason`. A reason raised again keeps the stronger of its decisions.
     mutating func raise(_ decision: Decision, _ reason: String) {
         if decision > self.decision { self.decision = decision }
-        if !reasons.contains(reason) { reasons.append(reason) }
+        if let index = entries.firstIndex(where: { $0.reason == reason }) {
+            entries[index].decision = max(entries[index].decision, decision)
+        } else {
+            entries.append(Entry(decision: decision, reason: reason))
+        }
     }
 
     /// The stricter of two verdicts, with the reasons of both.
     func merging(_ other: SafetyVerdict) -> SafetyVerdict {
         var merged = self
-        merged.decision = max(decision, other.decision)
-        merged.reasons += other.reasons.filter { !reasons.contains($0) }
+        for entry in other.entries { merged.raise(entry.decision, entry.reason) }
         return merged
     }
 }

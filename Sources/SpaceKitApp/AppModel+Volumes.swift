@@ -5,19 +5,6 @@ import SpaceKitCore
 extension AppModel {
     // MARK: Volumes and Trash
 
-    /// Re-reads volume capacities. Values only change (and views only update) when the disk changed.
-    func refreshVolumes() {
-        let fresh = VolumeTable.current().userVisibleVolumes.compactMap { VolumeCapacity.of(path: $0.mountPoint) }
-        if fresh != volumes { volumes = fresh }
-        let live = VolumeCapacity.of(path: scanPath)
-        if live != scanCapacity {
-            scanCapacity = live
-            if let live, let tree, tree.roots == ["/"] {
-                categories = CategoryBreakdown.updatingHidden(categories, capacity: live, scannedBytes: tree.root.size)
-            }
-        }
-    }
-
     /// Keeps capacity live: every few seconds (one cheap system call per volume), and immediately when SpaceKit
     /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder).
     func startMonitoring() {
@@ -67,10 +54,10 @@ extension AppModel {
                 (try? Scanner(options: options).scan(path), needsSecondScan ? try? Scanner(options: options).scan(path) : nil)
             }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {
-                trashBytes = nil
+                trashMeasured(nil)
                 return
             }
-            if trashBytes != fresh.root.size { trashBytes = fresh.root.size }
+            trashMeasured(fresh.root.size)
             guard resync else { return }
             await untilTreesAreFree()
             var changed = false
@@ -84,19 +71,9 @@ extension AppModel {
                 changed = true
             }
             guard changed else { return }
-            treeRevision += 1
-            if let tree, tree.roots == ["/"] || tree.covers(PathUtil.home) {
-                categories = CategoryBreakdown.compute(tree: tree, findings: analysis?.findings ?? [], capacity: scanCapacity)
-            }
+            treesChangedInPlace()
             let trashRules = Set(library.rules.filter { $0.paths.contains { PathUtil.expand($0) == path } }.map(\.id))
             if !trashRules.isEmpty { refreshFindings(ruleIDs: trashRules) }
-        }
-    }
-
-    func refreshSnapshots() {
-        Task {
-            let count = await Task.detached(priority: .utility) { LocalSnapshots.list(volume: "/").count }.value
-            if count != localSnapshotCount { localSnapshotCount = count }
         }
     }
 

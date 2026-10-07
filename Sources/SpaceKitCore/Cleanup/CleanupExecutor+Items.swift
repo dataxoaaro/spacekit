@@ -195,6 +195,10 @@ extension CleanupExecutor {
         return time(st.st_mtimespec) > date || time(st.st_ctimespec) > date
     }
 
+    /// Starts the skip reason of an item that gained a warning after the preview. Reports treat it as a problem,
+    /// because the person never saw that warning.
+    public static let changedSinceReview = "Changed since you reviewed it: "
+
     /// Confirmation covers the warnings the person saw. A warning that is new at removal time (a repository that
     /// appeared, a folder that grew past the volume-share limit) skips the item instead.
     static func unreviewedWarnings(_ fresh: SafetyVerdict, reviewed: SafetyVerdict) -> CleanupOutcome? {
@@ -202,7 +206,7 @@ extension CleanupExecutor {
         let seen = Set(reviewed.reasons.map(reasonKey))
         let unseen = fresh.reasons.filter { !seen.contains(reasonKey($0)) }
         guard !unseen.isEmpty else { return nil }
-        return .skipped(reason: "Changed since you reviewed it: " + unseen.joined(separator: "; "))
+        return .skipped(reason: changedSinceReview + unseen.joined(separator: "; "))
     }
 
     /// A reason without its numbers: a volume share shown as 12% in the preview is the same warning at 13%.

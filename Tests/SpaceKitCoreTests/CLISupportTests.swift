@@ -104,6 +104,10 @@ struct CleanupReportStatusTests {
         warned.warnings = ["Couldn't write to the journal"]
         #expect(warned.hasProblems)
         #expect(warned.removedAnything)
+
+        var changed = CleanupReport(dryRun: false)
+        changed.items = [(item, .skipped(reason: CleanupExecutor.changedSinceReview + "This folder is a git repository (source code)"))]
+        #expect(changed.hasProblems)
     }
 
     @Test("A command that ran counts as removing something even if it freed nothing")

@@ -11,11 +11,22 @@ extension CleanupReport {
         }
     }
 
-    /// The run didn't do everything it was asked to: an item failed, a command was skipped or failed, or a
-    /// warning was raised. Skipped items don't count: the preview showed them as blocked, and the report lists each
-    /// with its reason, including items that gained a warning after the preview ("Changed since you reviewed it").
-    /// Front ends report this as an error (the CLI exits nonzero).
-    public var hasProblems: Bool { !failures.isEmpty || !unfinishedCommands.isEmpty || !warnings.isEmpty }
+    /// Items skipped because they gained a warning after the preview, which the person never saw.
+    public var changedSinceReview: [(item: CleanupItem, reason: String)] {
+        items.compactMap { entry in
+            guard case .skipped(let reason) = entry.outcome, reason.hasPrefix(CleanupExecutor.changedSinceReview) else {
+                return nil
+            }
+            return (entry.item, reason)
+        }
+    }
+
+    /// The run didn't do everything it was asked to: an item failed or changed since the preview, a command was
+    /// skipped or failed, or a warning was raised. Other skipped items don't count: the preview showed them as
+    /// blocked. Front ends report this as an error (the CLI exits nonzero).
+    public var hasProblems: Bool {
+        !failures.isEmpty || !changedSinceReview.isEmpty || !unfinishedCommands.isEmpty || !warnings.isEmpty
+    }
 
     /// At least one item was removed or one command ran.
     public var removedAnything: Bool {

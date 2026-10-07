@@ -48,7 +48,7 @@ extension AppModel {
         let executor = context.executor
         return await Task.detached(priority: .userInitiated) {
             PlanVerdicts(
-                items: plan.items.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
+                items: plan.itemsLargestFirst.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
                 commands: plan.commands.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) })
         }.value
     }

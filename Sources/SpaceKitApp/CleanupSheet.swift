@@ -24,7 +24,7 @@ struct CleanupSheet: View {
     }
 
     private var rows: [(item: CleanupItem, verdict: SafetyVerdict)] {
-        (verdicts?.items ?? []).sorted { $0.item.size > $1.item.size }
+        verdicts?.items ?? []
     }
 
     private var commandRows: [(command: PlannedCommand, verdict: SafetyVerdict)] { verdicts?.commands ?? [] }

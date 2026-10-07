@@ -99,6 +99,9 @@ public struct CleanupPlan: Codable, Sendable {
 
     public var isEmpty: Bool { items.isEmpty && commands.isEmpty }
 
+    /// The order every preview lists items in.
+    public var itemsLargestFirst: [CleanupItem] { items.sorted { $0.size > $1.size } }
+
     /// Builds a plan from findings. `select` chooses which items of each finding to include (all by default).
     /// `trashPreference`: `true` forces the Trash; `nil` follows each rule's `safety.trash`.
     /// `created`: when the findings were gathered (defaults to now).

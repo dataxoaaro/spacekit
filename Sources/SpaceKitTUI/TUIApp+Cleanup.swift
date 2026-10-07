@@ -14,23 +14,21 @@ extension TUIApp {
         var blocked = 0
         func add(_ verdict: SafetyVerdict, _ text: String) -> Bool {
             let reason = clean(verdict.reasons.first ?? "")
+            lines.append(verdict.decision.mark + " " + text)
             switch verdict.decision {
             case .allow:
-                lines.append("✓".fg(ANSI.safe) + " " + text)
                 return true
             case .confirm:
                 needConfirmation += 1
-                lines.append("!".fg(ANSI.review) + " " + text)
-                lines.append("    " + reason.fg(ANSI.review))
+                lines.append("    " + reason.fg(verdict.decision.color))
                 return true
             case .block:
                 blocked += 1
-                lines.append("✗".fg(ANSI.protected) + " " + text)
-                lines.append("    " + ("Blocked: " + reason).fg(ANSI.protected))
+                lines.append("    " + ("Blocked: " + reason).fg(verdict.decision.color))
                 return false
             }
         }
-        for item in plan.items.sorted(by: { $0.size > $1.size }) {
+        for item in plan.itemsLargestFirst {
             let verdict = executor.verdict(for: item, context: .manual(confirmed: false))
             let size = ANSI.pad(ByteCount.format(item.size), to: 9, alignRight: true)
             if add(verdict, "\(size)  \(clean(PathUtil.abbreviate(item.path)))") { allowed.items.append(item) }

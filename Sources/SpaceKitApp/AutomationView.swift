@@ -179,7 +179,7 @@ private struct NextRunFooter: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let next = model.nextRuns().first {
+        if let next = model.jobRunner.nextRuns().first {
             let estimate = model.jobRunner.estimatedRecovery(states: model.jobStates)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Next automatic cleanup").font(.headline)

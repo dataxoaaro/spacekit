@@ -141,7 +141,7 @@ struct DiskMapView: View {
         let depth = model.mapDepth
         let colorer = MapColorer(mode: model.colorMode, ruleIndex: model.ruleIndex)
         let key = self.key
-        let result = await Task.detached(priority: .userInitiated) { () -> MapGeometry in
+        let layout = try? await model.readingTrees { () -> MapGeometry in
             var geometry = MapGeometry(key: key, size: size)
             switch visualization {
             case .sunburst:
@@ -153,9 +153,9 @@ struct DiskMapView: View {
                 geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
             }
             return geometry
-        }.value
-        guard !Task.isCancelled else { return }
-        geometry = result
+        }
+        guard let layout, !Task.isCancelled else { return }
+        geometry = layout
     }
 
     // MARK: Sunburst
@@ -278,13 +278,13 @@ struct DiskMapView: View {
 
 /// Progressive map while a scan runs: top-level folders grow as their sizes come in.
 struct LiveScanMap: View {
-    let root: DirNode
+    let progress: ScanProgress
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
             Canvas { context, size in
                 // Colors follow listing order, which never changes, so sectors don't repaint as sizes come in.
-                let children = root.isListed ? root.children.filter(\.isListed) : []
+                let children = progress.liveChildren.filter(\.isListed)
                 let total = Double(max(children.reduce(0) { $0 + $1.liveSize }, 1))
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 let outer = min(size.width, size.height) / 2 - 6

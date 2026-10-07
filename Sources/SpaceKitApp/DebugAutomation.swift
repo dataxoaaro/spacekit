@@ -67,7 +67,7 @@
                     }
                     let started = Date()
                     Task {
-                        _ = await model.execute(pending.plan) { _, _, _ in }
+                        _ = await model.execute(pending.plan, confirmed: false, onProgress: { _, _, _ in })
                         model.pendingCleanup = nil
                         let elapsed = Date().timeIntervalSince(started)
                         try? "cleanup applied in \(elapsed)s; analysing=\(model.isAnalysing)\n"

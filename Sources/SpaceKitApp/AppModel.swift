@@ -73,12 +73,18 @@ final class AppModel {
     var colorMode: UISettings.ColorMode
     var mapDepth: Int
     private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanRequests = RequestGeneration()
+    /// The folder the current `tree` is a scan of (`scanPath` moves on as soon as another scan starts).
+    @ObservationIgnored private var treeScanPath: String?
+    /// Off-main work reading the trees, and tree changes waiting for it to finish (see `readingTrees`).
+    @ObservationIgnored private var treeReaders = 0
+    @ObservationIgnored private var treeWriters: [CheckedContinuation<Void, Never>] = []
 
     // MARK: Intelligence
     private(set) var analysis: Analysis?
     private(set) var analysisProgress: ScanProgress?
     private(set) var aiReport: AIReport?
-    private(set) var analysisDate: Date?
+    @ObservationIgnored private var analysisRequests = RequestGeneration()
 
     // MARK: Cleanup
     /// Items collected from Explore and Dev Intelligence for one combined review.
@@ -93,10 +99,15 @@ final class AppModel {
     }
     /// Rules currently being re-evaluated after a tool command ran (cards show a spinner).
     private(set) var refreshingRules: Set<String> = []
+    /// Cleanups removing things right now. Quitting waits for them (see `AppDelegate`).
+    private(set) var runningCleanups = 0
+    /// Set when the person chose to quit while a cleanup ran; the app quits once the last one finishes.
+    @ObservationIgnored var quitWhenCleanupsFinish = false
 
     // Render-time caches. Not observed, so filling them during a view update doesn't trigger another one.
     @ObservationIgnored private var itemsCache: [UInt: [DiskItem]] = [:]
     @ObservationIgnored private var ruleCache: [String: Rule?] = [:]
+    @ObservationIgnored private var rulesIncludingDisabledCache: [Rule]?
 
     // MARK: Automation & history
     private(set) var jobStates: [String: JobState] = [:]
@@ -136,6 +147,7 @@ final class AppModel {
         refreshVolumes()
         refreshAutomation()
         startMonitoring()
+        AppDelegate.model = self
     }
 
     var config: SpaceKitConfig { context.config }
@@ -143,29 +155,34 @@ final class AppModel {
 
     // MARK: Config
 
-    /// Saves a changed config to YAML. Only what the change affects is reloaded: the rule library is
-    /// re-read only when rule settings change; job edits just refresh job state.
+    /// Applies one change to the config file as it is on disk now, so changes made elsewhere (jobs added with the CLI,
+    /// hand edits) are kept, and saves it. A config file that doesn't parse is left untouched and the problem shown.
+    /// Only what changed is reloaded: the rule library only when rule settings differ.
     func updateConfig(_ change: (inout SpaceKitConfig) -> Void) {
         let before = context.config
-        var config = before
-        change(&config)
-        guard config != before else { return }
+        let saved: SpaceKitConfig
         do {
-            try context.configStore.save(config)
+            saved = try context.configStore.update(change)
+        } catch let error as ConfigError {
+            errorMessage =
+                "SpaceKit didn't save this change because the config file has a problem: \(error.localizedDescription). "
+                + "Fix it (spacekit config validate), then Reload."
+            return
         } catch {
             errorMessage = "Couldn't save the config: \(error.localizedDescription)"
             return
         }
-        if config.rules != before.rules {
+        if saved.rules != before.rules || context.configError != nil {
             reloadContext()
-        } else {
-            context.config = config
-            if config.jobs != before.jobs { refreshJournal() }
+        } else if saved != before {
+            context.config = saved
+            if saved.jobs != before.jobs { refreshJournal() }
         }
     }
 
     /// Re-reads config and rules from disk (after edits in the YAML file).
     func reloadContext() {
+        rulesIncludingDisabledCache = nil
         context = SpaceKitContext.load(paths: context.paths)
         ruleIndex = RuleIndex(rules: context.library.rules, findings: analysis?.findings ?? [])
         if let error = context.configError { errorMessage = "Config problem: \(error)" }
@@ -179,6 +196,7 @@ final class AppModel {
     func scan(_ path: String? = nil) {
         if let path { scanPath = PathUtil.expand(path) }
         scanTask?.cancel()
+        let generation = scanRequests.next()
         let progress = ScanProgress()
         scanProgress = progress
         progressSnapshot = progress.snapshot
@@ -198,11 +216,16 @@ final class AppModel {
             defer { poller.cancel() }
             do {
                 let tree = try await Scanner(options: options).scan(root, progress: progress)
-                guard !Task.isCancelled else { return }
-                self.finishScan(tree)
+                guard self.scanRequests.isCurrent(generation) else { return }
+                if tree.stats.cancelled {
+                    self.stopScan()
+                } else {
+                    self.finishScan(tree, path: root)
+                }
             } catch {
-                if !Task.isCancelled { self.errorMessage = error.localizedDescription }
-                self.scanProgress = nil
+                guard self.scanRequests.isCurrent(generation) else { return }
+                self.errorMessage = error.localizedDescription
+                self.stopScan()
             }
         }
     }
@@ -211,8 +234,17 @@ final class AppModel {
         scanProgress?.cancel()
     }
 
-    private func finishScan(_ tree: ScanTree) {
+    /// A stopped scan's tree is missing whatever wasn't reached yet, so it isn't shown, analysed or recorded in
+    /// history. The previous scan stays on screen.
+    private func stopScan() {
+        scanProgress = nil
+        progressSnapshot = nil
+        if let treeScanPath { scanPath = treeScanPath }
+    }
+
+    private func finishScan(_ tree: ScanTree, path: String) {
         self.tree = tree
+        treeScanPath = path
         treeRevision += 1
         focus = tree.root
         scanProgress = nil
@@ -225,8 +257,8 @@ final class AppModel {
         analyze()
     }
 
-    /// The live root while scanning, for progressive drawing.
-    var liveRoot: DirNode? { scanProgress?.liveRoot }
+    /// The scan root's subfolders while scanning, for progressive drawing.
+    var liveChildren: [DirNode] { scanProgress?.liveChildren ?? [] }
 
     // MARK: Navigation
 
@@ -265,9 +297,12 @@ final class AppModel {
 
     var isAnalysing: Bool { analysisProgress != nil }
 
-    /// Evaluates all rules, reusing the Explore scan when it covers the locations rules need.
+    /// Evaluates all rules, reusing the Explore scan when it covers the locations rules need. Starting again (after a
+    /// rescan, or Refresh) stops the analysis in progress and drops its result, so the current tree is always the one
+    /// analysed.
     func analyze() {
-        guard analysisProgress == nil else { return }
+        analysisProgress?.cancel()
+        let generation = analysisRequests.next()
         let progress = ScanProgress()
         analysisProgress = progress
         let analyzer = context.analyzer
@@ -275,23 +310,62 @@ final class AppModel {
         let window = context.config.automation.activeModelWindow
         let history = context.history
         Task {
+            let analysis: Analysis
             do {
-                let analysis = try await analyzer.analyze(reusing: tree, progress: progress)
-                let report = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: window)
-                self.analysis = analysis
-                self.aiReport = report
-                self.analysisDate = Date()
-                self.ruleIndex = RuleIndex(rules: self.context.library.rules, findings: analysis.findings)
-                if let tree = self.tree, tree.covers(PathUtil.home) {
-                    self.categories = CategoryBreakdown.compute(tree: tree, findings: analysis.findings)
-                }
+                analysis = try await self.readingTrees { try await analyzer.analyze(reusing: tree, progress: progress) }
+            } catch {
+                guard self.analysisRequests.isCurrent(generation) else { return }
+                self.analysisProgress = nil
+                self.errorMessage = error.localizedDescription
+                return
+            }
+            guard self.analysisRequests.isCurrent(generation) else { return }
+            self.analysisProgress = nil
+            self.analysis = analysis
+            self.aiReport = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: window)
+            self.ruleIndex = RuleIndex(rules: self.context.library.rules, findings: analysis.findings)
+            if let tree = self.tree, tree.covers(PathUtil.home) {
+                self.categories = CategoryBreakdown.compute(tree: tree, findings: analysis.findings)
+            }
+            if !analysis.tree.stats.cancelled {
                 try? history.recordSnapshot(analysis: analysis)
                 self.refreshHistory()
-            } catch {
-                self.errorMessage = error.localizedDescription
             }
-            self.analysisProgress = nil
         }
+    }
+
+    // MARK: Tree access
+
+    /// Runs `work` off the main actor while it reads the scan trees (rule evaluation, map layout). Trees change only
+    /// on the main actor and only while no such work runs (see `untilTreesAreFree`), because a `DirNode` can't be
+    /// read while it changes.
+    func readingTrees<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        treeReaders += 1
+        defer { endTreeRead() }
+        return try await Task.detached(priority: .userInitiated, operation: work).value
+    }
+
+    private func endTreeRead() {
+        treeReaders -= 1
+        guard treeReaders == 0 else { return }
+        let waiting = treeWriters
+        treeWriters = []
+        for writer in waiting { writer.resume() }
+    }
+
+    /// Suspends until no off-main work reads the trees. Change them right after, without suspending in between.
+    private func untilTreesAreFree() async {
+        while treeReaders > 0 {
+            await withCheckedContinuation { treeWriters.append($0) }
+        }
+    }
+
+    /// Every rule that loads, disabled ones included, so Settings can turn them back on. Cached until the next reload.
+    func rulesIncludingDisabled() -> [Rule] {
+        if let cached = rulesIncludingDisabledCache { return cached }
+        let rules = RuleLibrary.load(directories: config.rules.directories).rules
+        rulesIncludingDisabledCache = rules
+        return rules
     }
 
     func rule(for path: String?) -> Rule? {
@@ -336,8 +410,12 @@ final class AppModel {
 
     var cleanupListBytes: UInt64 { cleanupList.reduce(0) { $0 + $1.size } }
 
-    /// Opens the review sheet for a plan.
+    /// Opens the review sheet for a plan, unless another cleanup is already open (it may be running).
     func review(_ plan: CleanupPlan, title: String, completion: (@MainActor (CleanupReport) -> Void)? = nil) {
+        guard pendingCleanup == nil else {
+            errorMessage = "Another cleanup is open. Finish or cancel it first."
+            return
+        }
         var plan = plan
         if context.config.safety.trash == .always { plan.useTrash = true }
         pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
@@ -348,18 +426,50 @@ final class AppModel {
         review(plan, title: "Clean \(finding.rule.name)")
     }
 
-    func verdict(for item: CleanupItem) -> SafetyVerdict {
-        context.executor.verdict(for: item, context: .manual(confirmed: false))
+    /// The guard's verdict on everything in a plan, as the review sheet shows it before anything runs.
+    struct PlanVerdicts: Sendable {
+        var items: [(item: CleanupItem, verdict: SafetyVerdict)]
+        var commands: [(command: PlannedCommand, verdict: SafetyVerdict)]
     }
 
-    /// Runs a reviewed plan. `confirmed` means the person acknowledged every warning shown.
-    func execute(_ plan: CleanupPlan, onProgress: @escaping @Sendable (Int, Int, String) -> Void) async -> CleanupReport {
+    func verdicts(for plan: CleanupPlan) async -> PlanVerdicts {
+        let executor = context.executor
+        return await Task.detached(priority: .userInitiated) {
+            PlanVerdicts(
+                items: plan.items.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) },
+                commands: plan.commands.map { ($0, executor.verdict(for: $0, context: .manual(confirmed: false))) })
+        }.value
+    }
+
+    var isCleaning: Bool { runningCleanups > 0 }
+
+    /// Runs a reviewed plan, then `completion` (bookkeeping such as job state) before the app may quit.
+    /// Pass `confirmed: true` only when the person acknowledged every warning the review showed; otherwise items and
+    /// commands that need confirmation are skipped.
+    func execute(
+        _ plan: CleanupPlan, confirmed: Bool, completion: (@MainActor (CleanupReport) -> Void)? = nil,
+        onProgress: @escaping @Sendable (Int, Int, String) -> Void
+    ) async -> CleanupReport {
+        runningCleanups += 1
+        defer { endCleanup() }
         let executor = context.executor
         let report = await Task.detached(priority: .userInitiated) {
-            executor.execute(plan, context: .manual(confirmed: true), dryRun: false, onProgress: onProgress)
+            executor.execute(plan, context: .manual(confirmed: confirmed), dryRun: false, onProgress: onProgress)
         }.value
-        applyRemovals(report)
+        completion?(report)
+        Task {
+            await untilTreesAreFree()
+            applyRemovals(report)
+        }
         return report
+    }
+
+    private func endCleanup() {
+        runningCleanups -= 1
+        if runningCleanups == 0 && quitWhenCleanupsFinish {
+            quitWhenCleanupsFinish = false
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
     }
 
     /// Brings every view up to date after a cleanup without re-scanning or re-analysing everything:
@@ -550,6 +660,7 @@ final class AppModel {
             }
             if trashBytes != fresh.root.size { trashBytes = fresh.root.size }
             guard resync else { return }
+            await untilTreesAreFree()
             var changed = false
             // Only touch the trees this measurement was taken for (a new scan may have replaced them).
             if let tree, tree === exploreTree, tree.covers(path), tree.node(at: path)?.size != fresh.root.size {
@@ -608,8 +719,6 @@ final class AppModel {
 
     var jobRunner: JobRunner { JobRunner(context: context) }
 
-    func nextRuns() -> [(job: Job, date: Date)] { jobRunner.nextRuns() }
-
     /// Evaluates a job in the background and opens the review sheet with its plan.
     func previewJob(_ job: Job) {
         runningJobID = job.id
@@ -624,10 +733,10 @@ final class AppModel {
                     self.errorMessage = "\(job.name): \(evaluation.triggerSummary)."
                 } else {
                     self.review(plan, title: "Run “\(job.name)” now") { report in
-                        try? self.context.jobStates.update(job.id) { state in
-                            state.lastRun = Date()
-                            state.lastFreedBytes = report.freedBytes
-                            state.lastOutcome = "Freed \(ByteCount.format(report.freedBytes)) (manual run)"
+                        do {
+                            try runner.record(.manual(evaluation, report: report))
+                        } catch {
+                            self.errorMessage = "Couldn't save the job's state: \(error.localizedDescription)"
                         }
                         self.refreshJournal()
                     }
@@ -638,15 +747,44 @@ final class AppModel {
         }
     }
 
+    /// Re-evaluates the suggestion's job first, so only items that still meet its conditions are offered (a project
+    /// used since it was prepared drops out). The suggestion stays if the cleanup removed nothing and had problems.
     func approve(_ suggestion: Suggestion) {
-        review(suggestion.plan, title: "Approve “\(suggestion.jobName)”") { _ in
-            try? self.context.suggestions.remove(suggestion.id)
-            self.refreshJournal()
+        guard let job = config.jobs.first(where: { $0.id == suggestion.jobID }) else {
+            errorMessage = "The job “\(suggestion.jobName)” that prepared this cleanup no longer exists. Dismiss the suggestion."
+            return
+        }
+        runningJobID = job.id
+        let runner = jobRunner
+        Task {
+            let result = await Task.detached { Result { try runner.evaluate(job) } }.value
+            self.runningJobID = nil
+            switch result {
+            case .success(let evaluation):
+                let plan = suggestion.plan.keeping(onlyEligible: evaluation.eligible).plan
+                guard !plan.isEmpty else {
+                    self.errorMessage = "Nothing in “\(suggestion.jobName)” needs cleaning any more: it was used or removed since."
+                    return
+                }
+                self.review(plan, title: "Approve “\(suggestion.jobName)”") { report in
+                    if report.removedAnything || !report.hasProblems {
+                        self.dismiss(suggestion)
+                    } else {
+                        self.refreshJournal()
+                    }
+                }
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
     func dismiss(_ suggestion: Suggestion) {
-        try? context.suggestions.remove(suggestion.id)
+        do {
+            try context.suggestions.remove(suggestion.id)
+        } catch {
+            errorMessage = "Couldn't remove the suggestion: \(error.localizedDescription)"
+        }
         refreshJournal()
     }
 
@@ -665,7 +803,11 @@ final class AppModel {
     }
 
     func uninstallAgent() {
-        try? LaunchAgent(paths: context.paths).uninstall()
+        do {
+            try LaunchAgent(paths: context.paths).uninstall()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
         refreshAutomation()
     }
 
@@ -676,21 +818,9 @@ final class AppModel {
         return Shell.which("spacekit")
     }
 
+    /// Saves a job: in place of the job `id` when editing, otherwise as a new job whose id doesn't clash with another.
     func saveJob(_ job: Job, replacing id: String? = nil) {
-        updateConfig { config in
-            if let index = config.jobs.firstIndex(where: { $0.id == (id ?? job.id) }) {
-                config.jobs[index] = job
-            } else {
-                var job = job
-                let base = job.id
-                var counter = 2
-                while config.jobs.contains(where: { $0.id == job.id }) {
-                    job.id = "\(base)-\(counter)"
-                    counter += 1
-                }
-                config.jobs.append(job)
-            }
-        }
+        updateConfig { $0.upsertJob(job, replacing: id) }
     }
 
     func deleteJob(_ job: Job) {

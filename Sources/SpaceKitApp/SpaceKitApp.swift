@@ -50,7 +50,11 @@ struct SpaceKitApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// The app's model, so quitting can wait for a cleanup in progress.
+    static weak var model: AppModel?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // When launched from `swift run` (no bundle), become a regular foreground app with a Dock icon.
         NSApp.setActivationPolicy(.regular)
@@ -58,6 +62,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Quitting mid-cleanup would stop between two removals, so it waits until the cleanup finishes.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model = AppDelegate.model, model.isCleaning else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "A cleanup is still running"
+        alert.informativeText = "SpaceKit can quit as soon as it finishes. Every removal is journaled as it happens."
+        alert.addButton(withTitle: "Quit When Finished")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        // The cleanup may have finished while the alert was open.
+        guard model.isCleaning else { return .terminateNow }
+        model.quitWhenCleanupsFinish = true
+        return .terminateLater
+    }
 }
 
 struct RootView: View {
@@ -261,7 +280,7 @@ struct MenuBarContent: View {
                 Text("\(capacity.used.bytesText) of \(capacity.total.bytesText) used").font(.caption).foregroundStyle(.secondary)
             }
             Divider()
-            if let next = model.nextRuns().first {
+            if let next = model.jobRunner.nextRuns().first {
                 Label("Next: \(next.job.name), \(next.date.shortRelative)", systemImage: "clock").font(.callout)
             }
             if model.recovered90Days > 0 {

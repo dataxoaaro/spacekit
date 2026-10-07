@@ -36,10 +36,12 @@ struct TrashCommand: ParsableCommand {
         }
         let status = Status(path: path, bytes: tree.root.size, files: tree.root.fileCount)
         if !json { print("Trash: ".bold + ByteCount.format(status.bytes).bold + "  \(status.files.formatted()) files".dim) }
-        guard empty, status.bytes > 0 else {
+        guard empty else {
             if json { try Output.json(status) } else if status.bytes > 0 { print("Empty it with: ".dim + "spacekit trash --empty".bold) }
             return
         }
+        // `--empty --json` always answers in the documented `{"plan": …}` shape, even with nothing to empty.
+        guard status.bytes > 0 || json else { return }
         let plan = Trash.emptyingPlan(tree, rules: context.library.rules, created: started)
         guard
             let report = try CleanupOutput.session(

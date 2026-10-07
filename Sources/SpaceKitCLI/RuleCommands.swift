@@ -41,7 +41,7 @@ struct RulesCommand: ParsableCommand {
             print()
             print(
                 "\(rules.count) rules · ".dim
-                    + "built-in: \(RuleLibrary.builtinDirectory.map { PathUtil.abbreviate($0) } ?? "not found")".dim)
+                    + "built-in: \(RuleLibrary.builtinDirectory.map(Output.path) ?? "not found")".dim)
             for issue in context.library.issues where issue.severity == .error { Output.warn(Output.safe(issue.description)) }
         }
     }
@@ -54,7 +54,7 @@ struct RulesCommand: ParsableCommand {
 
         func run() throws {
             let context = global.loadContext()
-            guard let rule = context.library.rule(id: id) else { throw ValidationError("Unknown rule '\(id)'") }
+            guard let rule = context.library.rule(id: id) else { throw ValidationError("Unknown rule '\(Output.safe(id))'") }
             if json {
                 try Output.json(rule)
                 return
@@ -135,7 +135,7 @@ struct RulesCommand: ParsableCommand {
             let context = global.loadContext()
             let file = context.paths.userRulesDirectory + "/\(Rule.slug(name)).yaml"
             guard !FileManager.default.fileExists(atPath: file) else {
-                throw ValidationError("\(PathUtil.abbreviate(file)) already exists")
+                throw ValidationError("\(Output.path(file)) already exists")
             }
             try FileManager.default.createDirectory(atPath: context.paths.userRulesDirectory, withIntermediateDirectories: true)
             try yaml.write(toFile: file, atomically: true, encoding: .utf8)

@@ -161,7 +161,7 @@ struct ConfigCommand: ParsableCommand {
             var paths = global.paths
             if let file { paths.configFile = PathUtil.expandArgument(file) }
             guard FileManager.default.fileExists(atPath: paths.configFile) else {
-                throw ValidationError("No config at \(paths.configFile). Create one with `spacekit config init`.")
+                throw ValidationError("No config at \(Output.safe(paths.configFile)). Create one with `spacekit config init`.")
             }
             // Load it the way every command would, so its own rule folders and disabled rules apply.
             let context = SpaceKitContext.load(paths: paths)
@@ -192,7 +192,7 @@ struct ConfigCommand: ParsableCommand {
             let setting = [environment["VISUAL"], environment["EDITOR"]].compactMap { $0 }.first { !$0.isEmpty } ?? "nano"
             // `code --wait` is a command and an argument; split it the way a shell would, without running one.
             guard let editor = ShellWords.split(setting), !editor.isEmpty else {
-                throw ValidationError("Can't read the editor command '\(setting)'. Check $VISUAL / $EDITOR.")
+                throw ValidationError("Can't read the editor command '\(Output.safe(setting))'. Check $VISUAL / $EDITOR.")
             }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

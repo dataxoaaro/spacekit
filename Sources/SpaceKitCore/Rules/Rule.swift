@@ -269,22 +269,22 @@ public struct SafetySpec: Codable, Sendable, Hashable {
 
 /// Suggested automation for a rule. Jobs created from the rule start with these values.
 public struct PolicySpec: Codable, Sendable, Hashable {
-    /// `size`, `age` or `schedule`; informational, the fields below are what count.
-    public var type: String?
+    public enum Kind: String, Codable, Sendable { case size, age, schedule }
+
+    /// Informational; the fields below are what count.
+    public var type: Kind?
     /// Clean when the total grows beyond this.
     public var threshold: ByteCount?
     /// Only clean items untouched for at least this long.
     public var olderThan: Age?
     /// Never clean items used within this window (`active_projects`).
     public var keepRecent: Age?
-    /// `daily`, `weekly`, `monthly`.
-    public var schedule: String?
-    /// `observe`, `suggest` or `automatic`.
-    public var mode: String?
+    public var schedule: Schedule?
+    public var mode: Job.Mode?
 
     public init(
-        type: String? = nil, threshold: ByteCount? = nil, olderThan: Age? = nil, keepRecent: Age? = nil, schedule: String? = nil,
-        mode: String? = nil
+        type: Kind? = nil, threshold: ByteCount? = nil, olderThan: Age? = nil, keepRecent: Age? = nil, schedule: Schedule? = nil,
+        mode: Job.Mode? = nil
     ) {
         self.type = type
         self.threshold = threshold
@@ -292,6 +292,18 @@ public struct PolicySpec: Codable, Sendable, Hashable {
         self.keepRecent = keepRecent
         self.schedule = schedule
         self.mode = mode
+    }
+
+    enum CodingKeys: String, CodingKey { case type, threshold, olderThan, keepRecent, schedule, mode }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decodeIfPresent(Kind.self, forKey: .type)
+        threshold = try c.decodeIfPresent(ByteCount.self, forKey: .threshold)
+        olderThan = try c.decodeRetentionIfPresent(forKey: .olderThan)
+        keepRecent = try c.decodeRetentionIfPresent(forKey: .keepRecent)
+        schedule = try c.decodeIfPresent(Schedule.self, forKey: .schedule)
+        mode = try c.decodeIfPresent(Job.Mode.self, forKey: .mode)
     }
 }
 

@@ -47,7 +47,7 @@ struct CleanCommand: ParsableCommand {
     func run() throws {
         let started = Date()
         let context = global.loadContext()
-        if permanent && context.config.safety.trash == .always {
+        if permanent && context.config.safety.trashesEverything {
             throw ValidationError("--permanent is turned off because your config sets safety.trash: always.")
         }
         let (rules, paths) = try resolve(targets, in: context)

@@ -156,6 +156,26 @@ struct TrashAndJournalTests {
         #expect(journalEntries(tree).map(\.method) == [.delete])
     }
 
+    @Test("safety.trash: always trashes what a plan says to delete, and still empties the Trash")
+    func alwaysTrash() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/a/x", bytes: 4000)
+        try tree.file("home/.Trash/old/x", bytes: 4000)
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: tree.path("home/cache/a"), size: 4000, ruleID: "cache"),
+                CleanupItem(path: tree.path("home/.Trash/old"), size: 4000),
+            ], useTrash: false)
+        var executor = sandboxExecutor(tree, rules: [rule])
+        executor.alwaysTrash = true
+        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.items.map(\.outcome.isRemoved) == [true, true])
+        #expect(onDisk(tree.path("home/.Trash/a/x")))
+        #expect(!onDisk(tree.path("home/.Trash/old")))
+        #expect(journalEntries(tree).map(\.method) == [.trash, .delete])
+    }
+
     @Test("The Trash is recognised whatever the case of the path")
     func trashCaseFolded() throws {
         let tree = try TempTree()

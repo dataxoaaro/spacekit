@@ -53,12 +53,13 @@ public struct SpaceKitContext: Sendable {
         CleanupExecutor(
             safety: safetyGuard, journal: journal, rules: library.rules,
             extraAllowedCommands: Set(config.safety.allowedCommands),
-            maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes, configError: configError)
+            maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes, configError: configError,
+            alwaysTrash: config.safety.trashesEverything)
     }
 
     /// `true` to force the Trash, `nil` to follow rules.
     public func trashPreference(for action: Job.Action = .trash) -> Bool? {
-        if config.safety.trash == .always { return true }
+        if config.safety.trashesEverything { return true }
         switch action {
         case .trash: return true
         case .delete: return false

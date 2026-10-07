@@ -28,8 +28,6 @@ extension AppModel {
             errorMessage = "Another cleanup is open. Finish or cancel it first."
             return
         }
-        var plan = plan
-        if context.config.safety.trash == .always { plan.useTrash = true }
         pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
     }
 

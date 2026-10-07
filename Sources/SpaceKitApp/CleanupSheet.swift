@@ -37,7 +37,7 @@ struct CleanupSheet: View {
         var plan = pending.plan
         plan.items = rows.filter { !$0.verdict.isBlocked && !excluded.contains($0.item.id) }.map(\.item)
         plan.commands = selectedCommandRows.map(\.command)
-        plan.useTrash = useTrash || model.config.safety.trash == .always
+        plan.useTrash = useTrash
         return plan
     }
 
@@ -123,7 +123,7 @@ struct CleanupSheet: View {
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.callout).foregroundStyle(Theme.critical)
-            } else if model.config.safety.trash == .always {
+            } else if model.config.safety.trashesEverything {
                 Label("Items go to the Trash, so you can put them back. Empty the Trash to free the space.", systemImage: "trash")
                     .font(.callout).foregroundStyle(.secondary)
             } else {

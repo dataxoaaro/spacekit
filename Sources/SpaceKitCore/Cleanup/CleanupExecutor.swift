@@ -92,6 +92,9 @@ public struct CleanupExecutor: Sendable {
     /// Set when the config file exists but couldn't be read. Every removal and command is then refused, because
     /// the defaults in use lack the person's protected paths, allowed commands and disabled rules.
     public var configError: String?
+    /// `safety.trash: always`: items are moved to the Trash even when a plan asks to delete them. Entries already in
+    /// the Trash can still be deleted (that's emptying it).
+    public var alwaysTrash: Bool
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
 
@@ -99,7 +102,7 @@ public struct CleanupExecutor: Sendable {
 
     public init(
         safety: SafetyGuard, journal: Journal?, rules: [Rule], extraAllowedCommands: Set<String> = [],
-        maxBytesPerAutomaticRun: UInt64 = ByteCount.gb(100).bytes, configError: String? = nil
+        maxBytesPerAutomaticRun: UInt64 = ByteCount.gb(100).bytes, configError: String? = nil, alwaysTrash: Bool = false
     ) {
         self.safety = safety
         self.journal = journal
@@ -107,6 +110,7 @@ public struct CleanupExecutor: Sendable {
         self.extraAllowedCommands = extraAllowedCommands
         self.maxBytesPerAutomaticRun = maxBytesPerAutomaticRun
         self.configError = configError
+        self.alwaysTrash = alwaysTrash
     }
 
     /// Checks one item without touching it, using what the plan recorded about it.

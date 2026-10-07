@@ -273,7 +273,7 @@ struct DoctorCommand: ParsableCommand {
         checks.append(
             Check(
                 check: "Trash", ok: true,
-                detail: context.config.safety.trash == .always
+                detail: context.config.safety.trashesEverything
                     ? "everything goes to the Trash" : "regenerable caches may be deleted directly"))
         if let capacity = VolumeCapacity.of(path: "/") {
             checks.append(

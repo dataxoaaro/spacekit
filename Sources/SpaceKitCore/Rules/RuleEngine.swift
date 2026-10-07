@@ -199,7 +199,7 @@ public struct RuleEngine: Sendable {
             name: node.name,
             size: node.size,
             fileCount: node.fileCount,
-            lastModified: node.subtreeNewestModifiedDate,
+            lastModified: node.lastUsed,
             lastUsed: lastUsed ?? node.lastUsed,
             isRepository: node.markers & git != 0,
             containsRepository: node.subtreeMarkers & git != 0,

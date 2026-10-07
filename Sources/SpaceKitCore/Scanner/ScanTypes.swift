@@ -64,10 +64,6 @@ public struct MarkerRegistry: Sendable {
         return b != 0 && mask & b != 0
     }
 
-    public func names(in mask: UInt64) -> [String] {
-        names.enumerated().compactMap { index, name in mask & (UInt64(1) << UInt64(index)) != 0 ? name : nil }
-    }
-
     @inline(__always)
     func lookup(_ pointer: UnsafePointer<UInt8>, length: Int) -> UInt64 {
         guard length < 256 else { return 0 }
@@ -124,13 +120,10 @@ public final class ScanProgress: Sendable {
 public struct ScanStats: Sendable, Codable {
     public var files: UInt64
     public var directories: UInt64
-    public var bytes: UInt64
+    /// Directories that couldn't be listed plus entries that couldn't be read (usually privacy-protected locations).
     public var errors: UInt64
     public var duration: TimeInterval
-    public var startedAt: Date
     public var cancelled: Bool
-    /// A sample of directories that could not be read (usually privacy-protected locations).
-    public var unreadable: [String]
 }
 
 public enum ScanError: Error, LocalizedError {
@@ -188,7 +181,7 @@ public final class ScanTree: @unchecked Sendable {
         let rest = anchor.name == "/" ? String(target.dropFirst()) : String(target.dropFirst(anchor.name.count + 1))
         var node = anchor
         for component in rest.split(separator: "/") {
-            guard let next = node.children.first(where: { $0.name == component }) else { return nil }
+            guard let next = node.child(named: String(component)) else { return nil }
             node = next
         }
         return node

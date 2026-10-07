@@ -28,7 +28,6 @@ public struct Scanner: Sendable {
     /// Scans several directory trees into one tree. With more than one root, `ScanTree.root` is a virtual
     /// node with an empty name whose children are the roots (named by absolute path).
     public func scan(roots paths: [String], progress: ScanProgress = ScanProgress()) throws -> ScanTree {
-        let started = Date()
         let clock = ContinuousClock.now
         var resolved: [String] = []
         for path in paths {
@@ -67,17 +66,13 @@ public struct Scanner: Sendable {
         job.resolveHardLinks()
         Scanner.aggregate(root)
 
-        let elapsed = ContinuousClock.now - clock
         let snapshot = progress.snapshot
         let stats = ScanStats(
             files: snapshot.files,
             directories: snapshot.directories,
-            bytes: root.size,
             errors: snapshot.errors,
-            duration: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18,
-            startedAt: started,
-            cancelled: progress.isCancelled,
-            unreadable: job.unreadable.withLock { $0 }
+            duration: (ContinuousClock.now - clock) / .seconds(1),
+            cancelled: progress.isCancelled
         )
         return ScanTree(
             root: root, roots: resolved, stats: stats, options: options,
@@ -187,7 +182,6 @@ private final class ScanJob: @unchecked Sendable {
     let skipPaths: [String: DirNode.Flags]
     let excludeGlobs: [String]
     let hardLinks = Mutex<[HardLinkKey: HardLinkEntry]>([:])
-    let unreadable = Mutex<[String]>([])
 
     private let condition = NSCondition()
     private var stack: [WorkItem] = []
@@ -198,24 +192,15 @@ private final class ScanJob: @unchecked Sendable {
         self.options = options
         self.progress = progress
 
+        let rootDevices = Set(
+            roots.compactMap { root -> dev_t? in
+                var st = stat()
+                return lstat(root, &st) == 0 ? st.st_dev : nil
+            })
         switch options.boundary {
-        case .device:
-            var devices = Set<dev_t>()
-            for root in roots {
-                var st = stat()
-                if lstat(root, &st) == 0 { devices.insert(st.st_dev) }
-            }
-            allowedDevices = devices
-        case .container:
-            var devices = Set<dev_t>()
-            for root in roots {
-                devices.formUnion(volumes.containerDevices(for: root))
-                var st = stat()
-                if lstat(root, &st) == 0 { devices.insert(st.st_dev) }
-            }
-            allowedDevices = devices
-        case .unrestricted:
-            allowedDevices = nil
+        case .device: allowedDevices = rootDevices
+        case .container: allowedDevices = rootDevices.union(roots.flatMap { volumes.containerDevices(for: $0) })
+        case .unrestricted: allowedDevices = nil
         }
 
         var mounts: [String: dev_t] = [:]
@@ -373,9 +358,6 @@ private final class ScanJob: @unchecked Sendable {
     private func markUnreadable(_ item: WorkItem) {
         item.node.flags.insert(.unreadable)
         progress.errors.add(1, ordering: .relaxed)
-        unreadable.withLock { list in
-            if list.count < 500 { list.append(item.path) }
-        }
     }
 
     private func skipFlag(for path: String) -> DirNode.Flags? {
@@ -390,7 +372,6 @@ private final class ScanJob: @unchecked Sendable {
     private func list(_ item: WorkItem, buffer: UnsafeMutableRawPointer, bufferSize: Int) -> [WorkItem] {
         let node = item.node
         if progress.isCancelled {
-            node.flags.insert(.incomplete)
             publish(node)
             return []
         }

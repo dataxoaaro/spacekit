@@ -72,8 +72,6 @@ public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
         public static let firmlinkDuplicate = Flags(rawValue: 1 << 2)
         /// Matched an exclude pattern.
         public static let excluded = Flags(rawValue: 1 << 3)
-        /// Scan was cancelled before this directory was listed.
-        public static let incomplete = Flags(rawValue: 1 << 4)
 
         public static let skipped: Flags = [.otherVolume, .firmlinkDuplicate, .excluded]
     }
@@ -112,8 +110,8 @@ public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
         return name.hasPrefix("/") ? PathUtil.lastComponent(name) : name
     }
 
-    /// Stable identity string for this node within its tree.
-    public var address: UInt { UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque()) }
+    /// `id` as a number, for string keys.
+    public var address: UInt { UInt(bitPattern: id) }
 
     /// Bytes counted so far during a running scan (only maintained for shallow nodes).
     public var liveSize: UInt64 { liveBytes.load(ordering: .relaxed) }
@@ -123,19 +121,13 @@ public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
 
     public var isSkipped: Bool { !flags.intersection(.skipped).isEmpty }
 
-    public var subtreeNewestModifiedDate: Date? {
-        subtreeNewestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(subtreeNewestModified)) : nil
-    }
-
     /// Newest modification anywhere in the subtree, used as "last used".
     ///
     /// Access times are deliberately not used here: Spotlight, backup and antivirus tools read files in the
     /// background, so a folder nobody has touched in months can show an access time of a few minutes ago.
     /// They're still recorded (`subtreeNewestAccessed`) for model weights, where reads do mean use.
-    public var lastUsed: Date? { subtreeNewestModifiedDate }
-
-    public var lastAccessed: Date? {
-        subtreeNewestAccessed > 0 ? Date(timeIntervalSince1970: TimeInterval(subtreeNewestAccessed)) : nil
+    public var lastUsed: Date? {
+        subtreeNewestModified > 0 ? Date(timeIntervalSince1970: TimeInterval(subtreeNewestModified)) : nil
     }
 
     public func child(named name: String) -> DirNode? {
@@ -167,8 +159,8 @@ public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
     }
 
     /// Visits every node in the subtree (pre-order) without recursion.
-    public func forEachDescendant(includingSelf: Bool = true, _ body: (DirNode) -> Bool) {
-        var stack: [DirNode] = includingSelf ? [self] : children
+    public func forEachDescendant(_ body: (DirNode) -> Bool) {
+        var stack: [DirNode] = [self]
         while let node = stack.popLast() {
             if body(node) { stack.append(contentsOf: node.children) }
         }

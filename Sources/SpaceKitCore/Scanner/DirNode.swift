@@ -167,6 +167,44 @@ public final class DirNode: @unchecked Sendable, Identifiable, Hashable {
     }
 
     func setParent(_ parent: DirNode?) { self.parent = parent }
+
+    /// True if this node is `top` or lies under it.
+    func isWithin(_ top: DirNode) -> Bool {
+        var cursor: DirNode? = self
+        while let node = cursor {
+            if node === top { return true }
+            cursor = node.parent
+        }
+        return false
+    }
+
+    /// Takes a hard-linked file's bytes off its link `name`, which stays counted as a file of 0 bytes (so it's no
+    /// longer tracked). Updates this folder's direct totals only. Returns false if the tracked entry is missing.
+    @discardableResult
+    func dropLinkBytes(named name: String, size: UInt64, minFileSize: UInt64) -> Bool {
+        if size >= minFileSize && size > 0 {
+            guard let index = files.firstIndex(where: { $0.name == name }) else { return false }
+            files.remove(at: index)
+            otherFilesCount += 1
+        } else {
+            otherFilesSize -= min(otherFilesSize, size)
+        }
+        directFileSize -= min(directFileSize, size)
+        return true
+    }
+
+    /// Gives a hard-linked file's bytes to its link `name`, until now counted as a file of 0 bytes. Updates this
+    /// folder's direct totals only.
+    func addLinkBytes(named name: String, size: UInt64, modified: Int64, minFileSize: UInt64) {
+        if size >= minFileSize && size > 0 {
+            otherFilesCount -= min(otherFilesCount, 1)
+            let index = files.firstIndex { $0.size < size } ?? files.count
+            files.insert(FileLeaf(name: name, size: size, modified: modified), at: index)
+        } else {
+            otherFilesSize &+= size
+        }
+        directFileSize &+= size
+    }
 }
 
 /// Something that occupies space inside a directory.

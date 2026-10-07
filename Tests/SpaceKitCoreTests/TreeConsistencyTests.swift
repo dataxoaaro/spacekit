@@ -47,10 +47,18 @@ struct TreeConsistencyTests {
                 try tree.file("\(folder)/f\(file).bin", bytes: size)
             }
         }
+        // Hard links across folders: the tree credits each file's bytes to one of its links.
+        let fm = FileManager.default
+        for index in 0..<10 {
+            let files: [String] = (fm.enumerator(atPath: tree.root)?.allObjects as? [String] ?? []).filter { $0.hasSuffix(".bin") }
+            guard !files.isEmpty else { break }
+            let source = files[Int(rng.next() % UInt64(files.count))]
+            let folder = folders[Int(rng.next() % UInt64(folders.count))]
+            try tree.link(source, (folder.isEmpty ? "" : folder + "/") + "h\(index).bin")
+        }
         let scanned = try scan(tree.root, minFileSize: minFileSize)
         try expectMatchesRescan(scanned, root: tree.root, minFileSize: minFileSize, "initial")
 
-        let fm = FileManager.default
         for step in 0..<40 {
             // Pick a random existing item outside the Trash.
             let candidates = (fm.enumerator(atPath: tree.root)?.allObjects as? [String] ?? [])

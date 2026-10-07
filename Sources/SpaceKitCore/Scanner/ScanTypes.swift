@@ -150,13 +150,20 @@ public final class ScanTree: @unchecked Sendable {
     public let options: ScanOptions
     /// Capacity of the volume containing the first root.
     public let capacity: VolumeCapacity?
+    /// Every multiply-linked file in the tree, so a mutation that takes away the link holding a file's bytes can
+    /// hand them to a surviving link.
+    var hardLinks: [HardLinkKey: HardLinkGroup]
 
-    init(root: DirNode, roots: [String], stats: ScanStats, options: ScanOptions, capacity: VolumeCapacity?) {
+    init(
+        root: DirNode, roots: [String], stats: ScanStats, options: ScanOptions, capacity: VolumeCapacity?,
+        hardLinks: [HardLinkKey: HardLinkGroup] = [:]
+    ) {
         self.root = root
         self.roots = roots
         self.stats = stats
         self.options = options
         self.capacity = capacity
+        self.hardLinks = hardLinks
     }
 
     public var markers: MarkerRegistry { options.markers }
@@ -185,5 +192,49 @@ public final class ScanTree: @unchecked Sendable {
             node = next
         }
         return node
+    }
+}
+
+/// Identifies a file whatever name it's reached by.
+struct HardLinkKey: Hashable, Sendable {
+    let device: Int32
+    let inode: UInt64
+}
+
+/// One name of a multiply-linked file.
+struct HardLink {
+    let node: DirNode
+    let name: String
+    /// The file's bytes are counted under exactly one of its links; the others count as files of 0 bytes.
+    var hasBytes: Bool
+}
+
+/// A file with several hard links in the tree.
+struct HardLinkGroup {
+    let size: UInt64
+    let modified: Int64
+    var links: [HardLink]
+
+    /// The order that picks the link holding the bytes: folder path first, then name. A scan and an in-place update
+    /// of the same disk must agree, whatever order the links were reached in.
+    static func precedes(folder: String, name: String, folder other: String, name otherName: String) -> Bool {
+        folder != other ? folder < other : name < otherName
+    }
+
+    /// The link that should hold the bytes, or `nil` if none is left.
+    var ownerIndex: Int? {
+        var owner: Int?
+        var ownerFolder = ""
+        for index in links.indices {
+            let folder: String = links[index].node.path
+            if let current = owner,
+                !HardLinkGroup.precedes(folder: folder, name: links[index].name, folder: ownerFolder, name: links[current].name)
+            {
+                continue
+            }
+            owner = index
+            ownerFolder = folder
+        }
+        return owner
     }
 }

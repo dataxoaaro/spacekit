@@ -32,6 +32,8 @@ public struct CleanupReport: Sendable {
     /// Problems that didn't stop an item but must not go unnoticed: journal writes that failed, and loose
     /// files that couldn't be removed while the rest of their folder was.
     public var warnings: [String] = []
+    /// Trash destinations of loose files moved to the Trash, keyed by the folder (the loose-files item's `path`).
+    public var trashedLooseFiles: [String: [String]] = [:]
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {

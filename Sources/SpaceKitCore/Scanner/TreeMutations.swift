@@ -74,6 +74,31 @@ extension ScanTree {
         return true
     }
 
+    // MARK: Arrival
+
+    /// Updates the tree after a file appeared at `path` (a loose file moved to the Trash, say), reading its size
+    /// from disk. Returns `true` if it was added, which needs its folder to be in the tree.
+    @discardableResult
+    func applyArrival(of path: String) -> Bool {
+        guard let parent = node(at: PathUtil.parent(path)) else { return false }
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { return false }
+        let name = PathUtil.lastComponent(path)
+        let size = FileSize.allocated(st)
+        let modified = Int64(st.st_mtimespec.tv_sec)
+        guard st.st_nlink > 1, (st.st_mode & S_IFMT) == S_IFREG else {
+            putFile(FileLeaf(name: name, size: size, modified: modified), into: parent)
+            return true
+        }
+        // Another link in the tree may already hold the bytes, so this one arrives empty and the order decides.
+        let key = HardLinkKey(device: st.st_dev, inode: st.st_ino)
+        if hardLinks[key] == nil { hardLinks[key] = HardLinkGroup(size: size, modified: modified, links: []) }
+        hardLinks[key]?.links.append(HardLink(node: parent, name: name, hasBytes: false))
+        putFile(FileLeaf(name: name, size: 0, modified: modified), into: parent)
+        settleHardLinks([key])
+        return true
+    }
+
     // MARK: Refresh
 
     /// Replaces the folder at `path` with a fresh scan of it (`fresh` must be a single-root scan of `path`).

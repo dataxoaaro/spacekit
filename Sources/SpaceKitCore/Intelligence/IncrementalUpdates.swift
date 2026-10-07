@@ -7,20 +7,25 @@ public struct Removal: Sendable, Hashable {
     public var bytes: UInt64
     /// Where the item went if it was moved to the Trash.
     public var trashedTo: String?
+    /// For loose files moved to the Trash: where each file went (the full path in the Trash).
+    public var trashedFiles: [String]
 
-    public init(path: String, kind: FindingItem.Kind, bytes: UInt64, trashedTo: String? = nil) {
+    public init(path: String, kind: FindingItem.Kind, bytes: UInt64, trashedTo: String? = nil, trashedFiles: [String] = []) {
         self.path = path
         self.kind = kind
         self.bytes = bytes
         self.trashedTo = trashedTo
+        self.trashedFiles = trashedFiles
     }
 
     /// Successful removals in a report (including zero-byte ones, so the tree still drops them).
     public static func from(_ report: CleanupReport) -> [Removal] {
-        report.items.compactMap { entry in
-            entry.outcome.isRemoved
-                ? Removal(path: entry.item.path, kind: entry.item.kind, bytes: entry.outcome.freedBytes, trashedTo: entry.outcome.trashedTo)
-                : nil
+        report.items.compactMap { entry -> Removal? in
+            guard entry.outcome.isRemoved else { return nil }
+            let trashedFiles: [String] = entry.item.kind == .looseFiles ? (report.trashedLooseFiles[entry.item.path] ?? []) : []
+            return Removal(
+                path: entry.item.path, kind: entry.item.kind, bytes: entry.outcome.freedBytes, trashedTo: entry.outcome.trashedTo,
+                trashedFiles: trashedFiles)
         }
     }
 
@@ -28,7 +33,12 @@ public struct Removal: Sendable, Hashable {
     /// deleted ones disappear. Returns true if the tree changed.
     @discardableResult
     public func apply(to tree: ScanTree) -> Bool {
-        if kind == .looseFiles { return tree.applyRemoval(of: path, looseFilesOnly: true) > 0 }
+        if kind == .looseFiles {
+            let taken = tree.applyRemoval(of: path, looseFilesOnly: true)
+            var placed = false
+            for file in trashedFiles where tree.applyArrival(of: file) { placed = true }
+            return taken > 0 || placed
+        }
         let before = tree.root.size
         let existed = tree.node(at: path) != nil || tree.node(at: PathUtil.parent(path)) != nil
         if let trashedTo {

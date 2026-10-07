@@ -191,3 +191,27 @@ struct RuleIndexTests {
         #expect(index.rule(for: tree.path("loose/node_modules")) == nil)
     }
 }
+
+@Suite("Storage analyzer")
+struct StorageAnalyzerTests {
+    @Test("Both entry points reuse a tree that covers what the rules need, and scan otherwise")
+    func reuse() async throws {
+        let tree = try TempTree()
+        try tree.file("cache/a/blob", bytes: 100_000)
+        try tree.file("elsewhere/b", bytes: 10_000)
+        let rule = Rule(id: "cache", name: "Cache", paths: [tree.path("cache")], granularity: .children)
+        let analyzer = StorageAnalyzer(library: RuleLibrary(rules: [rule]))
+        let covering = try scan(tree.root)
+        let outside = try scan(tree.path("elsewhere"))
+
+        let sync = try analyzer.analyzeSync(reusing: covering)
+        let async = try await analyzer.analyze(reusing: covering)
+        #expect(sync.tree === covering && async.tree === covering)
+        #expect(sync.findings.map(\.size) == async.findings.map(\.size))
+        #expect(sync.finding(ruleID: "cache")?.items.count == 1)
+
+        let rescanned = try analyzer.analyzeSync(reusing: outside)
+        #expect(rescanned.tree !== outside)
+        #expect(rescanned.tree.roots == [tree.path("cache")])
+    }
+}

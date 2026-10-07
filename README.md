@@ -15,7 +15,7 @@ SpaceKit is an open-source disk space tool for developers: a native macOS app, a
 
 ## Safety
 
-SpaceKit **cannot delete your disk**, a volume, your home folder, your personal folders, system folders, credentials or git repositories, and it never removes anything without a preview. Every removal, from every front end, goes through one guard that re-checks each item immediately before acting. Automation only touches data a rule recognises as regenerable, within a per-run byte budget. By default everything goes to the Trash. Read the full guidelines in **[docs/SAFETY.md](docs/SAFETY.md)**.
+SpaceKit **cannot delete your disk**, a volume, your home folder, your personal folders, system folders, credentials or git repositories, and it never removes anything without a preview. Every removal, from every front end, goes through one guard that re-checks each item immediately before acting. Automation only touches what a rule recognises (regenerable data, unless a job opts in to more) or a folder you listed in the job, within a per-run byte budget. It deletes only regenerable data directly; everything else it removes goes to the Trash. By default everything goes to the Trash. If your config file can't be read, nothing is removed until it's fixed. Read the full guidelines in **[docs/SAFETY.md](docs/SAFETY.md)**.
 
 ## Install
 
@@ -45,14 +45,21 @@ spacekit clean --safety safe              # preview every regenerable item
 spacekit jobs add --rule node.node-modules --older-than 60d --mode suggest
 spacekit agent install                    # run jobs on schedule
 spacekit suggestions                      # cleanups waiting for approval
+spacekit suggestions approve <id>         # preview one; add --yes to run it
 spacekit history                          # usage over time and what grew
 spacekit journal                          # everything SpaceKit removed
 spacekit trash [--empty]                  # what the Trash still holds, and empty it
-spacekit rules list | show <id> | validate | new
-spacekit config init | show | edit | validate
+spacekit rules list | show <id> | validate | new | dirs
+spacekit config init | show | path | edit | validate
 ```
 
-Most commands take `--json` for scripting. Cleaning always previews first unless you pass `--yes`.
+Cleaning always previews first, with the safety guard's verdict for every item. `--yes` runs the cleanup and confirms the warnings the preview printed; without it, `clean` and `trash --empty` ask on a terminal, and `jobs run` and `suggestions approve` only preview. `clean --permanent` deletes instead of using the Trash, and is refused while your config sets `safety.trash: always` (the default). Paths you name on `clean` go to the Trash unless you pass `--permanent`, and so does everything else in that cleanup.
+
+**Scripting.** `scan`, `disk`, `dev`, `ai`, `clean`, `rules list`, `rules show`, `jobs list`, `jobs show`, `jobs next`, `suggestions`, `suggestions approve`, `agent status`, `history`, `journal`, `trash`, `config show` and `doctor` take `--json`. For `clean`, `suggestions approve` and `trash --empty`, stdout carries only JSON: `{"plan": …}` for a preview, and `{"plan": …, "result": …}` when `--yes` ran it. The plan lists each item and command with its verdict (`allow`, `confirm` or `block`) and reasons; the result has each outcome (`removed`, `skipped` or `failed`), the bytes freed and moved to the Trash, warnings, and `ok`. The human-readable preview goes to stderr.
+
+**Exit status.** `clean`, `trash --empty`, `jobs run` and `suggestions approve` exit with status 1 when an item failed, a tool command was skipped or failed, or a warning was raised (such as a failed journal write); `jobs run` and `suggestions approve` also do when the job's state couldn't be saved. Items the guard skipped don't count, because the preview showed them. `config validate` and `rules validate` exit with status 1 on errors, and invalid arguments exit with status 64.
+
+In the TUI, `?` lists every key. `d` reviews a cleanup of what you marked; the review accepts `y` only after you've scrolled through the whole list. On the Dev tab, `n` creates a job from the selected rule.
 
 ## Configuration
 

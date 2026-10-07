@@ -53,6 +53,14 @@ public struct SafetyVerdict: Sendable, Equatable {
         if decision > self.decision { self.decision = decision }
         if !reasons.contains(reason) { reasons.append(reason) }
     }
+
+    /// The stricter of two verdicts, with the reasons of both.
+    func merging(_ other: SafetyVerdict) -> SafetyVerdict {
+        var merged = self
+        merged.decision = max(decision, other.decision)
+        merged.reasons += other.reasons.filter { !reasons.contains($0) }
+        return merged
+    }
 }
 
 /// The single gate every removal passes through, in every front end.
@@ -246,12 +254,14 @@ public struct SafetyGuard: Sendable {
                 verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
             }
         case .automatic(let automation):
-            let isCustom = automation.customPaths.contains { PathUtil.isAncestorOrEqual(scopePath($0), of: path) }
+            // Every spelling must be in scope: a symlinked parent can put the real location somewhere else.
+            let customRoots = automation.customPaths.map(scopePath)
+            let isCustom = candidates.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
             if let rule {
                 if rule.safety.level == .review && !automation.allowReview {
                     verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
                 }
-                if !isInsideRuleScope(path, rule: rule) {
+                if !candidates.allSatisfy({ isInsideRuleScope($0, rule: rule) }) {
                     verdict.raise(.block, "Path is outside the locations rule \(rule.id) covers")
                 }
             } else if !isCustom {

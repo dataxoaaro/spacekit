@@ -12,11 +12,12 @@ enum SafeRemoval {
         var errorDescription: String?
     }
 
-    /// Opens `path` as a directory, refusing symlinks in any component and a handle whose path isn't `expected`.
+    /// Opens `path` as a directory, refusing symlinks in any component and a handle whose path isn't exactly
+    /// `expected` (the resolved path the guard checked).
     static func openDirectory(_ path: String, expecting expected: String) throws -> Int32 {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
         guard fd >= 0 else { throw posixError(path) }
-        guard let actual = currentPath(of: fd), sameLocation(actual, expected) else {
+        guard currentPath(of: fd) == expected else {
             close(fd)
             throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
         }
@@ -109,13 +110,6 @@ enum SafeRemoval {
     static func verifyUnchanged(_ directory: String) throws {
         close(try openDirectory(directory))
     }
-
-    /// APFS is case- and normalization-insensitive, so two spellings can name the same folder.
-    static func sameLocation(_ a: String, _ b: String) -> Bool {
-        comparisonKey(a) == comparisonKey(b)
-    }
-
-    static func comparisonKey(_ path: String) -> String { PathUtil.comparisonKey(path) }
 
     static func posixError(_ path: String) -> Error {
         let code = errno

@@ -32,32 +32,34 @@ extension CleanupExecutor {
 
         // The folder whose entries change: the parent for an item, the folder itself for loose files.
         let directory = item.kind == .looseFiles ? item.path : PathUtil.parent(item.path)
-        guard let checkedDirectory = PathUtil.realpath(directory) else { return .skipped(reason: "Already gone") }
+        guard let checkedDirectory = resolve(directory) else { return .skipped(reason: "Already gone") }
 
         let isRepository = item.isRepository || (isFolder && RepositoryProbe.isRepository(item.path))
         let containsRepository = item.containsRepository || (isFolder && RepositoryProbe.containsRepository(item.path))
         let confirmed = CleanupExecutor.isConfirmed(context)
-        func check(size: UInt64) -> SafetyVerdict {
-            verdict(for: item, size: size, isRepository: isRepository, containsRepository: containsRepository, context: context)
+        // What the preview showed: the plan's own facts. A warning beyond those was never confirmed.
+        let reviewed = verdict(for: item, context: context)
+        func check(size: UInt64) -> CleanupOutcome? {
+            let fresh = verdict(
+                for: item, size: size, isRepository: isRepository, containsRepository: containsRepository, context: context,
+                checkedDirectory: checkedDirectory)
+            guard fresh.permits(confirmed: confirmed) else { return CleanupExecutor.refusal(fresh) }
+            return CleanupExecutor.unreviewedWarnings(fresh, reviewed: reviewed)
         }
-        let planned = check(size: item.size)
-        guard planned.permits(confirmed: confirmed) else { return CleanupExecutor.refusal(planned) }
+        if let refused = check(size: item.size) { return refused }
 
         if item.kind == .looseFiles, let created {
             if run.dryRun { return .wouldRemove(bytes: item.size) }
-            guard PathUtil.realpath(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
+            guard resolve(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
             return removeLooseFiles(item, in: checkedDirectory, removal: removal, created: created, context: context, run: &run)
         }
 
         // Charge the budget and report what's there now, not what the scan saw.
         let size = run.dryRun ? item.size : measuredSize(item.path, isFolder: isFolder, fallback: item.size)
-        if size != item.size {
-            let measured = check(size: size)
-            guard measured.permits(confirmed: confirmed) else { return CleanupExecutor.refusal(measured) }
-        }
+        if size != item.size, let refused = check(size: size) { return refused }
         if context.isAutomatic && size > run.budget { return overBudget() }
         if run.dryRun { return .wouldRemove(bytes: size) }
-        guard PathUtil.realpath(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
+        guard resolve(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
 
         do {
             let name = PathUtil.lastComponent(item.path)
@@ -108,7 +110,10 @@ extension CleanupExecutor {
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             guard !CleanupExecutor.changed(st, after: created) else { continue }
             let path = PathUtil.join(item.path, name)
-            guard safety.evaluate(path: path, rule: rule, context: context).permits(confirmed: confirmed) else { continue }
+            let checked = PathUtil.join(directory, name)
+            var verdict = safety.evaluate(path: path, rule: rule, context: context)
+            if checked != path { verdict = verdict.merging(safety.evaluate(path: checked, rule: rule, context: context)) }
+            guard verdict.permits(confirmed: confirmed) else { continue }
             let size = FileSize.allocated(st)
             if context.isAutomatic && size > run.budget {
                 overBudgetCount += 1
@@ -170,8 +175,8 @@ extension CleanupExecutor {
 
     /// True inside the guard's home Trash, whatever the spelling or symlinks in the parent path.
     func isInsideTrash(_ path: String, orTrashItself: Bool) -> Bool {
-        let trashKeys = Set([trashDirectory, PathUtil.realpath(trashDirectory) ?? trashDirectory].map(SafeRemoval.comparisonKey))
-        let candidates = [path, PathUtil.resolveParent(path)].map(SafeRemoval.comparisonKey)
+        let trashKeys = Set([trashDirectory, PathUtil.realpath(trashDirectory) ?? trashDirectory].map(PathUtil.comparisonKey))
+        let candidates = [path, PathUtil.resolveParent(path)].map(PathUtil.comparisonKey)
         return candidates.contains { candidate in
             trashKeys.contains { trash in
                 orTrashItself ? PathUtil.isAncestorOrEqual(trash, of: candidate) : PathUtil.isStrictAncestor(trash, of: candidate)
@@ -183,6 +188,21 @@ extension CleanupExecutor {
     static func changed(_ st: stat, after date: Date) -> Bool {
         func time(_ ts: timespec) -> Date { Date(timeIntervalSince1970: Double(ts.tv_sec) + Double(ts.tv_nsec) / 1e9) }
         return time(st.st_mtimespec) > date || time(st.st_ctimespec) > date
+    }
+
+    /// Confirmation covers the warnings the person saw. A warning that is new at removal time (a repository that
+    /// appeared, a folder that grew past the volume-share limit) skips the item instead.
+    static func unreviewedWarnings(_ fresh: SafetyVerdict, reviewed: SafetyVerdict) -> CleanupOutcome? {
+        guard fresh.decision == .confirm else { return nil }
+        let seen = Set(reviewed.reasons.map(reasonKey))
+        let unseen = fresh.reasons.filter { !seen.contains(reasonKey($0)) }
+        guard !unseen.isEmpty else { return nil }
+        return .skipped(reason: "Changed since you reviewed it: " + unseen.joined(separator: "; "))
+    }
+
+    /// A reason without its numbers: a volume share shown as 12% in the preview is the same warning at 13%.
+    static func reasonKey(_ reason: String) -> String {
+        String(reason.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) })
     }
 
     static func changedWhileChecking(_ directory: String) -> CleanupOutcome {

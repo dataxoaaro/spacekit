@@ -408,6 +408,27 @@ struct SafetyGuardAutomationTests {
         #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
     }
 
+    @Test("Automatic scope must hold for the path with its parent's symlinks resolved, not only as written")
+    func scopeOfResolvedParent() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/real/x", bytes: 100)
+        try tree.file("home/jobs/old/keep/x", bytes: 100)
+        try tree.file("home/Important/data/x", bytes: 100)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache/link"), withDestinationPath: tree.path("home/Important"))
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/jobs/old/link"), withDestinationPath: tree.path("home/Important"))
+        let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
+
+        let rule = Rule(
+            id: "c", name: "c", paths: [tree.path("home/cache")], granularity: .children, safety: SafetySpec(level: .safe),
+            action: ActionSpec(remove: true))
+        #expect(guardian.evaluate(path: tree.path("home/cache/real"), rule: rule, context: automatic).decision == .allow)
+        #expect(guardian.evaluate(path: tree.path("home/cache/link/data"), rule: rule, context: automatic).isBlocked)
+
+        let job = CleanupContext.automatic(AutomationContext(jobID: "j", customPaths: [tree.path("home/jobs/old")]))
+        #expect(guardian.evaluate(path: tree.path("home/jobs/old/keep"), context: job).decision == .allow)
+        #expect(guardian.evaluate(path: tree.path("home/jobs/old/link/data"), context: job).isBlocked)
+    }
+
     @Test("Automatic scope checks see rule and job paths written through a symlink as the scanned, resolved paths")
     func scopeThroughSymlinks() {
         let guardian = testGuard()

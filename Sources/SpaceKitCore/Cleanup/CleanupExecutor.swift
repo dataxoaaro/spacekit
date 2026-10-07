@@ -97,6 +97,8 @@ public struct CleanupExecutor: Sendable {
     public var alwaysTrash: Bool
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
+    /// Resolves the folder an item is removed from. Tests replace it to swap symlinks at the worst moment.
+    var resolve: @Sendable (String) -> String? = PathUtil.realpath
 
     public static let commandTimeout: TimeInterval = 600
 
@@ -119,14 +121,25 @@ public struct CleanupExecutor: Sendable {
             for: item, size: item.size, isRepository: item.isRepository, containsRepository: item.containsRepository, context: context)
     }
 
+    /// `checkedDirectory`: the resolved folder the removal will act in. The item is judged there too, so the guard
+    /// has seen the exact location that changes, whatever a symlink in the item's path points at by then.
     func verdict(
-        for item: CleanupItem, size: UInt64, isRepository: Bool, containsRepository: Bool, context: CleanupContext
+        for item: CleanupItem, size: UInt64, isRepository: Bool, containsRepository: Bool, context: CleanupContext,
+        checkedDirectory: String? = nil
     ) -> SafetyVerdict {
+        let rule = item.ruleID.flatMap { rules[$0] }
+        func evaluate(_ path: String) -> SafetyVerdict {
+            safety.evaluate(
+                path: path, size: size, rule: rule, context: context, isRepository: isRepository, containsRepository: containsRepository)
+        }
         // Loose files are judged as "something inside the folder", not as the folder itself.
         let path = item.kind == .looseFiles ? CleanupItem.looseFilesPath(in: item.path) : item.path
-        var verdict = safety.evaluate(
-            path: path, size: size, rule: item.ruleID.flatMap { rules[$0] }, context: context,
-            isRepository: isRepository, containsRepository: containsRepository)
+        var verdict = evaluate(path)
+        if let checkedDirectory {
+            let name = item.kind == .looseFiles ? "*" : PathUtil.lastComponent(item.path)
+            let resolved = PathUtil.join(checkedDirectory, name)
+            if resolved != path { verdict = verdict.merging(evaluate(resolved)) }
+        }
         refuseIfConfigInvalid(&verdict)
         return verdict
     }

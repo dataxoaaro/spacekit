@@ -372,3 +372,67 @@ struct ExecutionMechanicsTests {
         #expect(throws: (any Error).self) { _ = try SafeRemoval.openDirectory(tree.path("a"), expecting: tree.path("b")) }
     }
 }
+
+final class CallCounter: Sendable {
+    private let count = Mutex(0)
+
+    func next() -> Int {
+        count.withLock { value in
+            value += 1
+            return value
+        }
+    }
+}
+
+@Suite("Cleanup execution: what the guard checked is what changes")
+struct CheckedLocationTests {
+    static func point(_ link: String, at destination: String) {
+        unlink(link)
+        symlink(destination, link)
+    }
+
+    @Test("A parent swapped to a harmless folder for the guard and back for the removal is still checked where it removes")
+    func swapAroundTheGuard() throws {
+        let tree = try TempTree()
+        try tree.file("home/Protected/target/keep", bytes: 1_000)
+        try tree.file("home/Harmless/target/x", bytes: 1_000)
+        let link = tree.path("home/link")
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/Protected"))
+        let guardian = SafetyGuard(
+            home: tree.path("home"), userProtectedPaths: [tree.path("home/Protected")], volumes: emptyVolumes, isRunningAsRoot: false)
+        var executor = CleanupExecutor(safety: guardian, journal: nil, rules: [])
+        let calls = CallCounter()
+        let harmless = tree.path("home/Harmless")
+        let protected = tree.path("home/Protected")
+        // The attacker's timing: resolving sees the protected folder, the guard the harmless one, the re-check the protected one.
+        executor.resolve = { path in
+            let first = calls.next() == 1
+            if !first { CheckedLocationTests.point(link, at: protected) }
+            let resolved = PathUtil.realpath(path)
+            if first { CheckedLocationTests.point(link, at: harmless) }
+            return resolved
+        }
+        let plan = CleanupPlan(items: [CleanupItem(path: link + "/target", size: 1_000)], useTrash: false)
+        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(!report.items.contains { $0.outcome.isRemoved })
+        #expect(onDisk(tree.path("home/Protected/target/keep")))
+    }
+
+    @Test("A warning that wasn't in the reviewed plan skips the item even when the person confirmed")
+    func newWarningSkips() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000)], useTrash: false)
+        try tree.directory("home/Projects/old/.git")
+        let report = sandboxExecutor(tree).execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.skipped.first?.reason.hasPrefix("Changed since you reviewed it: ") == true)
+        #expect(report.skipped.first?.reason.contains("git repository") == true)
+        #expect(onDisk(tree.path("home/Projects/old/x")))
+
+        // The same warning shown in the preview (the plan recorded it) is what the person confirmed.
+        var reviewed = plan
+        reviewed.items[0].isRepository = true
+        let confirmed = sandboxExecutor(tree).execute(reviewed, context: .manual(confirmed: true), dryRun: false)
+        #expect(confirmed.items.first?.outcome.isRemoved == true)
+    }
+}

@@ -63,4 +63,22 @@ struct LaunchAgentTests {
         #expect(try installed.install(executable: "/usr/local/bin/spacekit", interval: .infinity) == 86_400)
         #expect(LaunchAgent.clampedInterval(.nan) == 300)
     }
+
+    @Test("The agent runs the bundled CLI, else the running spacekit, else spacekit on PATH, links resolved")
+    func executable() throws {
+        let tree = try TempTree()
+        let real = try tree.file("bin/spacekit-real/spacekit", bytes: 10)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("link"), withDestinationPath: real)
+        let none: () -> String? = { nil }
+        #expect(LaunchAgent.spacekitExecutable(bundle: tree.path("App"), running: tree.path("link"), onPath: none) == nil)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("spacekit"), withDestinationPath: real)
+        #expect(LaunchAgent.spacekitExecutable(bundle: tree.path("App"), running: tree.path("spacekit"), onPath: none) == real)
+        #expect(LaunchAgent.spacekitExecutable(bundle: tree.path("App"), running: "/x/SpaceKitApp", onPath: { tree.path("spacekit") }) == real)
+
+        let helper = try tree.file("SpaceKit.app/Contents/Helpers/spacekit", bytes: 10)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper)
+        #expect(LaunchAgent.spacekitExecutable(bundle: tree.path("SpaceKit.app"), running: "/x/SpaceKitApp", onPath: none) == helper)
+        #expect(LaunchAgent.isDevelopmentBuild("/src/spacekit/.build/debug/spacekit"))
+        #expect(!LaunchAgent.isDevelopmentBuild("/opt/homebrew/bin/spacekit"))
+    }
 }

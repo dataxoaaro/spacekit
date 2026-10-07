@@ -71,7 +71,7 @@ extension AppModel {
     }
 
     func installAgent() {
-        guard let executable = AppModel.cliExecutable else {
+        guard let executable = LaunchAgent.spacekitExecutable() else {
             errorMessage =
                 "Couldn't find the spacekit command-line tool. Build it with `make install`, or use the app bundle from `make app`."
             return
@@ -91,13 +91,6 @@ extension AppModel {
             errorMessage = error.localizedDescription
         }
         refreshAutomation()
-    }
-
-    /// The `spacekit` CLI the agent runs: bundled in `SpaceKit.app/Contents/Helpers`, or installed on PATH.
-    static var cliExecutable: String? {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/spacekit").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return Shell.which("spacekit")
     }
 
     /// Saves a job: in place of the job `id` when editing, otherwise as a new job whose id doesn't clash with another.

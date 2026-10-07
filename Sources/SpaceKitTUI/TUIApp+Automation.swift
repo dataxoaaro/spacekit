@@ -167,8 +167,7 @@ extension TUIApp {
             }
             return
         }
-        // launchd keeps the path it's given; a symlink (Homebrew, /usr/local/bin) could later point elsewhere.
-        guard let executable = Bundle.main.executablePath.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }) else {
+        guard let executable = LaunchAgent.spacekitExecutable() else {
             flash("Can't locate the spacekit executable")
             return
         }
@@ -177,7 +176,7 @@ extension TUIApp {
             var lines = [
                 "Checks for due jobs every \(Age(seconds: TimeInterval(seconds))).", "Runs: " + TerminalText.sanitize(executable),
             ]
-            if executable.contains("/.build/") {
+            if LaunchAgent.isDevelopmentBuild(executable) {
                 lines.append("That's a development build. Run `make install` for a stable path, then install again.".fg(ANSI.review))
             }
             lines += [

@@ -489,10 +489,10 @@ struct AgentCommand: ParsableCommand {
         func run() throws {
             let context = global.loadContext()
             let requested = every ?? context.config.automation.checkEvery
-            guard let executable = Bundle.main.executablePath.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }) else {
+            guard let executable = LaunchAgent.spacekitExecutable() else {
                 throw ValidationError("Can't locate the spacekit executable")
             }
-            if executable.contains("/.build/") {
+            if LaunchAgent.isDevelopmentBuild(executable) {
                 Output.warn(
                     "Installing an agent that points at a development build (\(Output.safe(executable))). "
                         + "Run `make install` for a stable path.")

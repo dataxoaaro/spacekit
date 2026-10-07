@@ -133,4 +133,16 @@ struct FrontEndSupportTests {
         #expect(noted.id == "r")
         #expect(folder.note(rule: nil) == nil)
     }
+
+    @Test("Tool homes count as developer or AI storage and are never searched by pattern rules")
+    func toolHomes() {
+        let home = "/Users/tester"
+        let locations = CategoryBreakdown.locations(home: home)
+        #expect(locations["/Users/tester/.volta"] == .developer)
+        #expect(locations["/Users/tester/.cargo"] == .developer)
+        #expect(locations["/Users/tester/.ollama"] == .ai)
+        let excludes = Set(RuleEngine.defaultPatternExcludes)
+        #expect(Set(ToolHomes.developer + ToolHomes.ai).isSubset(of: excludes))
+        #expect(excludes.contains("~/Library") && excludes.contains("~/.claude"))
+    }
 }

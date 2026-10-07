@@ -92,15 +92,12 @@ public struct RuleEngine: Sendable {
 
     /// Never searched by pattern rules: tool homes and app data where a `node_modules` or `build`
     /// folder belongs to an installed tool rather than to one of your projects.
-    public static let defaultPatternExcludes: [String] = [
-        "~/Library", "~/.Trash", "~/Applications", "~/.cache", "~/.local", "~/.config",
-        "~/.npm", "~/.pnpm-store", "~/.nvm", "~/.volta", "~/.fnm", "~/.bun", "~/.deno", "~/.yarn",
-        "~/.cargo", "~/.rustup", "~/go", "~/.gradle", "~/.m2", "~/.sdkman", "~/.android",
-        "~/.vscode", "~/.vscode-insiders", "~/.cursor", "~/.windsurf", "~/.zed", "~/.antigravity",
-        "~/.pyenv", "~/.rbenv", "~/.gem", "~/.docker", "~/.orbstack", "~/.ollama", "~/.lmstudio",
-        "~/miniconda3", "~/anaconda3", "~/miniforge3", "~/.conda", "~/.mamba", "~/.pub-cache", "~/fvm",
-        "~/.claude", "~/.codex", "~/.gemini", "~/.Spotlight-V100", "~/.cocoapods", "~/jan",
-    ]
+    public static let defaultPatternExcludes: [String] =
+        [
+            "~/Library", "~/.Trash", "~/Applications", "~/.cache", "~/.local", "~/.config",
+            "~/.vscode", "~/.vscode-insiders", "~/.cursor", "~/.windsurf", "~/.zed", "~/.antigravity",
+            "~/.claude", "~/.codex", "~/.gemini", "~/.Spotlight-V100",
+        ] + ToolHomes.developer + ToolHomes.ai
 
     /// Bundles are opaque: never search inside them.
     static let bundleSuffixes = [".app", ".photoslibrary", ".bundle", ".framework", ".xcarchive", ".musiclibrary", ".tvlibrary"]

@@ -105,9 +105,23 @@ public struct RuleEngine: Sendable {
     /// Bundles are opaque: never search inside them.
     static let bundleSuffixes = [".app", ".photoslibrary", ".bundle", ".framework", ".xcarchive", ".musiclibrary", ".tvlibrary"]
 
+    /// Rule and root paths are resolved through symlinks once here (`PathUtil.canonicalPattern`), because
+    /// the scan tree holds resolved paths: a rule for `/tmp/x` must match a scan of `/tmp`, stored as `/private/tmp`.
     public init(rules: [Rule], devRoots: [String] = ["~"]) {
-        self.rules = rules
-        self.devRoots = devRoots
+        self.rules = rules.map(RuleEngine.canonical)
+        self.devRoots = devRoots.map { PathUtil.canonicalPattern($0) }
+    }
+
+    static func canonical(_ rule: Rule) -> Rule {
+        var rule = rule
+        rule.paths = rule.paths.map { PathUtil.canonicalPattern($0) }
+        rule.exclusions = rule.exclusions.map { PathUtil.canonicalPattern($0) }
+        if var match = rule.match {
+            match.roots = match.roots?.map { PathUtil.canonicalPattern($0) }
+            match.exclude = match.exclude.map { PathUtil.canonicalPattern($0) }
+            rule.match = match
+        }
+        return rule
     }
 
     static func isActiveProjectsToken(_ token: String) -> Bool {
@@ -245,7 +259,7 @@ public struct RuleEngine: Sendable {
             allRoots.formUnion(roots)
             for name in rule.match!.names { byName[name, default: []].append((index, rule, roots)) }
         }
-        var excluded = Set(RuleEngine.defaultPatternExcludes.map { PathUtil.expand($0) })
+        var excluded = Set(RuleEngine.defaultPatternExcludes.map { PathUtil.expand(PathUtil.canonicalPattern($0)) })
         for (_, rule) in patternRules {
             for glob in rule.match!.exclude where !glob.contains("*") { excluded.insert(PathUtil.expand(glob)) }
         }

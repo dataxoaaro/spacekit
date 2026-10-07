@@ -407,4 +407,14 @@ struct SafetyGuardAutomationTests {
         #expect(guardian.evaluate(path: "/Users/tester/Code/app/node_modules", rule: ownRoots, context: automatic).decision == .allow)
         #expect(guardian.evaluate(path: "/opt/work/app/node_modules", rule: ownRoots, context: automatic).isBlocked)
     }
+
+    @Test("Automatic scope checks see rule and job paths written through a symlink as the scanned, resolved paths")
+    func scopeThroughSymlinks() {
+        let guardian = testGuard()
+        let rule = Rule(id: "tmp.cache", name: "Temp cache", paths: ["/tmp/spacekit-none/cache"], safety: SafetySpec(level: .safe))
+        let item = "/private/tmp/spacekit-none/cache"
+        #expect(guardian.evaluate(path: item, rule: rule, context: automatic).decision == .allow)
+        let job = CleanupContext.automatic(AutomationContext(jobID: "a", customPaths: ["/tmp/spacekit-none"]))
+        #expect(!guardian.evaluate(path: item + "/old", context: job).reasons.contains { $0.hasPrefix("Automatic jobs only remove") })
+    }
 }

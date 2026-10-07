@@ -104,8 +104,7 @@ extension TUIApp {
     }
 
     func spinner() -> String {
-        let frames = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-        return String(frames[Int(Date().timeIntervalSince1970 * 10) % frames.count]).fg(ANSI.accent)
+        String(Spinner.frame()).fg(ANSI.accent)
     }
 
     /// The selected-row highlight.

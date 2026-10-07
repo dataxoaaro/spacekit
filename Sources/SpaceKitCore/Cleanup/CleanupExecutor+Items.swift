@@ -166,7 +166,7 @@ extension CleanupExecutor {
         return .automatic(automation)
     }
 
-    var trashDirectory: String { PathUtil.join(safety.home, ".Trash") }
+    var trashDirectory: String { Trash.path(home: safety.home) }
 
     /// True inside the guard's home Trash, whatever the spelling or symlinks in the parent path.
     func isInsideTrash(_ path: String, orTrashItself: Bool) -> Bool {

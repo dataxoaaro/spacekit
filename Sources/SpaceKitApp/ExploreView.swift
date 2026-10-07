@@ -293,16 +293,12 @@ struct ItemRow: View {
                 Capsule().fill(color.opacity(0.85)).frame(width: max(3, proxy.size.width * fraction))
             }
             .frame(height: 4)
-            if let rule {
-                Text(rule.name).font(.caption).foregroundStyle(.secondary)
-            } else if let directory = item.directory {
-                if directory.flags.contains(.unreadable) {
-                    Text("No access — needs Full Disk Access").font(.caption).foregroundStyle(Theme.warning)
-                } else if directory.flags.contains(.firmlinkDuplicate) {
-                    Text("Same folder as /\(directory.name), counted there").font(.caption).foregroundStyle(.secondary)
-                } else if directory.flags.contains(.otherVolume) {
-                    Text("Another volume").font(.caption).foregroundStyle(.secondary)
-                }
+            switch item.note(rule: rule) {
+            case .rule(let rule): Text(rule.name).font(.caption).foregroundStyle(.secondary)
+            case .noAccess: Text("No access — needs Full Disk Access").font(.caption).foregroundStyle(Theme.warning)
+            case .sameAs(let name): Text("Same folder as /\(name), counted there").font(.caption).foregroundStyle(.secondary)
+            case .otherVolume: Text("Another volume").font(.caption).foregroundStyle(.secondary)
+            case nil: EmptyView()
             }
         }
         .padding(.vertical, 2)

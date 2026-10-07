@@ -118,4 +118,19 @@ struct FrontEndSupportTests {
         #expect(disk(usedPercent: 80).fullness == .filling)
         #expect(disk(usedPercent: 95).fullness == .nearlyFull)
     }
+
+    @Test("Explore notes name the rule first; plain entries get none")
+    func diskItemNotes() throws {
+        let tree = try TempTree()
+        try tree.file("root/folder/a.bin", bytes: 4_000)
+        let scanned = try scan(tree.path("root"))
+        let folder = try #require(scanned.root.items.first { $0.name == "folder" })
+        let rule = Rule(id: "r", name: "R", paths: [tree.path("root/folder")])
+        guard case .rule(let noted)? = folder.note(rule: rule) else {
+            Issue.record("expected the rule")
+            return
+        }
+        #expect(noted.id == "r")
+        #expect(folder.note(rule: nil) == nil)
+    }
 }

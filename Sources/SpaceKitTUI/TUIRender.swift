@@ -245,22 +245,12 @@ extension TUIApp {
             let percent = ANSI.pad(String(format: "%.0f%%", Double(item.size) / total * 100), to: 4, alignRight: true)
             let color = ANSI.branches[index % ANSI.branches.count]
             let bar = ANSI.bar(fraction: Double(item.size) / largest, width: barWidth, color: color)
+            let note = item.note(rule: path.isEmpty ? nil : state.ruleIndex.rule(for: path))?.terminalText ?? ""
             let row =
-                " \(marker) \(glyph) " + ANSI.pad(ANSI.truncate(name, to: nameWidth), to: nameWidth) + " \(size)  \(bar) \(percent)  "
-                + annotation(for: item, path: path)
+                " \(marker) \(glyph) " + ANSI.pad(ANSI.truncate(name, to: nameWidth), to: nameWidth) + " \(size)  \(bar) \(percent)  " + note
             lines.append(index == state.explore.selection ? highlighted(row) : row)
         }
         return lines
-    }
-
-    private func annotation(for item: DiskItem, path: String) -> String {
-        if let directory = item.directory {
-            if directory.flags.contains(.unreadable) { return "no access".fg(ANSI.review) }
-            if directory.flags.contains(.firmlinkDuplicate) { return "same as /\(TerminalText.sanitize(directory.name))".dim }
-            if directory.flags.contains(.otherVolume) { return "other volume".dim }
-        }
-        guard !path.isEmpty, let rule = state.ruleIndex.rule(for: path) else { return "" }
-        return rule.safety.level.badge + " " + TerminalText.sanitize(rule.name).dim
     }
 
     /// Squarified treemap drawn with colored cells. Terminal cells are about twice as tall as wide,

@@ -52,3 +52,25 @@ extension VolumeCapacity {
         usedFraction > VolumeCapacity.nearlyFullShare ? .nearlyFull : usedFraction > VolumeCapacity.fillingShare ? .filling : .comfortable
     }
 }
+
+extension DiskItem {
+    /// What Explore notes next to an entry: the rule that knows it, otherwise why its size may not be what it seems.
+    public enum Note: Sendable {
+        case rule(Rule)
+        /// Privacy-protected: its size is unknown without Full Disk Access.
+        case noAccess
+        /// A firmlink to the named top-level folder, counted there instead.
+        case sameAs(String)
+        case otherVolume
+    }
+
+    /// `rule` is the front end's lookup for this entry's path.
+    public func note(rule: Rule?) -> Note? {
+        if let rule { return .rule(rule) }
+        guard let directory else { return nil }
+        if directory.flags.contains(.unreadable) { return .noAccess }
+        if directory.flags.contains(.firmlinkDuplicate) { return .sameAs(directory.name) }
+        if directory.flags.contains(.otherVolume) { return .otherVolume }
+        return nil
+    }
+}

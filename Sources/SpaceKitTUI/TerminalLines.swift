@@ -54,3 +54,15 @@ extension Finding {
         }
     }
 }
+
+extension DiskItem.Note {
+    /// The note after an Explore row.
+    public var terminalText: String {
+        switch self {
+        case .rule(let rule): return rule.safety.level.badge + " " + TerminalText.sanitize(rule.name).dim
+        case .noAccess: return "no access".fg(ANSI.review)
+        case .sameAs(let name): return "same as /\(TerminalText.sanitize(name))".dim
+        case .otherVolume: return "other volume".dim
+        }
+    }
+}

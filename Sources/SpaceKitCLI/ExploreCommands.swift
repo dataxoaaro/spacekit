@@ -63,13 +63,7 @@ struct ScanCommand: ParsableCommand {
             let branch = depth > 1 ? (last ? "└─ " : "├─ ") : ""
             let name = Output.safe(item.name) + (item.isDirectory ? "/" : "")
             let percent = ANSI.pad(String(format: "%.0f%%", Double(item.size) / Double(max(parentSize, 1)) * 100), to: 4, alignRight: true)
-            var annotation = ""
-            if let path = item.path, let rule = index.rule(for: path) {
-                annotation = "  " + rule.safety.level.badge + " " + Output.safe(rule.name).dim
-            } else if let directory = item.directory {
-                if directory.flags.contains(.unreadable) { annotation = "  no access".fg(ANSI.review) }
-                if directory.flags.contains(.firmlinkDuplicate) { annotation = "  (same as /\(Output.safe(directory.name)))".dim }
-            }
+            let annotation = item.note(rule: item.path.flatMap(index.rule(for:))).map { "  " + $0.terminalText } ?? ""
             let bar = ANSI.bar(fraction: Double(item.size) / largest, width: 16, color: ANSI.branches[offset % ANSI.branches.count])
             print(
                 Output.size(item.size) + "  " + bar + " " + percent + "  " + prefix.dim + branch.dim + (item.isDirectory ? name.bold : name)

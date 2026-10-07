@@ -62,6 +62,15 @@ public struct ConfigStore: Sendable {
 
     /// Semantic checks beyond YAML syntax.
     public static func validate(_ config: SpaceKitConfig) throws {
+        // An error, not a silent skip: the whole config fails closed, so the person sees why and nothing runs.
+        if let launcher = config.safety.allowedCommands.first(where: SafetySettings.isCodeLauncher) {
+            let path: [CodingKey] = [SpaceKitConfig.CodingKeys.safety, SafetySettings.CodingKeys.allowedCommands]
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: path,
+                    debugDescription: "'\(launcher)' runs whatever code its arguments name, so it can't be allowed; "
+                        + "remove it (allow the tool itself, such as rsync, instead)"))
+        }
         var ids = Set<String>()
         for job in config.jobs {
             guard ids.insert(job.id).inserted else {
@@ -124,7 +133,7 @@ public struct ConfigStore: Sendable {
           trash: always             # always = move to Trash; rules = regenerable caches may be deleted directly
           maxBytesPerRun: 100GB     # an automatic run never removes more than this
           protectedPaths: []        # your own never-touch list, e.g. [~/Work/client-archive]
-          allowedCommands: []       # tools your own rules' commands may run; built-in rules also trust brew, docker, xcrun, npm, …
+          allowedCommands: []       # tools your own rules may run, by hand only; no shells or interpreters
 
         rules:
           disabled: []              # rule ids to ignore, e.g. [node.node-modules]

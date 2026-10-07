@@ -110,8 +110,9 @@ Commands run **without a shell**, so shell syntax (`;`, `&&`, `|`, backticks, `$
 
 Which programs may run depends on where the rule comes from:
 
-- **Built-in rules** (SpaceKit's own `rules/` library, or the folder `$SPACEKIT_RULES_DIR` names) may run these without extra configuration: `brew docker xcrun npm pnpm yarn bun ollama go cargo pip pip3 uv conda mamba gem pod flutter dart gradle huggingface-cli hf mise rustup orb podman colima swift deno`.
-- **Your own rules**, and rules from any folder other than the built-in library, run a command only if its program is listed in your `safety.allowedCommands`, including programs on the list above. `spacekit rules validate` warns about each such command.
+- **Built-in rules** (SpaceKit's own `rules/` library; in debug builds also the folder `$SPACEKIT_RULES_DIR` names) may run these without extra configuration: `brew docker xcrun npm pnpm yarn bun ollama go cargo pip pip3 uv conda mamba gem pod flutter dart gradle huggingface-cli hf mise rustup orb podman colima swift deno`.
+- **Your own rules**, and rules from any folder other than the built-in library, run a command only if its program is listed in your `safety.allowedCommands`, including programs on the list above, and only in a cleanup you start by hand. Automatic jobs skip these commands. `spacekit rules validate` warns about each such command.
+- **Shells, interpreters and launchers** (`sh`, `bash`, `python…`, `perl`, `node`, `osascript`, `swift`, `env`, `xargs`, `find`, `open` and similar) can't be listed in `safety.allowedCommands`, so a rule of your own that starts with one never runs. Name the tool itself instead. See [CONFIGURATION.md](CONFIGURATION.md#values) for the full list.
 
 A command in a saved plan (a suggestion) runs only while its rule is still loaded and still has the same command; otherwise it is refused until the plan is refreshed.
 
@@ -138,7 +139,7 @@ ai:
   removeCommand: [ollama, rm, "{name}"]   # optional: how the tool removes one model
 ```
 
-`removeCommand` is for tools whose models share files, so only the tool knows what may go. `{name}` is the model's name as the AI view shows it; `{path}` isn't allowed. It goes through the same checks as `action.command`: a bare executable name, built-in trust or `safety.allowedCommands`, no `sudo`, confirmation for 🟡 rules and the automatic byte budget. Model names that start with `-` are refused. A model of a rule without `removeCommand` is removed by its folders.
+`removeCommand` is for tools whose models share files, so only the tool knows what may go. `{name}` is the model's name as the AI view shows it; `{path}` isn't allowed. It goes through the same checks as `action.command`: a bare executable name, built-in trust or `safety.allowedCommands` (manual runs only for your own rules), no `sudo`, confirmation for 🟡 rules and the automatic byte budget. Model names that start with `-` are refused. A model of a rule without `removeCommand` is removed by its folders.
 
 | Layout | Meaning |
 |---|---|

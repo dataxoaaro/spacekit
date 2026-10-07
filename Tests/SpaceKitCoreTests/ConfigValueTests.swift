@@ -102,6 +102,39 @@ struct ConfigValueTests {
         #expect(Job.suggested(for: rule).when.keepRecent == Job.defaultActiveProjectsWindow)
     }
 
+    @Test("safety.allowedCommands can't list shells, interpreters or other code launchers")
+    func codeLaunchersInAllowedCommands() throws {
+        let launchers = [
+            "sh", "bash", "zsh", "env", "python", "python3", "python3.12", "Python3", "perl5.30", "node", "osascript", "xargs", "find",
+            "swift", "open",
+        ]
+        for name in launchers {
+            let yaml = "safety:\n  allowedCommands: [rsync, \(name)]\n"
+            let error = #expect(throws: (any Error).self, "\(name)") { try ConfigStore.parse(yaml) }
+            let message = error.map(DecodingErrorText.describe) ?? ""
+            #expect(message.contains("safety.allowedCommands") && message.contains("'\(name)'"), "\(message)")
+        }
+        #expect(try ConfigStore.parse("safety:\n  allowedCommands: [rsync, pip3, shasum]\n").safety.allowedCommands.count == 3)
+        #expect(SafetySettings.isCodeLauncher("pythonw"))
+        #expect(!SafetySettings.isCodeLauncher("shasum"))
+    }
+
+    @Test("A config allowing a code launcher fails closed: removals are refused like any invalid config")
+    func codeLauncherConfigFailsClosed() throws {
+        let tree = try TempTree()
+        try tree.directory("config")
+        try "safety:\n  allowedCommands: [sh]\n".write(toFile: tree.path("config/config.yaml"), atomically: true, encoding: .utf8)
+        try tree.file("work/build/x", bytes: 1000)
+        let paths = SpaceKitPaths(configFile: tree.path("config/config.yaml"), stateDirectory: tree.path("state"))
+        let context = SpaceKitContext.load(paths: paths)
+        #expect(context.configError?.contains("'sh'") == true)
+        #expect(context.config.safety.allowedCommands.isEmpty)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("work/build"), size: 1000)], useTrash: false)
+        let report = context.executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
+        #expect(onDisk(tree.path("work/build/x")))
+    }
+
     @Test("Ages convert to and from dates")
     func ageDates() {
         let now = Date(timeIntervalSince1970: 1_000_000)

@@ -124,31 +124,37 @@ public struct RuleLibrary: Sendable {
         return nil
     }
 
-    /// Where the built-in rule library lives, searched in this order:
-    /// `$SPACEKIT_RULES_DIR`, the app bundle's `Resources/rules`, `<prefix>/share/spacekit/rules` next to
-    /// the executable (Homebrew, `make install`), the bundle's resources when the CLI runs from
-    /// `SpaceKit.app/Contents/Helpers`, a `rules` folder beside the executable, and, in debug builds only, the
-    /// `rules/` folder of the source checkout the binary was built from.
+    /// Where the built-in rule library lives, searched in this order: in debug builds only, `$SPACEKIT_RULES_DIR`;
+    /// the app bundle's `Resources/rules`, `<prefix>/share/spacekit/rules` next to the executable (Homebrew,
+    /// `make install`), the bundle's resources when the CLI runs from `SpaceKit.app/Contents/Helpers`, a `rules`
+    /// folder beside the executable, and, in debug builds only, the `rules/` folder of the source checkout the
+    /// binary was built from.
     public static var builtinDirectory: String? {
-        builtinCandidates().first { path in
+        builtinCandidates(environment: ProcessInfo.processInfo.environment, debugBuild: isDebugBuild).first { path in
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
     }
 
-    static func builtinCandidates() -> [String] {
+    /// Rules found in the built-in directory get built-in trust (their commands may run trusted tools, also in
+    /// automatic runs). A release binary must not grant that to a folder an environment variable names, which
+    /// any process that can set the agent's environment controls, nor to whatever sits at the path it was
+    /// compiled from on some build machine.
+    #if DEBUG
+        static let isDebugBuild = true
+    #else
+        static let isDebugBuild = false
+    #endif
+
+    static func builtinCandidates(environment: [String: String], debugBuild: Bool) -> [String] {
         var candidates: [String] = []
-        if let env = ProcessInfo.processInfo.environment["SPACEKIT_RULES_DIR"], !env.isEmpty { candidates.append(env) }
+        if debugBuild, let env = environment["SPACEKIT_RULES_DIR"], !env.isEmpty { candidates.append(env) }
         if let resources = Bundle.main.resourceURL?.path { candidates.append(resources + "/rules") }
         let executable = URL(fileURLWithPath: CommandLine.arguments.first ?? "").resolvingSymlinksInPath().deletingLastPathComponent().path
         candidates.append(executable + "/../share/spacekit/rules")
         candidates.append(executable + "/../Resources/rules")  // SpaceKit.app/Contents/Helpers/spacekit
         candidates.append(executable + "/rules")
-        // Rules found in the built-in directory get built-in trust (their commands may run trusted tools). A release
-        // binary must not grant that to whatever sits at the path it was compiled from on some build machine.
-        #if DEBUG
-            candidates.append(sourceCheckoutRules)
-        #endif
+        if debugBuild { candidates.append(sourceCheckoutRules) }
         return candidates.map(PathUtil.standardize)
     }
 
@@ -290,7 +296,7 @@ public struct RuleLibrary: Sendable {
     /// executor's refusal say the same thing.
     static func untrustedRuleCommand(_ executable: String) -> String {
         "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
-            + "Add it to safety.allowedCommands to allow it"
+            + "It runs only in a cleanup you start by hand, and only if you add it to safety.allowedCommands"
     }
 
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
@@ -304,6 +310,9 @@ public struct RuleLibrary: Sendable {
                 let message = "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"
                 issues.append((.warning, message))
             }
+        } else if SafetySettings.isCodeLauncher(executable) {
+            issues.append(
+                (.warning, "command '\(executable)' never runs: it runs any code its arguments name, so safety.allowedCommands can't list it"))
         } else {
             issues.append((.warning, untrustedRuleCommand(executable)))
         }

@@ -162,6 +162,10 @@ struct RuleLoadingTests {
         let user = issues(["brew", "cleanup"])
         #expect(user.count == 1)
         #expect(user.first?.severity == .warning && user.first?.message.contains("safety.allowedCommands") == true)
+        #expect(user.first?.message.contains("manual") == true)
+        let launcher = issues(["sh", "-c", "rm -rf ~/.c/cache"])
+        #expect(launcher.count == 1)
+        #expect(launcher.first?.severity == .warning && launcher.first?.message.contains("never runs") == true)
         #expect(Shell.isBareName("brew"))
         #expect(!Shell.isBareName("/opt/homebrew/bin/brew"))
     }
@@ -182,9 +186,19 @@ struct RuleLoadingTests {
 
 @Suite("Built-in rule directory")
 struct BuiltinDirectoryTests {
-    @Test("Debug builds also look for rules in the source checkout they were built from")
-    func sourceCheckoutInDebug() {
-        #expect(RuleLibrary.builtinCandidates().contains(PathUtil.standardize(RuleLibrary.sourceCheckoutRules)))
+    @Test("Only debug builds look for rules in the source checkout they were built from")
+    func sourceCheckoutIsDebugOnly() {
+        let checkout = PathUtil.standardize(RuleLibrary.sourceCheckoutRules)
+        #expect(RuleLibrary.builtinCandidates(environment: [:], debugBuild: true).contains(checkout))
+        #expect(!RuleLibrary.builtinCandidates(environment: [:], debugBuild: false).contains(checkout))
+    }
+
+    @Test("Only debug builds take the built-in library from SPACEKIT_RULES_DIR")
+    func rulesDirectoryOverrideIsDebugOnly() {
+        let environment = ["SPACEKIT_RULES_DIR": "/private/tmp/planted-rules"]
+        #expect(RuleLibrary.builtinCandidates(environment: environment, debugBuild: true).first == "/private/tmp/planted-rules")
+        #expect(!RuleLibrary.builtinCandidates(environment: environment, debugBuild: false).contains("/private/tmp/planted-rules"))
+        #expect(!RuleLibrary.builtinCandidates(environment: ["SPACEKIT_RULES_DIR": ""], debugBuild: true).contains("/"))
     }
 }
 

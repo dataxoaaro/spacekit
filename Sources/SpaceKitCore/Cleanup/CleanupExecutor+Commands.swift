@@ -16,7 +16,7 @@ extension CleanupExecutor {
         if expectedArguments(for: command, rule: rule) != command.arguments {
             verdict.raise(.block, "The command no longer matches rule \(rule.id); refresh the plan")
         }
-        checkExecutable(command.arguments.first ?? "", rule: rule, into: &verdict)
+        checkExecutable(command.arguments.first ?? "", rule: rule, context: context, into: &verdict)
         if let model = command.modelName, model.isEmpty || model.hasPrefix("-") {
             verdict.raise(.block, "'\(model)' isn't a model name the tool can be given safely")
         }
@@ -55,17 +55,28 @@ extension CleanupExecutor {
         return rule.action.command
     }
 
-    /// Built-in rules may use `RuleLibrary.trustedCommands`; every other rule only `safety.allowedCommands`.
-    private func checkExecutable(_ executable: String, rule: Rule, into verdict: inout SafetyVerdict) {
+    /// Built-in rules may use `RuleLibrary.trustedCommands`; every other rule only `safety.allowedCommands`, and
+    /// only in manual runs. A code launcher never counts as allowed, whoever lists it.
+    private func checkExecutable(_ executable: String, rule: Rule, context: CleanupContext, into verdict: inout SafetyVerdict) {
         guard Shell.isBareName(executable) else {
             verdict.raise(.block, "Commands must name a tool by its bare name, not a path: '\(executable)'")
             return
         }
-        if extraAllowedCommands.contains(executable) { return }
-        if rule.isBuiltin {
-            if !RuleLibrary.trustedCommands.contains(executable) {
-                verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
-            }
+        // The agent runs as the person with Full Disk Access, and any process of theirs can write a rule file. So
+        // a command from outside the built-in library runs only when the person reviews and starts it by hand.
+        if !rule.isBuiltin && context.isAutomatic {
+            verdict.raise(
+                .block,
+                "'\(executable)' comes from a rule outside SpaceKit's built-in library; automatic runs never run those, run it by hand")
+            return
+        }
+        let isLauncher = SafetySettings.isCodeLauncher(executable)
+        if extraAllowedCommands.contains(executable) && !isLauncher { return }
+        if rule.isBuiltin && RuleLibrary.trustedCommands.contains(executable) { return }
+        if isLauncher {
+            verdict.raise(.block, "'\(executable)' runs whatever code its arguments name, so it can't be allowed")
+        } else if rule.isBuiltin {
+            verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
         } else {
             verdict.raise(.block, RuleLibrary.untrustedRuleCommand(executable))
         }

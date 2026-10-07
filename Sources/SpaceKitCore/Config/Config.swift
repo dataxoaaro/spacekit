@@ -81,8 +81,24 @@ public struct SafetySettings: Codable, Sendable, Equatable {
     public var maxBytesPerRun: ByteCount = .gb(100)
     /// Extra paths that may never be removed (added to the built-in list, which can't be reduced).
     public var protectedPaths: [String] = []
-    /// Extra executables rule commands may run.
+    /// Extra executables rule commands may run. Code launchers are refused (`isCodeLauncher`).
     public var allowedCommands: [String] = []
+
+    /// Executables that run whatever code or program their arguments name. Allowing one would let any rule file,
+    /// and anything that can write one, run arbitrary code with SpaceKit's Full Disk Access.
+    static let codeLaunchers: Set<String> = [
+        "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "env", "python", "perl", "ruby", "node",
+        "osascript", "xargs", "find", "swift", "open",
+    ]
+
+    /// True for shells, interpreters and launchers, including versioned names (`python3.12`, `perl5.30`). Names
+    /// are compared case-insensitively because APFS finds `/bin/sh` for `SH` too.
+    public static func isCodeLauncher(_ executable: String) -> Bool {
+        let name = executable.trimmingCharacters(in: .whitespaces).lowercased()
+        if name.hasPrefix("python") { return true }
+        let unversioned = String(name.reversed().drop { $0.isNumber || $0 == "." }.reversed())
+        return codeLaunchers.contains(name) || codeLaunchers.contains(unversioned)
+    }
 
     public init() {}
 

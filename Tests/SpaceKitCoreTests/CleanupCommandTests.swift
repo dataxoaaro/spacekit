@@ -59,7 +59,7 @@ struct CleanupCommandTests {
     @Test("Built-in trust covers built-in rules only; other rules need safety.allowedCommands")
     func builtinTrust() throws {
         let tree = try TempTree()
-        let arguments = ["swift", "--version"]
+        let arguments = ["xcrun", "--version"]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
         let user = rule(tree, origin: .user, command: arguments)
         let builtin = rule(tree, origin: .builtin, command: arguments)
@@ -70,8 +70,37 @@ struct CleanupCommandTests {
         #expect(isSkipped(outcome(refused), mentioning: warning))
         let trusted = sandboxExecutor(tree, rules: [builtin]).execute(plan, context: .manual(confirmed: true), dryRun: true)
         #expect(wouldRun(outcome(trusted)))
-        let allowed = sandboxExecutor(tree, rules: [user], allowed: ["swift"]).execute(plan, context: .manual(confirmed: true), dryRun: true)
+        let allowed = sandboxExecutor(tree, rules: [user], allowed: ["xcrun"]).execute(plan, context: .manual(confirmed: true), dryRun: true)
         #expect(wouldRun(outcome(allowed)))
+    }
+
+    @Test("Automatic runs never run commands of rules outside the built-in library, even allowed ones")
+    func userCommandsManualOnly() throws {
+        let tree = try TempTree()
+        let arguments = ["xcrun", "--version"]
+        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
+        let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
+        let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["xcrun"])
+        #expect(isSkipped(outcome(user.execute(plan, context: automatic, dryRun: true)), mentioning: "automatic"))
+        #expect(wouldRun(outcome(user.execute(plan, context: .manual(confirmed: true), dryRun: true))))
+        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)])
+        #expect(wouldRun(outcome(builtin.execute(plan, context: automatic, dryRun: true))))
+    }
+
+    @Test("Code launchers stay refused even when the executor is told they're allowed")
+    func codeLaunchersRefused() throws {
+        let tree = try TempTree()
+        for arguments in [["sh", "-c", "true"], ["python3.12", "-c", "pass"], ["env", "true"]] {
+            let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
+            let executor = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: [arguments[0]])
+            let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: true)
+            #expect(isSkipped(outcome(report), mentioning: "can't be allowed"), "\(arguments)")
+        }
+        // swift is both a code launcher and on the built-in trusted list: built-in rules keep using it.
+        let swift = ["swift", "--version"]
+        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: swift, estimatedBytes: 1)])
+        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
+        #expect(wouldRun(outcome(builtin.execute(plan, context: .automatic(AutomationContext(jobID: "j")), dryRun: true))))
     }
 
     @Test("A command whose rule is gone, or that no longer matches its rule, is refused")

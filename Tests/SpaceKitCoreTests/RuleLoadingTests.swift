@@ -180,6 +180,16 @@ struct RuleLoadingTests {
     }
 }
 
+@Suite("Built-in rule directory")
+struct BuiltinDirectoryTests {
+    @Test("Only debug builds look for rules in the source checkout they were built from")
+    func sourceCheckoutIsDebugOnly() {
+        let checkout = PathUtil.standardize(RuleLibrary.sourceCheckoutRules)
+        #expect(RuleLibrary.builtinCandidates(includingSourceCheckout: true).contains(checkout))
+        #expect(!RuleLibrary.builtinCandidates(includingSourceCheckout: false).contains(checkout))
+    }
+}
+
 @Suite("Rule scaffold and rule folders")
 struct RuleScaffoldTests {
     @Test("The scaffold is a valid custom rule that parses back from its YAML")

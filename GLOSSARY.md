@@ -42,6 +42,14 @@
 
 **Scan start**: the moment a scan began (`ScanTree.scanStarted`, `Analysis.scanStarted`); each cleanup item carries the scan start of the scan it came from, and loose files or Trash entries changed after it are never removed. _Avoid_: plan creation time, scan time.
 
+**Workspace**: the Explore tree a person looks at in the app or the TUI, with its analysis (`Workspace`); the only place that changes the tree after the scan, waiting for every reader first. _Avoid_: session, model, tree store.
+
+**Reader**: background work that reads the workspace's tree inside `Workspace.read`, such as an analysis or the map layout; changes wait until none is left. _Avoid_: lock holder.
+
+**Change**: one in-place update of the workspace's tree and findings, a cleanup's removals or a re-synced folder, announced once to the front end (`Workspace.Change`). _Avoid_: refresh (that's the targeted re-evaluation of a few rules), update.
+
+**Survivor**: the folder a front end shows in place of one a change took away: the nearest folder above where it was that's still in the tree (`Change.survivor(of:)`). _Avoid_: fallback, parent.
+
 ## Review and execution
 
 **Review**: a plan as a person sees it before anything is removed (`CleanupReview`): the guard's verdict on each row, the rows they untick, totals and where the items go. _Avoid_: preview (only the CLI's rendering of it), confirmation dialog.

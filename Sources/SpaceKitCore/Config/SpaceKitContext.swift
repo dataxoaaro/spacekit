@@ -59,6 +59,25 @@ public struct SpaceKitContext: Sendable {
         return SpaceKitContext(paths: paths, config: config, library: library, configError: error)
     }
 
+    /// What a front end that labels folders and findings with rules redoes after replacing its context.
+    public struct Relabelling: Sendable, Equatable {
+        /// The rule settings changed, so the library was reloaded: findings take its rules (`Workspace.reindex`).
+        public let reindex: Bool
+        /// The rules or the developer roots changed: the labels Explore shows (`ruleIndex`) are built again.
+        public let rebuildIndex: Bool
+
+        public init(reindex: Bool, rebuildIndex: Bool) {
+            self.reindex = reindex
+            self.rebuildIndex = rebuildIndex
+        }
+    }
+
+    /// What changed for rule labels since `previous`, the context this one replaces.
+    public func relabelling(since previous: SpaceKitContext) -> Relabelling {
+        let rules = config.rules != previous.config.rules
+        return Relabelling(reindex: rules, rebuildIndex: rules || config.scan.devRoots != previous.config.scan.devRoots)
+    }
+
     /// The config file's config, or the defaults and why it couldn't be read.
     private static func read(_ paths: SpaceKitPaths) -> (SpaceKitConfig, String?) {
         do {

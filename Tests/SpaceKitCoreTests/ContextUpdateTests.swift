@@ -136,6 +136,19 @@ struct ContextUpdateTests {
         #expect(broken.executor.configError == broken.configError)
     }
 
+    @Test("A front end relabels findings only for rule settings, and rebuilds its labels for those or developer roots")
+    func relabelling() throws {
+        let fixture = try ConfigFixture()
+        let context = SpaceKitContext.load(paths: fixture.paths)
+
+        let jobs = try context.applying { $0.upsertJob(Job(id: "a", name: "A", rules: ["x"]), replacing: nil) }
+        #expect(jobs.relabelling(since: context) == .init(reindex: false, rebuildIndex: false))
+        let roots = try jobs.applying { $0.scan.devRoots = ["~/Work"] }
+        #expect(roots.relabelling(since: jobs) == .init(reindex: false, rebuildIndex: true))
+        let rules = try roots.applying { $0.rules.disabled = ["x"] }
+        #expect(rules.relabelling(since: roots) == .init(reindex: true, rebuildIndex: true))
+    }
+
     @Test("Saving to an unchanged file keeps the context's config")
     func unchangedKeepsConfig() throws {
         let fixture = try ConfigFixture()

@@ -116,15 +116,13 @@ extension TUIApp {
     /// Labels folders with the rules of the context that replaced `previous`, if they differ: a change saved here
     /// also adopts rule settings edited in the file since (the context reloads its library for those).
     private func relabel(after previous: SpaceKitContext) {
-        let config = context.config
-        if config.rules != previous.config.rules {
+        let relabelling = context.relabelling(since: previous)
+        if relabelling.reindex {
             let reindexed = workspace.reindex(rules: context.library.rules)
             // `r` cleared the findings for a new analysis, which brings its own.
             if state.analysisProgress == nil { state.result = reindexed.result }
         }
-        if config.rules != previous.config.rules || config.scan.devRoots != previous.config.scan.devRoots {
-            state.libraryIndex = context.ruleIndex
-        }
+        if relabelling.rebuildIndex { state.libraryIndex = context.ruleIndex }
     }
 
     // MARK: Running a job

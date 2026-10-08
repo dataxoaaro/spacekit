@@ -201,13 +201,12 @@ final class AppModel {
     private func adopt(_ new: SpaceKitContext) {
         let old = context
         context = new
-        if new.config.rules != old.config.rules {
+        let relabelling = new.relabelling(since: old)
+        if relabelling.reindex {
             rulesIncludingDisabledCache = nil
             analysisResult = workspace.reindex(rules: new.library.rules).result
         }
-        if new.config.rules != old.config.rules || new.config.scan.devRoots != old.config.scan.devRoots {
-            libraryIndex = new.ruleIndex
-        }
+        if relabelling.rebuildIndex { libraryIndex = new.ruleIndex }
         if new.config.jobs != old.config.jobs { refreshJournal() }
     }
 

@@ -52,6 +52,9 @@ public struct CleanupReport: Sendable {
     /// Bytes deleted from items that failed part way, keyed by the item's `path`. Their outcome is `.failed`; these
     /// bytes are gone all the same, so they count in `freedBytes` and were journaled and charged to the budget.
     public var partiallyFreed: [String: UInt64] = [:]
+    /// Folders left inside removed items because another volume is mounted on them, keyed by the item's `path`. The
+    /// item's outcome is `.removed` with the bytes that went; its folder stays, holding the volume.
+    public var leftOnOtherVolumes: [String: [String]] = [:]
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {

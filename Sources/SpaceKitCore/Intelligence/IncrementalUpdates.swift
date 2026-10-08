@@ -25,13 +25,17 @@ public struct Removal: Sendable, Hashable {
     }
 
     /// Removals in a report: successful ones (including zero-byte ones, so the tree still drops them) and
-    /// items that were deleted only in part (see `CleanupReport.partiallyFreed`).
+    /// items that were deleted only in part (see `CleanupReport.partiallyFreed`), or removed around a volume mounted
+    /// inside them (see `CleanupReport.leftOnOtherVolumes`).
     public static func from(_ report: CleanupReport) -> [Removal] {
         report.items.compactMap { entry -> Removal? in
             if let freed = report.partiallyFreed[entry.item.path], entry.outcome.isFailed {
                 return Removal(path: entry.item.path, kind: entry.item.kind, bytes: freed, partial: true)
             }
             guard entry.outcome.isRemoved else { return nil }
+            if report.leftOnOtherVolumes[entry.item.path] != nil {
+                return Removal(path: entry.item.path, kind: entry.item.kind, bytes: entry.outcome.freedBytes, partial: true)
+            }
             let trashedFiles: [String] = entry.item.kind == .looseFiles ? (report.trashedLooseFiles[entry.item.path] ?? []) : []
             return Removal(
                 path: entry.item.path, kind: entry.item.kind, bytes: entry.outcome.freedBytes, trashedTo: entry.outcome.trashedTo,

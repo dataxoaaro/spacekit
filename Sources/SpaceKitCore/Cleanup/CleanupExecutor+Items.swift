@@ -97,6 +97,8 @@ extension CleanupExecutor {
 
     /// Folders inside `item` left because another volume is mounted on them, as warnings of the run.
     private func reportLeft(_ paths: [String], of item: CleanupItem, run: inout Run) {
+        guard !paths.isEmpty else { return }
+        run.report.leftOnOtherVolumes[item.path] = paths
         run.report.warnings += paths.map { left in
             "Left \(PathUtil.abbreviate(left, home: safety.home)): another volume is mounted there. "
                 + "The rest of \(PathUtil.abbreviate(item.path, home: safety.home)) was removed."

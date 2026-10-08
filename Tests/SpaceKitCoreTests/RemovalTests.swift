@@ -89,6 +89,7 @@ struct RemovalTests {
             guard fstat(fd, &st) == 0 else { return nil }
             return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
         }
+        let scanned = try scan(tree.path("home"))
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 2_000)], useTrash: false)
         let report = manualRun(plan, with: executor)
 
@@ -96,6 +97,14 @@ struct RemovalTests {
         #expect(!onDisk(tree.path("home/Projects/old/keep")))
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.warnings.contains { $0.contains("old/mnt") && $0.contains("another volume") })
+
+        // The item's folder is still there, holding the volume, so the app and the TUI rescan it instead of dropping it.
+        let removals = Removal.from(report)
+        #expect(removals.map(\.partial) == [true])
+        #expect(Removal.apply(removals, to: scanned))
+        #expect(scanned.inconsistencies().isEmpty)
+        #expect(scanned.node(at: tree.path("home/Projects/old/mnt/disk")) != nil)
+        #expect(scanned.root.size == (try scan(tree.path("home"))).root.size)
     }
 
     @Test("A volume and an entry that can't be removed in one item: both stay and are reported, the rest is journaled")

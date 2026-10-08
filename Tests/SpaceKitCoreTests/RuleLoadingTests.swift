@@ -199,7 +199,7 @@ struct RuleLoadingTests {
         }
     }
 
-    @Test("An override's paths may be the built-in paths in another spelling, inside them, or narrower globs; nothing wider")
+    @Test("An override's paths may be the built-in paths in another spelling or narrower globs at the same depth; nothing wider or deeper")
     func overridePaths() throws {
         let builtin = BuiltinRules(files: [
             RuleFileText(
@@ -224,8 +224,7 @@ struct RuleLoadingTests {
         let home = PathUtil.home
         for narrower in [
             ["~/.base/models/"], ["\(home)/.base/models"], ["~/.BASE/Models"], ["~//.base/./models"],
-            ["~/.base/models/llama"], ["~/Library/Caches/Google/AndroidStudio2023*"], ["~/Library/Caches/Google/androidstudio2023.1"],
-            ["~/Library/Caches/Google/AndroidStudio2023.1/caches"], ["~/Library/Caches/Google/AndroidStudio*/log"],
+            ["~/Library/Caches/Google/AndroidStudio2023*"], ["~/Library/Caches/Google/androidstudio2023.1"],
         ] {
             let found = try problems(narrower)
             #expect(found.isEmpty, "\(narrower): \(found)")
@@ -234,6 +233,8 @@ struct RuleLoadingTests {
             "~/.base", "~/.base/models-old", "~/.base/models/../../Documents", "~/Library/Caches/Google/*",
             "~/Library/Caches/Google/IntelliJ*", "~/Library/Caches/Google/**", "~/Library/Caches/Google/Android*",
             "~/Library/Caches/Google/AndroidStudio**/x", "/Users/someone-else/.base/models",
+            // Deeper paths make the engine judge different items than the built-in rule does.
+            "~/.base/models/llama", "~/Library/Caches/Google/AndroidStudio2023.1/caches", "~/Library/Caches/Google/AndroidStudio*/log",
         ] {
             #expect(try problems([wider]).contains { $0.contains("adds the path") }, "\(wider)")
         }
@@ -271,6 +272,47 @@ struct RuleLoadingTests {
         let linked = String(resolved.dropFirst("/private".count))
         #expect(try pathErrors(builtin: [linked + "/caches/*/data"], override: [resolved + "/caches/app/data"]).isEmpty)
         #expect(try pathErrors(builtin: builtin, override: [linked + "/caches/app/data"]).isEmpty)
+    }
+
+    /// `builtin` as a user's copy with other paths, everything else unchanged.
+    func copy(of builtin: Rule, paths: [String]) -> Rule {
+        var rule = builtin
+        rule.isBuiltin = false
+        rule.source = "user/copy.yaml"
+        rule.paths = paths
+        return rule
+    }
+
+    @Test("An override can't name a folder a built-in rule excludes: JetBrains Toolbox stays out of the settings rule")
+    func overrideInsideExclusion() throws {
+        let library = RuleLibrary.load(builtin: .embedded)
+        let settings = try #require(library.rule(id: "jetbrains.old-configs"))
+        #expect(settings.exclusions.contains("~/Library/Application Support/JetBrains/Toolbox"))
+        #expect(RuleLibrary.overrideProblems(builtin: settings, override: copy(of: settings, paths: settings.paths)).isEmpty)
+
+        let toolbox = copy(of: settings, paths: ["~/Library/Application Support/JetBrains/Toolbox"])
+        let problems = RuleLibrary.overrideProblems(builtin: settings, override: toolbox)
+        #expect(problems.contains { $0.contains("exclusion") && $0.contains("Toolbox") }, "\(problems)")
+
+        // Where the built-in path is a glob, a path the exclusion names lies at the same depth and is refused all the same.
+        let atDepth = try pathErrors(
+            builtin: ["~/.base/apps/*"], override: ["~/.base/apps/Toolbox"], rest: "exclusions: [~/.base/apps/Toolbox]\n")
+        #expect(atDepth.contains { $0.contains("exclusion '~/.base/apps/Toolbox'") }, "\(atDepth)")
+        let inside = try pathErrors(
+            builtin: ["~/.base/apps/*"], override: ["~/.base/apps/toolbox"], rest: "exclusions: [~/.base/apps/Tool*]\n")
+        #expect(inside.contains { $0.contains("exclusion") }, "\(inside)")
+        #expect(try pathErrors(builtin: ["~/.base/apps/*"], override: ["~/.base/apps/Code"], rest: "exclusions: [~/.base/apps/Toolbox]\n").isEmpty)
+    }
+
+    @Test("An override can't go below the built-in path: DerivedData/* would weigh keepRecent per build folder, not per project")
+    func overrideDeeperThanBuiltin() throws {
+        let library = RuleLibrary.load(builtin: .embedded)
+        let derived = try #require(library.rule(id: "xcode.derived-data"))
+        #expect(derived.granularity == .children)
+        let perBuildFolder = copy(of: derived, paths: ["~/Library/Developer/Xcode/DerivedData/*"])
+        let problems = RuleLibrary.overrideProblems(builtin: derived, override: perBuildFolder)
+        #expect(problems.contains { $0.contains("adds the path") }, "\(problems)")
+        #expect(RuleLibrary.overrideProblems(builtin: derived, override: copy(of: derived, paths: ["~/library/developer/xcode/deriveddata/"])).isEmpty)
     }
 
     @Test("rules validate <file> judges a file the way loading it would, overrides of built-in rules included")

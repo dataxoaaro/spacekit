@@ -14,7 +14,7 @@
 
 **User rule**: a rule loaded from a rule folder on disk (the user rules folder or `rules.directories`); its commands run only when listed in `safety.allowedCommands`, only in manual runs, and each time only once the person accepts the command's warning. _Avoid_: custom rule, third-party rule.
 
-**Override**: a user rule with a built-in rule's id, loaded in its place; it may only narrow the built-in rule (paths within the built-in paths, added exclusions, higher thresholds, ages or safety level, a less frequent schedule). _Avoid_: replacement rule, customisation.
+**Override**: a user rule with a built-in rule's id, loaded in its place; it may only narrow the built-in rule (paths at the built-in paths' depth that name only locations they name, outside their exclusions, added exclusions, higher thresholds, ages or safety level, a less frequent schedule). _Avoid_: replacement rule, customisation.
 
 **Command trust**: the module (`CommandTrust`) that decides whether a rule's tool command runs, from the rule's origin, the kind of run and the executable policy. _Avoid_: command allowlist (only part of it).
 

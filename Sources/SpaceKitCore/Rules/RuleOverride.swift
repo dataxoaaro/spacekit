@@ -37,10 +37,7 @@ extension RuleLibrary {
     }
 
     private static func locationProblems(_ builtin: Rule, _ override: Rule) -> [String] {
-        var problems: [String] = []
-        for path in override.paths where !builtin.paths.contains(where: { covers($0, path) }) {
-            problems.append("adds the path '\(path)'")
-        }
+        var problems = pathProblems(builtin, override)
         switch (builtin.match, override.match) {
         case (nil, .some):
             problems.append("adds a name pattern (match)")
@@ -101,11 +98,31 @@ extension RuleLibrary {
         return "lowers its policy \(name) below \(original)"
     }
 
-    /// True when every location `path` describes lies in one `builtin` describes. Both are compared where the engine
-    /// looks for them (`enginePath`), and `path` may be the same location, one inside it, or a glob whose names are a
-    /// subset: a built-in segment `X*` covers `X<more>*`.
+    /// The override's paths that name a location none of the built-in paths do, or one a built-in exclusion names.
+    private static func pathProblems(_ builtin: Rule, _ override: Rule) -> [String] {
+        // Only exclusions written as paths name folders; `active_projects` and relative globs don't.
+        let exclusions = builtin.exclusions.filter { $0.hasPrefix("/") || $0.hasPrefix("~") }
+        return override.paths.flatMap { path in
+            let added = builtin.paths.contains { covers($0, path) } ? [] : ["adds the path '\(path)'"]
+            return added + exclusions.filter { isInside(path, exclusion: $0) }.map { "names '\(path)' in its exclusion '\($0)'" }
+        }
+    }
+
+    /// True when `path` names only locations `builtin` names, at the same depth. Both are compared where the engine
+    /// looks for them (`enginePath`), and each component of `path` must equal the built-in one or be a glob whose names
+    /// are a subset of its names: a built-in segment `X*` covers `X<more>*`. A deeper path would change the items the
+    /// built-in rule judges: `DerivedData/*` would weigh keepRecent per build folder instead of per project.
     static func covers(_ builtin: String, _ path: String) -> Bool {
         let outer = PathUtil.components(enginePath(builtin))
+        let inner = PathUtil.components(enginePath(path))
+        return outer.count == inner.count && zip(outer, inner).allSatisfy { covers(segment: $1, pattern: $0) }
+    }
+
+    /// True when `path` is the location `exclusion` names or lies inside it. The engine leaves out only items an
+    /// exclusion names, so an override rooted at or below an excluded folder would hand out everything in it.
+    /// A `**` in the exclusion counts as holding everything below it.
+    static func isInside(_ path: String, exclusion: String) -> Bool {
+        let outer = PathUtil.components(enginePath(exclusion))
         let inner = PathUtil.components(enginePath(path))
         guard inner.count >= outer.count else { return false }
         for (pattern, segment) in zip(outer, inner) {

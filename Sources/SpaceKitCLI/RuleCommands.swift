@@ -137,8 +137,8 @@ struct RulesCommand: ParsableCommand {
             guard !FileManager.default.fileExists(atPath: file) else {
                 throw ValidationError("\(Output.path(file)) already exists")
             }
-            try FileManager.default.createDirectory(atPath: context.paths.userRulesDirectory, withIntermediateDirectories: true)
-            try yaml.write(toFile: file, atomically: true, encoding: .utf8)
+            try context.paths.ensureUserRulesDirectory()
+            try SpaceKitPaths.writeRuleFile(yaml, to: file)
             print("Wrote \(Output.path(file)). Try it: " + "spacekit dev --rule \(Output.safe(id))".bold)
         }
     }

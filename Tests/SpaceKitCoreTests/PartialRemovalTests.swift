@@ -68,4 +68,29 @@ struct PartialRemovalTests {
         #expect(report.skipped.first?.reason.hasPrefix("Over this run's budget") == true)
         #expect(onDisk(tree.path("home/cache/second/a")))
     }
+
+    @Test("After a partial deletion the tree matches a rescan and the finding shrinks by what went")
+    func treeMatchesDisk() throws {
+        let tree = try TempTree()
+        let item = try PartialRemovalTests.item(tree, "item", locked: true)
+        defer { PartialRemovalTests.unlock(tree, "item") }
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let scanned = try scan(tree.path("home"))
+        var analysis = Analysis(findings: RuleEngine(rules: [rule]).evaluate(scanned), tree: scanned)
+        let before = try #require(analysis.finding(ruleID: "cache")?.items.first { $0.path == item.path }?.size)
+
+        let report = sandboxExecutor(tree, rules: [rule])
+            .execute(CleanupPlan(items: [item], useTrash: false), context: .manual(confirmed: true), dryRun: false)
+        let freed = try #require(report.partiallyFreed[item.path])
+        let removals = Removal.from(report)
+        #expect(removals == [Removal(path: item.path, kind: .directory, bytes: freed, partial: true)])
+
+        #expect(Removal.apply(removals, to: scanned))
+        let fresh = try scan(tree.path("home"))
+        #expect(scanned.inconsistencies().isEmpty)
+        #expect(scanned.root.size == fresh.root.size)
+        #expect(scanned.node(at: item.path)?.fileCount == 1)
+        analysis.apply(removals)
+        #expect(analysis.finding(ruleID: "cache")?.items.first { $0.path == item.path }?.size == before - freed)
+    }
 }

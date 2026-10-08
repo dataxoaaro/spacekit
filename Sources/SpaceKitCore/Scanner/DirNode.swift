@@ -23,7 +23,7 @@ public struct FileLeaf: Sendable, Hashable {
 ///   nodes in `ScanProgress.liveChildren`.
 /// - When the workers finish, the scanning thread resolves hard links and aggregates totals (sorting
 ///   `children` in place) before `Scanner.scan` returns.
-/// - After that, the tree changes only through `ScanTree.applyRemoval`, `applyMove` and `splice`, which
+/// - After that, the tree changes only through `ScanTree.applyRemoval`, `applyMove`, `splice` and `rescan`, which
 ///   the tree's owner calls from one thread or actor at a time. Reads on other threads must be
 ///   synchronized with those calls by the owner (the app keeps its trees on the main actor).
 public final class DirNode: @unchecked Sendable, Identifiable, Hashable {

@@ -55,9 +55,8 @@ struct RulesView: View {
                 Button("Reload", systemImage: "arrow.clockwise") { model.reloadContext() }
                     .help("Re-read rule files and the config from disk")
                 Button("Open Rules Folder", systemImage: "folder") {
-                    let directory = model.paths.userRulesDirectory
-                    try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-                    model.reveal(directory)
+                    try? model.paths.ensureUserRulesDirectory()
+                    model.reveal(model.paths.userRulesDirectory)
                 }
                 Button("New Rule…", systemImage: "plus") { newRule() }
             }
@@ -99,7 +98,7 @@ struct RulesView: View {
 
     private func newRule() {
         let directory = model.paths.userRulesDirectory
-        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try? model.paths.ensureUserRulesDirectory()
         var path = directory + "/my-rule.yaml"
         var index = 2
         while FileManager.default.fileExists(atPath: path) {
@@ -108,7 +107,7 @@ struct RulesView: View {
         }
         let rule = RuleScaffold.rule(name: "My tool's cache", paths: ["~/Library/Caches/com.example.tool"])
         guard let template = try? RuleScaffold.yaml(rule, note: "save, then click Reload in SpaceKit") else { return }
-        try? template.write(toFile: path, atomically: true, encoding: .utf8)
+        try? SpaceKitPaths.writeRuleFile(template, to: path)
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 }

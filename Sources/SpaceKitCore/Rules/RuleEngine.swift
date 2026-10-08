@@ -110,7 +110,7 @@ public struct RuleEngine: Sendable {
 
     /// Rule and root paths are resolved through symlinks once here (`PathUtil.canonicalPattern`), because
     /// the scan tree holds resolved paths: a rule for `/tmp/x` must match a scan of `/tmp`, stored as `/private/tmp`.
-    public init(rules: [Rule], devRoots: [String] = ["~"]) {
+    public init(rules: [Rule], devRoots: [String] = ScanSettings.defaultDevRoots) {
         self.rules = rules.map(RuleEngine.canonical)
         self.devRoots = devRoots.map { PathUtil.canonicalPattern($0) }
     }

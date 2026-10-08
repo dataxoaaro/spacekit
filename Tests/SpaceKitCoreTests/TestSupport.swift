@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 @testable import SpaceKitCore
 
@@ -74,5 +75,18 @@ func sandboxTrash(home: String) -> @Sendable (String) throws -> String? {
         }
         try FileManager.default.moveItem(atPath: path, toPath: destination)
         return destination
+    }
+}
+
+private let umaskLock = Mutex(())
+
+/// Runs `body` with the process umask set to `mask`, then restores it. Tests run in parallel and the umask is
+/// process-wide, so callers take turns. Use 077 rather than 002: files other tests write meanwhile come out
+/// 0600 and folders 0700, which SpaceKit still trusts, while modes left to the umask still show up.
+func withUmask<T>(_ mask: mode_t, _ body: () throws -> T) throws -> T {
+    try umaskLock.withLock { _ in
+        let previous = umask(mask)
+        defer { umask(previous) }
+        return try body()
     }
 }

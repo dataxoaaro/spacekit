@@ -37,7 +37,7 @@ public struct StorageAnalyzer: Sendable {
     public var scanOptions: ScanOptions
     public var devRoots: [String]
 
-    public init(library: RuleLibrary, scanOptions: ScanOptions = ScanOptions(), devRoots: [String] = ["~"]) {
+    public init(library: RuleLibrary, scanOptions: ScanOptions = ScanOptions(), devRoots: [String] = ScanSettings.defaultDevRoots) {
         self.library = library
         var options = scanOptions
         // Pattern rules read these marker bits, so the scan must record exactly this library's markers.

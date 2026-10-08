@@ -152,6 +152,22 @@ extension ScanTree {
         }
     }
 
+    /// Updates the tree after part of the folder at `path` was removed: rescans it with the tree's own options and
+    /// splices the result in, or drops it if it's gone. Returns `true` if the tree changed, which needs the folder
+    /// to be in the tree.
+    @discardableResult
+    public func rescan(_ path: String) -> Bool {
+        guard node(at: path) != nil else { return false }
+        var st = stat()
+        guard lstat(path, &st) == 0 else {
+            applyRemoval(of: path)
+            return true
+        }
+        guard (st.st_mode & S_IFMT) == S_IFDIR, let fresh = try? Scanner(options: options).scan(path) else { return false }
+        splice(fresh, at: path)
+        return true
+    }
+
     // MARK: Verification
 
     /// Folders whose stored totals don't match their contents. Always empty unless there's a bug.

@@ -95,7 +95,7 @@ extension TUIApp {
         state.activity = nil
         terminal.holdTerminationSignals(false)
         let removals = Removal.from(report)
-        for removal in removals { state.marked[removal.path] = nil }
+        for removal in removals where !removal.partial { state.marked[removal.path] = nil }
         if state.analysisProgress != nil {
             state.pendingRemovals += removals
         } else {

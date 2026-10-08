@@ -38,7 +38,7 @@ public struct ScanSettings: Codable, Sendable, Equatable {
     /// Worker threads; omit for the measured default.
     public var threads: Int?
     /// Where pattern rules look for projects (`node_modules`, `target`, …).
-    public var devRoots: [String] = ["~"]
+    public var devRoots: [String] = ScanSettings.defaultDevRoots
 
     public init() {}
 
@@ -51,7 +51,7 @@ public struct ScanSettings: Codable, Sendable, Equatable {
         boundary = try c.decodeIfPresent(ScanOptions.Boundary.self, forKey: .boundary) ?? .container
         exclude = try c.decodeIfPresent([String].self, forKey: .exclude) ?? []
         threads = try c.decodeIfPresent(Int.self, forKey: .threads)
-        devRoots = try c.decodeIfPresent([String].self, forKey: .devRoots) ?? ["~"]
+        devRoots = try c.decodeIfPresent([String].self, forKey: .devRoots) ?? ScanSettings.defaultDevRoots
     }
 
     public func options(markers: MarkerRegistry) -> ScanOptions {

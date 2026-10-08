@@ -59,18 +59,13 @@ struct FileTrustTests {
         let file = tree.path("config/spacekit/config.yaml")
         let journal = tree.path("state/SpaceKit/journal.jsonl")
         let store = ConfigStore(file: file)
-        // Under umask 002 the defaults would make the config group-writable and refused on the next load. The umask
-        // is process-wide, and 002 would get configs that tests running alongside write refused too, so this uses
-        // 077 instead: modes that come from the umask show up just the same (0600 and 0700).
-        let previous = umask(0o077)
-        let written = Result {
+        // Under umask 002 the defaults would make the config group-writable and refused on the next load.
+        try withUmask(0o077) {
             try store.initialize()
             try store.update { $0.ui.mapDepth = 3 }
             try Journal(file: journal).append([JournalEntry(path: "/x", bytes: 1, method: .delete, automatic: false)])
             try SpaceKitPaths.writeRuleFile("rules: []\n", to: tree.path("config/spacekit/rules/mine.yaml"))
         }
-        umask(previous)
-        try written.get()
 
         let folders = ["config", "config/spacekit", "config/spacekit/rules", "state", "state/SpaceKit"].map(tree.path)
         for folder in folders {

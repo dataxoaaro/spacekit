@@ -81,11 +81,11 @@ public struct LaunchAgent: Sendable {
     public func install(executable: String, interval: TimeInterval) throws -> Int {
         let seconds = LaunchAgent.clampedInterval(interval)
         try paths.ensureDirectories()
-        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist(executable: executable, interval: seconds), format: .xml, options: 0)
         unload()
-        try data.write(to: URL(fileURLWithPath: plistPath), options: .atomic)
+        // 0644 in a 0755 folder whatever the umask: launchd won't load a plist other users can write.
+        try LockedFile.write(data, to: plistPath)
         var result = launchctl(["bootstrap", domain, plistPath])
         // launchd can report EIO while it is still tearing down the previous instance.
         for _ in 0..<3 where result.status != 0 {

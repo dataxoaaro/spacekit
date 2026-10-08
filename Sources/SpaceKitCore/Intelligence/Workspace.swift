@@ -22,21 +22,29 @@ public final class Workspace: Sendable {
     public typealias Deliver = @Sendable (_ step: @escaping Step) -> Void
     /// Evaluates every rule, reusing the tree when it covers what they need (a seam for tests).
     typealias Analyze = @Sendable (SpaceKitContext, ScanTree?, ScanProgress) throws -> Analysis
+    /// Evaluates a few rules with a scan of only their locations (a seam for tests).
+    typealias Reevaluate = @Sendable (SpaceKitContext, [Rule]) throws -> Analysis
 
     private let state = Mutex(State())
     private let deliver: Deliver
     private let analyzeTree: Analyze
+    private let reevaluateRules: Reevaluate
 
     public convenience init(deliver: @escaping Deliver) {
-        self.init(deliver: deliver) { context, tree, progress in
-            try context.analyzer.analyzeSync(reusing: tree, progress: progress)
-        }
+        self.init(deliver: deliver, analyze: Workspace.analyzeAll, reevaluate: Workspace.reevaluateOnly)
     }
 
-    init(deliver: @escaping Deliver, analyze: @escaping Analyze) {
+    init(deliver: @escaping Deliver, analyze: @escaping Analyze, reevaluate: @escaping Reevaluate = Workspace.reevaluateOnly) {
         self.deliver = deliver
         self.analyzeTree = analyze
+        self.reevaluateRules = reevaluate
     }
+
+    static let analyzeAll: Analyze = { context, tree, progress in
+        try context.analyzer.analyzeSync(reusing: tree, progress: progress)
+    }
+
+    private static let reevaluateOnly: Reevaluate = { context, rules in try context.analyzer.analyzeSync(rules: rules) }
 
     /// The tree and the analysis as they are now.
     public var snapshot: Snapshot { state.withLock { $0.snapshot } }
@@ -82,10 +90,9 @@ public final class Workspace: Sendable {
             state.analysisProgress?.cancel()
             state.analysisProgress = nil
             state.analysisRun += 1
-            state.generation += 1
             state.tree = tree
             state.result = nil
-            state.refreshing = []
+            state.refreshing = [:]
             state.pending = []
             return state.snapshot
         }
@@ -246,14 +253,20 @@ public final class Workspace: Sendable {
 
     // MARK: Targeted refreshes
 
-    /// Re-evaluates a few rules with a scan of only their locations (it never reads the tree), then merges the result.
+    /// Re-evaluates a few rules with a scan of only their locations (it never reads the tree), then merges the result
+    /// for the rules no newer re-evaluation has started for since.
     private func start(_ refresh: Refresh) {
+        let reevaluate = reevaluateRules
         Thread.detachNewThread { [self] in
-            let fresh = try? refresh.context.analyzer.analyzeSync(rules: refresh.rules)
+            // Built before taking the gate: the AI report and the rule index take a while, and the front end's thread
+            // takes the gate for every snapshot.
+            let fresh = (try? reevaluate(refresh.context, refresh.rules)).map(refresh.context.result(of:))
             state.withLock { state in
-                state.refreshing.subtract(refresh.ruleIDs)
-                guard state.generation == refresh.generation, let fresh else { return }
-                state.result?.merge(refresh.context.result(of: fresh), for: refresh.ruleIDs)
+                // A newer re-evaluation of a rule (after another of its commands) owns its spinner and has newer findings.
+                let owned = refresh.ruleIDs.filter { state.refreshing[$0] == refresh.token }
+                for id in owned { state.refreshing[id] = nil }
+                guard let fresh, !owned.isEmpty else { return }
+                state.result?.merge(fresh, for: owned)
             }
             deliver { [self] in [.refreshed(snapshot)] }
         }
@@ -264,24 +277,26 @@ public final class Workspace: Sendable {
     private struct State {
         var tree: ScanTree?
         var result: AnalysisResult?
-        /// Bumped by `show`: refreshes started for an older tree are dropped.
-        var generation = 0
         /// Bumped by every analysis (and `show`): only the latest one's result is used.
         var analysisRun = 0
         var analysisProgress: ScanProgress?
         var readers = 0
         var pending: [Write] = []
-        var refreshing: Set<String> = []
+        /// Rules being re-evaluated, each with the re-evaluation that owns it (the latest started for it). `show`
+        /// empties it, so re-evaluations started for an older tree own nothing.
+        var refreshing: [String: Int] = [:]
+        var refreshCount = 0
 
-        var snapshot: Snapshot { Snapshot(tree: tree, result: result, refreshingRules: refreshing) }
+        var snapshot: Snapshot { Snapshot(tree: tree, result: result, refreshingRules: Set(refreshing.keys)) }
 
         /// Marks the rules of `ruleIDs` that exist as being re-evaluated, if there are findings to merge them into.
         mutating func markRefreshing(_ ruleIDs: Set<String>, context: SpaceKitContext) -> Refresh? {
             let rules = ruleIDs.compactMap { context.library.rule(id: $0) }
             guard !rules.isEmpty, result != nil else { return nil }
             let ids = Set(rules.map(\.id))
-            refreshing.formUnion(ids)
-            return Refresh(rules: rules, ruleIDs: ids, generation: generation, context: context)
+            refreshCount += 1
+            for id in ids { refreshing[id] = refreshCount }
+            return Refresh(rules: rules, ruleIDs: ids, token: refreshCount, context: context)
         }
     }
 
@@ -305,7 +320,8 @@ public final class Workspace: Sendable {
     private struct Refresh: Sendable {
         var rules: [Rule]
         var ruleIDs: Set<String>
-        var generation: Int
+        /// Which re-evaluation this is (`State.refreshing`).
+        var token: Int
         var context: SpaceKitContext
     }
 }

@@ -31,6 +31,13 @@ private final class Recorder: Sendable {
         }
     }
 
+    var refreshed: [Workspace.Snapshot] {
+        all.compactMap { event in
+            if case .refreshed(let snapshot) = event { return snapshot }
+            return nil
+        }
+    }
+
     /// Waits up to five seconds for `condition` to hold.
     func wait(until condition: (Recorder) -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(5)
@@ -53,6 +60,24 @@ private final class HeldAnalysis: Sendable {
             let analysis = try context.analyzer.analyzeSync(reusing: tree, progress: progress)
             self.started.signal()
             self.release.wait()
+            return analysis
+        }
+    }
+}
+
+/// Targeted re-evaluations that read the disk as they start, then hold on until the test lets each one finish, so
+/// two of them for the same rule can end in either order.
+private final class HeldRefreshes: Sendable {
+    let started = DispatchSemaphore(value: 0)
+    let releases = [DispatchSemaphore(value: 0), DispatchSemaphore(value: 0)]
+    private let calls = Atomic<Int>(0)
+
+    var reevaluate: Workspace.Reevaluate {
+        { context, rules in
+            let analysis = try context.analyzer.analyzeSync(rules: rules)
+            let index = self.calls.wrappingAdd(1, ordering: .relaxed).oldValue
+            self.started.signal()
+            self.releases[index].wait()
             return analysis
         }
     }
@@ -324,6 +349,67 @@ struct WorkspaceTests {
             #expect(tree?.root.size == expected.root.size)
             #expect(tree?.node(at: fixture.tree.path("home/cache"))?.size == expected.node(at: fixture.tree.path("home/cache"))?.size)
         }
+    }
+
+    /// Starts two re-evaluations of the fixture's rule, each after a re-synced Trash, with `between` run in between
+    /// (once the first has read the disk).
+    private func twoRefreshes(
+        _ fixture: Fixture, _ recorder: Recorder, _ held: HeldRefreshes, between: () throws -> Void = {}
+    ) throws -> Workspace {
+        try fixture.tree.file("home/.Trash/a/blob", bytes: 40_000)
+        try fixture.tree.file("home/.Trash/b/blob", bytes: 40_000)
+        let workspace = Workspace(deliver: recorder.deliver, analyze: Workspace.analyzeAll, reevaluate: held.reevaluate)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        #expect(recorder.wait { !$0.analysed.isEmpty })
+        let trash = fixture.tree.path("home/.Trash")
+        for name in ["a", "b"] {
+            try FileManager.default.removeItem(atPath: fixture.tree.path("home/.Trash/\(name)"))
+            workspace.resync(
+                try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, context: fixture.context,
+                reevaluating: [fixture.rule.id])
+            held.started.wait()
+            if name == "a" { try between() }
+        }
+        #expect(workspace.snapshot.refreshingRules == [fixture.rule.id])
+        return workspace
+    }
+
+    @Test("An older re-evaluation of a rule that ends first leaves the spinner of the newer one running")
+    func olderRefreshEndsFirst() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let held = HeldRefreshes()
+        let workspace = try twoRefreshes(fixture, recorder, held)
+
+        held.releases[0].signal()
+        #expect(recorder.wait { $0.refreshed.count == 1 })
+        #expect(workspace.snapshot.refreshingRules == [fixture.rule.id])
+
+        held.releases[1].signal()
+        #expect(recorder.wait { $0.refreshed.count == 2 })
+        #expect(workspace.snapshot.refreshingRules.isEmpty)
+    }
+
+    @Test("An older re-evaluation of a rule that ends last doesn't put back findings the newer one no longer has")
+    func olderRefreshEndsLast() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let held = HeldRefreshes()
+        // The rule's tool removed c0 after the first re-evaluation read the disk.
+        let workspace = try twoRefreshes(fixture, recorder, held) {
+            try FileManager.default.removeItem(atPath: fixture.tree.path("home/cache/c0"))
+        }
+
+        held.releases[1].signal()
+        #expect(recorder.wait { $0.refreshed.count == 1 })
+        held.releases[0].signal()
+        #expect(recorder.wait { $0.refreshed.count == 2 })
+
+        #expect(workspace.snapshot.refreshingRules.isEmpty)
+        let findings = fixture.items(workspace.snapshot.result?.analysis.findings ?? [])
+        #expect(findings[fixture.tree.path("home/cache/c0")] == nil)
+        #expect(findings[fixture.tree.path("home/cache/c1")] != nil)
     }
 
     @Test("Re-syncing a folder emptied elsewhere splices it in")

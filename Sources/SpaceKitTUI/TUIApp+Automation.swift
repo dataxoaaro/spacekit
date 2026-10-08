@@ -99,7 +99,9 @@ extension TUIApp {
     /// drop jobs added elsewhere since. A file fixed since is adopted; one that is invalid now is left as it is.
     func saveConfig(_ message: String, _ change: (inout SpaceKitConfig) throws -> Void) {
         do {
+            let previous = context
             context = try context.applying(change)
+            relabel(after: previous)
             flash(message)
         } catch let error as ConfigError {
             flash(
@@ -109,6 +111,20 @@ extension TUIApp {
             flash("Couldn't save config: \(TerminalText.sanitize(error.localizedDescription))")
         }
         refreshAutomation()
+    }
+
+    /// Labels folders with the rules of the context that replaced `previous`, if they differ: a change saved here
+    /// also adopts rule settings edited in the file since (the context reloads its library for those).
+    private func relabel(after previous: SpaceKitContext) {
+        let config = context.config
+        if config.rules != previous.config.rules {
+            let reindexed = workspace.reindex(rules: context.library.rules)
+            // `r` cleared the findings for a new analysis, which brings its own.
+            if state.analysisProgress == nil { state.result = reindexed.result }
+        }
+        if config.rules != previous.config.rules || config.scan.devRoots != previous.config.scan.devRoots {
+            state.libraryIndex = context.ruleIndex
+        }
     }
 
     // MARK: Running a job

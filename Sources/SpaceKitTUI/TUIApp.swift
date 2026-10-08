@@ -115,9 +115,9 @@ public final class TUIApp {
         case scanned(generation: Int, Result<ScanTree, Error>)
         case analysed(generation: Int, Result<AnalysisResult, Error>)
         case refreshed(generation: Int, ruleIDs: Set<String>, Result<AnalysisResult, Error>)
-        case evaluated(Job, Result<(JobEvaluation, CleanupPlan), Error>)
-        /// The evaluation is set when the cleanup ran a job, so the result is recorded against it.
-        case cleaned(CleanupReport, JobEvaluation?)
+        case evaluated(Job, Result<ManualJobRun, Error>)
+        /// The outcome is set when the cleanup completed a job run by hand, which recorded it.
+        case cleaned(CleanupReport, ManualJobRun.Outcome?)
     }
 
     struct State {

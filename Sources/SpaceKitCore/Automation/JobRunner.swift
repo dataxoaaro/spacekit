@@ -147,8 +147,8 @@ public struct JobRunner: Sendable {
             olderThan: job.when.olderThan, usesTrash: context.trashPreference(for: job.action) ?? true)
     }
 
-    /// Runs one job according to its mode, the way the agent does. A person running a job by hand reviews its plan
-    /// instead (`CleanupReview`) and records the run with `record`.
+    /// Runs one job according to its mode, the way the agent does. A person running a job by hand goes through
+    /// `ManualJobRun` instead, which reviews its plan.
     public func run(_ job: Job, dryRun: Bool = false, now: Date = Date()) -> JobRunResult {
         var result: JobRunResult
         do {
@@ -207,9 +207,8 @@ public struct JobRunner: Sendable {
         }
     }
 
-    /// Saves when the job ran and what it found, so its schedule moves on. Front ends that run a job
-    /// themselves call this too.
-    public func record(_ result: JobRunResult) throws {
+    /// Saves when the job ran and what it found, so its schedule moves on.
+    func record(_ result: JobRunResult) throws {
         try context.jobStates.update(result.job.id) { state in
             state.lastRun = result.date
             state.lastOutcome = result.summary

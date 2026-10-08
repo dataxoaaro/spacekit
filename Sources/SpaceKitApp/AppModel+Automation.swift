@@ -12,58 +12,46 @@ extension AppModel {
     func previewJob(_ job: Job) {
         let runner = jobRunner
         Task {
-            switch await self.evaluate(job, with: runner) {
-            case .success(let evaluation):
-                let plan = runner.plan(for: evaluation)
-                guard evaluation.isTriggered, !plan.isEmpty else {
-                    self.errorMessage = "\(job.name): \(evaluation.triggerSummary)."
-                    self.record(evaluation, report: nil, with: runner)
-                    return
-                }
-                self.review(plan, title: "Run “\(job.name)” now") { report in
-                    self.record(evaluation, report: report, with: runner)
-                }
-            case .failure(let error):
-                self.errorMessage = error.localizedDescription
+            switch await self.prepareRun(of: job.id, { try ManualJobRun.prepare(job, runner: runner) }) {
+            case .success(let run): self.review(run, title: "Run “\(job.name)” now")
+            case .failure(let error): self.errorMessage = error.localizedDescription
             }
         }
     }
 
-    /// Saves a manual run so the job's schedule moves on, as `JobRunner.run` would.
-    private func record(_ evaluation: JobEvaluation, report: CleanupReport?, with runner: JobRunner) {
-        do {
-            try runner.record(.manual(evaluation, report: report))
-        } catch {
-            errorMessage = "Couldn't save the job's state: \(error.localizedDescription)"
-        }
-        refreshJournal()
-    }
-
-    /// Re-evaluates the suggestion's job first, so only items that still meet its conditions are offered (a project
-    /// used since it was prepared drops out). The run is recorded against the job, as in the CLI, and the suggestion
-    /// is removed only when the cleanup removed something and had no problems.
+    /// Evaluates the suggestion's job again first, so only items that still meet its conditions are offered (a project
+    /// used since it was prepared drops out). After the run the suggestion goes, or stays with what's left.
     func approve(_ suggestion: Suggestion) {
-        guard let job = config.jobs.first(where: { $0.id == suggestion.jobID }) else {
-            errorMessage = "The job “\(suggestion.jobName)” that prepared this cleanup no longer exists. Dismiss the suggestion."
-            return
-        }
         let runner = jobRunner
         Task {
-            switch await self.evaluate(job, with: runner) {
-            case .success(let evaluation):
-                let plan = suggestion.plan.keeping(onlyEligible: evaluation.eligible).plan
-                guard !plan.isEmpty else {
-                    self.errorMessage = "Nothing in “\(suggestion.jobName)” needs cleaning any more: it was used or removed since."
-                    return
-                }
-                self.review(plan, title: "Approve “\(suggestion.jobName)”") { report in
-                    self.record(evaluation, report: report, with: runner)
-                    if report.removedAnything && !report.hasProblems { self.dismiss(suggestion) }
-                }
-            case .failure(let error):
-                self.errorMessage = error.localizedDescription
+            switch await self.prepareRun(of: suggestion.jobID, { try ManualJobRun.prepare(suggestion, runner: runner) }) {
+            case .success(let run): self.review(run, title: "Approve “\(suggestion.jobName)”")
+            case .failure(let error): self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Opens the review of a run that goes ahead. One that would skip says why, and asks about running anyway when
+    /// only the job's threshold holds it back.
+    func review(_ run: ManualJobRun, title: String) {
+        if let plan = run.plan {
+            review(plan, title: title, job: run)
+        } else if run.canForce {
+            skippedRun = SkippedRun(run: run, title: title)
+        } else {
+            errorMessage = "\(run.evaluation.job.name): \(run.skipReason ?? "")."
+        }
+    }
+
+    func runAnyway(_ skipped: SkippedRun) {
+        skippedRun = nil
+        review(skipped.run.forced(), title: skipped.title)
+    }
+
+    /// After a job run by hand: bookkeeping that couldn't be saved, then the job's new state and suggestions.
+    func finishJobRun(_ outcome: ManualJobRun.Outcome) {
+        if !outcome.saveErrors.isEmpty { errorMessage = outcome.saveErrors.joined(separator: "\n") }
+        refreshJournal()
     }
 
     func dismiss(_ suggestion: Suggestion) {

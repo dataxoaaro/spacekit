@@ -36,6 +36,16 @@ struct AutomationView: View {
         }
         .navigationTitle("Automation")
         .onAppear { model.refreshAutomation() }
+        .alert(
+            Text("“\(model.skippedRun?.run.evaluation.job.name ?? "")” would skip"),
+            isPresented: Binding(get: { model.skippedRun != nil }, set: { if !$0 { model.skippedRun = nil } }),
+            presenting: model.skippedRun
+        ) { skipped in
+            Button("Run Anyway") { model.runAnyway(skipped) }
+            Button("Cancel", role: .cancel) { model.skippedRun = nil }
+        } message: { skipped in
+            Text((skipped.run.skipReason ?? "") + ".")
+        }
     }
 }
 
@@ -106,6 +116,11 @@ private struct SuggestionsSection: View {
                         Text(suggestion.jobName).font(.callout.weight(.semibold))
                         Text("\(suggestion.plan.items.count) items · prepared \(suggestion.created.relativeDescription())").font(.caption)
                             .foregroundStyle(.secondary)
+                        if let problem = suggestion.problems.first {
+                            let more = suggestion.problems.count > 1 ? " (+\(suggestion.problems.count - 1) more)" : ""
+                            Label("Left last time: \(problem)\(more)", systemImage: "exclamationmark.triangle").font(.caption)
+                                .foregroundStyle(Theme.warning).lineLimit(2)
+                        }
                     }
                     Spacer()
                     Text(suggestion.plan.totalBytes.formattedBytes).monospacedDigit()

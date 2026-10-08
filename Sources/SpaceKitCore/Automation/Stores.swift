@@ -46,12 +46,14 @@ public struct JobStateStore: Sendable {
 }
 
 /// A cleanup a `suggest` job prepared and is waiting for approval.
-public struct Suggestion: Codable, Sendable, Identifiable {
+public struct Suggestion: Codable, Sendable, Identifiable, Equatable {
     public var id: String
     public var jobID: String
     public var jobName: String
     public var created: Date
     public var plan: CleanupPlan
+    /// What an earlier approval left undone, one line each; the plan then holds only what's left (`ManualJobRun`).
+    public var problems: [String] = []
 
     public init(jobID: String, jobName: String, plan: CleanupPlan, created: Date = Date()) {
         self.id = String(UUID().uuidString.prefix(8)).lowercased()
@@ -59,6 +61,19 @@ public struct Suggestion: Codable, Sendable, Identifiable {
         self.jobName = jobName
         self.created = created
         self.plan = plan
+    }
+
+    enum CodingKeys: String, CodingKey { case id, jobID, jobName, created, plan, problems }
+
+    /// Suggestions saved before approvals could leave problems have none.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        jobID = try container.decode(String.self, forKey: .jobID)
+        jobName = try container.decode(String.self, forKey: .jobName)
+        created = try container.decode(Date.self, forKey: .created)
+        plan = try container.decode(CleanupPlan.self, forKey: .plan)
+        problems = try container.decodeIfPresent([String].self, forKey: .problems) ?? []
     }
 }
 
@@ -95,6 +110,15 @@ public struct SuggestionStore: Sendable {
 
     public func remove(_ id: String) throws {
         try modify { list in list.removeAll { $0.id == id } }
+    }
+
+    /// Replaces the suggestion with the same id while it's still there. One dismissed meanwhile, or replaced by a newer
+    /// run of its job, stays as it is.
+    func update(_ suggestion: Suggestion) throws {
+        try modify { list in
+            guard let index = list.firstIndex(where: { $0.id == suggestion.id }) else { return }
+            list[index] = suggestion
+        }
     }
 
     private func modify(_ change: (inout [Suggestion]) -> Void) throws {

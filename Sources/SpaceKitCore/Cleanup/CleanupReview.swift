@@ -161,6 +161,18 @@ public struct ReviewedPlan: Sendable {
     }
 }
 
+extension ReviewedPlan {
+    /// Only the rows that are also in `plan`, with the warnings accepted for them.
+    func limited(to plan: CleanupPlan) -> ReviewedPlan {
+        let items = Set(plan.items.map(\.id))
+        let commands = Set(plan.commands.map(\.id))
+        var limited = self.plan
+        limited.items = limited.items.filter { items.contains($0.id) }
+        limited.commands = limited.commands.filter { commands.contains($0.id) }
+        return ReviewedPlan(plan: limited, accepted: accepted)
+    }
+}
+
 /// The warnings a person accepted in a review, by item and command id, as reason keys (`CleanupExecutor.reasonKey`).
 /// Automatic runs have none.
 struct AcceptedWarnings: Sendable {

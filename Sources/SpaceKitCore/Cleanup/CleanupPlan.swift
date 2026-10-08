@@ -84,7 +84,7 @@ public struct PlannedCommand: Codable, Sendable, Hashable, Identifiable {
 
 /// What a cleanup will do, computed before anything is touched. Plans are shown to the person (or saved as a
 /// suggestion) and then executed by `CleanupExecutor`, which re-checks every item.
-public struct CleanupPlan: Codable, Sendable {
+public struct CleanupPlan: Codable, Sendable, Equatable {
     public var items: [CleanupItem]
     public var commands: [PlannedCommand]
     /// Instructions for things that must be cleaned in another app.

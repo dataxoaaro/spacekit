@@ -119,38 +119,6 @@ struct CleanupReportStatusTests {
     }
 }
 
-@Suite("Manual job run results")
-struct ManualJobRunTests {
-    @Test("A run a front end carried out is recorded like JobRunner.run records its own")
-    func manualResult() throws {
-        let fixture = try RunnerFixture()
-        let job = Job(id: "j", name: "J", rules: ["r"])
-        let evaluation = JobEvaluation(job: job, findings: [], eligible: [], scanStarted: Date())
-        var report = CleanupReport(dryRun: false)
-        report.items = [(CleanupItem(path: "/tmp/a", size: 7), .removed(bytes: 7, trashedTo: nil))]
-        let date = Date(timeIntervalSince1970: 5_000)
-
-        let result = JobRunResult.manual(evaluation, report: report, date: date)
-        try fixture.runner.record(result)
-
-        let state = try #require(fixture.context.jobStates.load()["j"])
-        #expect(state.lastRun == date)
-        #expect(state.lastOutcome == result.summary)
-        if case .cleaned(let recorded) = result.action { #expect(recorded.freedBytes == 7) } else { Issue.record("not cleaned") }
-    }
-
-    @Test("Without a report the run wasn't triggered")
-    func notTriggered() {
-        let job = Job(id: "j", name: "J", rules: ["r"])
-        let result = JobRunResult.manual(JobEvaluation(job: job, findings: [], eligible: [], scanStarted: Date()), report: nil)
-        guard case .notTriggered(let reason) = result.action else {
-            Issue.record("expected notTriggered")
-            return
-        }
-        #expect(reason == "Nothing matches the job's conditions")
-    }
-}
-
 @Suite("Shell words")
 struct ShellWordsTests {
     @Test(

@@ -101,6 +101,8 @@ final class AppModel {
     var pendingCleanup: PendingCleanup?
     /// The job currently open in the job editor.
     var jobDraft: JobDraft?
+    /// A job run waiting for "Run Anyway".
+    var skippedRun: SkippedRun?
     /// Bumped whenever the tree changes in place, so cached map layouts are rebuilt.
     private(set) var treeRevision = 0 {
         didSet { itemsCache.removeAll() }
@@ -139,8 +141,15 @@ final class AppModel {
         let id = UUID()
         var title: String
         var plan: CleanupPlan
-        /// Called with the report after a successful run.
-        var completion: (@MainActor (CleanupReport) -> Void)?
+        /// Set for a job run by hand or a suggestion being approved: the reviewed plan completes it.
+        var job: ManualJobRun?
+    }
+
+    /// A job run by hand that would skip because the job is below its threshold; the person may run it anyway.
+    struct SkippedRun {
+        let run: ManualJobRun
+        /// The review sheet's title if they do.
+        let title: String
     }
 
     init() {
@@ -253,11 +262,11 @@ final class AppModel {
         history = context.history.records(since: Age.days(365).ago())
     }
 
-    /// Evaluates a job off the main actor, marking it as running meanwhile (cards show a spinner).
-    func evaluate(_ job: Job, with runner: JobRunner) async -> Result<JobEvaluation, Error> {
-        runningJobID = job.id
+    /// Prepares a job run by hand off the main actor, marking the job as running meanwhile (cards show a spinner).
+    func prepareRun(of jobID: String, _ prepare: @escaping @Sendable () throws -> ManualJobRun) async -> Result<ManualJobRun, Error> {
+        runningJobID = jobID
         defer { runningJobID = nil }
-        return await Task.detached { Result { try runner.evaluate(job) } }.value
+        return await Task.detached { Result { try prepare() } }.value
     }
 
     // MARK: Scanning

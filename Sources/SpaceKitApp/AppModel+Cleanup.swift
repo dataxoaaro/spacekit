@@ -22,13 +22,14 @@ extension AppModel {
 
     var cleanupListBytes: UInt64 { cleanupList.reduce(0) { $0 + $1.size } }
 
-    /// Opens the review sheet for a plan, unless another cleanup is already open (it may be running).
-    func review(_ plan: CleanupPlan, title: String, completion: (@MainActor (CleanupReport) -> Void)? = nil) {
+    /// Opens the review sheet for a plan, unless another cleanup is already open (it may be running). `job` is the job run
+    /// by hand the plan belongs to.
+    func review(_ plan: CleanupPlan, title: String, job: ManualJobRun? = nil) {
         guard pendingCleanup == nil else {
             errorMessage = "Another cleanup is open. Finish or cancel it first."
             return
         }
-        pendingCleanup = PendingCleanup(title: title, plan: plan, completion: completion)
+        pendingCleanup = PendingCleanup(title: title, plan: plan, job: job)
     }
 
     /// A plan for items picked from the map or the cleanup list, moved to the Trash. Each item carries the start time
@@ -56,18 +57,20 @@ extension AppModel {
 
     var isCleaning: Bool { runningCleanups > 0 }
 
-    /// Runs a reviewed plan, then `completion` (bookkeeping such as job state) before the app may quit.
+    /// Runs a reviewed plan, through `job` when it completes a job run by hand (which records the run and settles the
+    /// suggestion), and finishes that bookkeeping before the app may quit.
     func execute(
-        _ plan: ReviewedPlan, completion: (@MainActor (CleanupReport) -> Void)? = nil,
-        onProgress: @escaping @Sendable (Int, Int, String) -> Void
+        _ plan: ReviewedPlan, job: ManualJobRun? = nil, onProgress: @escaping @Sendable (Int, Int, String) -> Void
     ) async -> CleanupReport {
         beginCleanup()
         defer { endCleanup() }
         let executor = context.executor
-        let report = await Task.detached(priority: .userInitiated) {
-            executor.execute(plan, dryRun: false, onProgress: onProgress)
+        let (report, outcome) = await Task.detached(priority: .userInitiated) { () -> (CleanupReport, ManualJobRun.Outcome?) in
+            guard let job else { return (executor.execute(plan, dryRun: false, onProgress: onProgress), nil) }
+            let outcome = job.complete(plan, onProgress: onProgress)
+            return (outcome.report, outcome)
         }.value
-        completion?(report)
+        if let outcome { finishJobRun(outcome) }
         Task {
             await untilTreesAreFree()
             applyRemovals(report)

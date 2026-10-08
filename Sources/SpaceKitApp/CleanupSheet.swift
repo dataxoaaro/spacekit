@@ -209,7 +209,7 @@ struct CleanupSheet: View {
         progress = (0, plan.plan.items.count + plan.plan.commands.count, "")
         Task {
             let report = await model.execute(
-                plan, completion: pending.completion,
+                plan, job: pending.job,
                 onProgress: { done, total, current in
                     Task { @MainActor in progress = (done, total, current) }
                 })

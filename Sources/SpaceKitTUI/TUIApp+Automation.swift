@@ -116,40 +116,34 @@ extension TUIApp {
         state.activity = .evaluating(TerminalText.sanitize(job.name))
         let (runner, inbox) = (JobRunner(context: context), inbox)
         Thread.detachNewThread {
-            let result = Result { () throws -> (JobEvaluation, CleanupPlan) in
-                let evaluation = try runner.evaluate(job)
-                return (evaluation, runner.plan(for: evaluation))
-            }
-            inbox.post(.evaluated(job, result))
+            inbox.post(.evaluated(job, Result { try ManualJobRun.prepare(job, runner: runner) }))
         }
     }
 
-    func jobEvaluated(_ job: Job, _ result: Result<(JobEvaluation, CleanupPlan), Error>) {
+    /// Opens the review of a job run that goes ahead. One that would skip says why, and offers to run anyway when
+    /// only the job's threshold holds it back.
+    func jobEvaluated(_ job: Job, _ result: Result<ManualJobRun, Error>) {
         state.activity = nil
         let name = TerminalText.sanitize(job.name)
+        let title = "Run “\(name)” now"
         switch result {
         case .failure(let error):
             state.modal = Modal(title: name, lines: [TerminalText.sanitize(error.localizedDescription)])
-        case .success(let (evaluation, plan)):
-            guard evaluation.isTriggered, !plan.isEmpty else {
-                var lines = [TerminalText.sanitize(evaluation.triggerSummary)]
-                if let problem = record(evaluation, report: nil) { lines.append(problem.fg(ANSI.protected)) }
-                refreshAutomation()
-                state.modal = Modal(title: name, lines: lines)
+        case .success(let run):
+            if let plan = run.plan {
+                confirmCleanup(plan, title: title, job: run)
                 return
             }
-            confirmCleanup(plan, title: "Run “\(name)” now", job: evaluation)
-        }
-    }
-
-    /// Saves the run the way `JobRunner.run` would, so the job's schedule moves on and the Automation view
-    /// shows the outcome. Returns the problem if the state couldn't be saved.
-    func record(_ evaluation: JobEvaluation, report: CleanupReport?) -> String? {
-        do {
-            try JobRunner(context: context).record(.manual(evaluation, report: report))
-            return nil
-        } catch {
-            return "Couldn't save the job's state: \(TerminalText.sanitize(error.localizedDescription))"
+            let reason = TerminalText.sanitize(run.skipReason ?? "")
+            let forced = run.forced()
+            guard let plan = forced.plan else {
+                state.modal = Modal(title: name, lines: [reason])
+                return
+            }
+            state.modal = Modal(
+                title: name, lines: [reason, "", "Run it anyway?"],
+                onConfirm: { [unowned self] in self.confirmCleanup(plan, title: title, job: forced) },
+                confirmLabel: "y run anyway · n cancel")
         }
     }
 

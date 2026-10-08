@@ -96,7 +96,8 @@ enum CleanupOutput {
         return lines
     }
 
-    /// Prints the review of `plan`, gets the go-ahead and runs it. Returns the report, or `nil` when nothing ran.
+    /// Prints the review of `plan`, gets the go-ahead and runs it, through `run` when given (a manual job run completes
+    /// it), else through `executor`. Returns the report, or `nil` when nothing ran.
     ///
     /// Warnings are accepted only here, after the preview printed them: by `--accept-warnings` next to `--yes`, or by
     /// answering the question when `interactive`. `--yes` alone runs only what the guard allows outright. With `json`,
@@ -104,7 +105,7 @@ enum CleanupOutput {
     /// to stderr.
     static func session(
         _ plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool, interactive: Bool,
-        heading: String = "Cleanup preview", verb: String = "Clean", hint: String
+        heading: String = "Cleanup preview", verb: String = "Clean", hint: String, run: ((ReviewedPlan) -> CleanupReport)? = nil
     ) throws -> CleanupReport? {
         let review = CleanupReview(plan, executor: executor)
         let planJSON = json ? PlanJSON(review) : nil
@@ -137,7 +138,8 @@ enum CleanupOutput {
                 return nil
             }
         }
-        let report = executor.execute(review.acknowledge(acceptingWarnings: acceptingWarnings), dryRun: false)
+        let reviewed = review.acknowledge(acceptingWarnings: acceptingWarnings)
+        let report = run?(reviewed) ?? executor.execute(reviewed, dryRun: false)
         if let planJSON {
             try Output.json(RunJSON(plan: planJSON, result: ReportJSON(report)))
         } else {

@@ -1,0 +1,157 @@
+import Foundation
+
+/// A job a person runs by hand, or a suggestion they approve, in two steps around the review.
+///
+/// `prepare` evaluates the job now and says whether the run would go ahead or skip, and why. A suggestion's saved plan
+/// is narrowed to what the fresh evaluation still offers. `complete`, which exists only on a prepared run, executes the
+/// reviewed plan, records the job's run so its schedule moves on, and settles the suggestion. The app, the TUI and the
+/// CLI only show the prepared run, review its plan and ask.
+public struct ManualJobRun: Sendable {
+    /// The job's evaluation at `prepare` time.
+    public let evaluation: JobEvaluation
+    /// The suggestion being approved; `nil` when the job runs by hand.
+    public let suggestion: Suggestion?
+    /// The suggestion's items that no longer meet the job's conditions, left out of the plan.
+    public let dropped: [CleanupItem]
+    /// The person chose to run it although the job is below its threshold.
+    public let isForced: Bool
+    /// Everything the run could offer, whether or not it would skip.
+    private let candidate: CleanupPlan
+    private let runner: JobRunner
+
+    /// The suggestion's job is no longer in the config, so its conditions can't be checked.
+    public struct JobMissing: LocalizedError {
+        public let suggestion: Suggestion
+
+        public var errorDescription: String? {
+            "The job “\(suggestion.jobName)” that prepared this cleanup is no longer in your config, so its conditions can't be "
+                + "checked. Dismiss the suggestion."
+        }
+    }
+
+    /// What became of an approved suggestion.
+    public enum SuggestionFate: Sendable, Equatable {
+        /// Nothing eligible is left of it, so it's gone.
+        case dismissed
+        /// Narrowed to the rows still left to clean, with the problems the run hit.
+        case kept(Suggestion)
+    }
+
+    public struct Outcome: Sendable {
+        public let report: CleanupReport
+        /// `nil` for a job run by hand.
+        public let suggestion: SuggestionFate?
+        /// The job's state or the suggestion that couldn't be saved. The removals happened regardless.
+        public let saveErrors: [String]
+    }
+
+    // MARK: Prepare
+
+    /// Evaluates `job` for a run by hand. It goes ahead when the job is triggered, or when forced.
+    public static func prepare(_ job: Job, runner: JobRunner, progress: ScanProgress = ScanProgress(), now: Date = Date()) throws
+        -> ManualJobRun
+    {
+        let evaluation = try runner.evaluate(job, progress: progress, now: now)
+        return ManualJobRun(
+            evaluation: evaluation, suggestion: nil, dropped: [], isForced: false, candidate: runner.plan(for: evaluation), runner: runner)
+    }
+
+    /// Evaluates the job that prepared `suggestion` again and narrows the suggestion to what still meets the job's
+    /// conditions: a project used since then drops out. The job's threshold doesn't hold an approval back; it was
+    /// crossed when the suggestion was made, and approving is the person's explicit go-ahead.
+    public static func prepare(_ suggestion: Suggestion, runner: JobRunner, progress: ScanProgress = ScanProgress(), now: Date = Date())
+        throws -> ManualJobRun
+    {
+        guard let job = runner.context.config.jobs.first(where: { $0.id == suggestion.jobID }) else {
+            throw JobMissing(suggestion: suggestion)
+        }
+        let evaluation = try runner.evaluate(job, progress: progress, now: now)
+        let (plan, dropped) = suggestion.plan.keeping(onlyEligible: evaluation.eligible)
+        return ManualJobRun(
+            evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: false, candidate: plan, runner: runner)
+    }
+
+    /// Why the run would do nothing now, or `nil` when its plan is ready for review.
+    public var skipReason: String? {
+        if candidate.isEmpty {
+            return suggestion == nil
+                ? evaluation.triggerSummary : "Nothing in this suggestion still meets the job's conditions: it was used or removed since"
+        }
+        if suggestion == nil && !evaluation.isTriggered && !isForced { return evaluation.triggerSummary }
+        return nil
+    }
+
+    /// Whether `forced()` would make a skipped run reviewable: only a threshold holds it back, not an empty plan.
+    public var canForce: Bool { skipReason != nil && !candidate.isEmpty }
+
+    /// This run, going ahead although the job is below its threshold ("Run anyway", `--force`).
+    public func forced() -> ManualJobRun {
+        ManualJobRun(evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: true, candidate: candidate, runner: runner)
+    }
+
+    /// The plan to review, or `nil` while the run would skip.
+    public var plan: CleanupPlan? { skipReason == nil ? candidate : nil }
+
+    // MARK: Complete
+
+    /// Runs `reviewed` and records the job's run. Only rows of this run's `plan` run, so a run that would skip removes
+    /// nothing and records nothing, and a suggestion's dropped items can't come back through another review.
+    ///
+    /// An approved suggestion is then settled: what's left of it is checked again (not removed, still on disk, not
+    /// blocked). With nothing left it's dismissed; otherwise it's kept, narrowed to that, with the run's problems.
+    public func complete(_ reviewed: ReviewedPlan, now: Date = Date(), onProgress: CleanupExecutor.ProgressHandler? = nil) -> Outcome {
+        guard let plan else { return Outcome(report: CleanupReport(dryRun: false), suggestion: nil, saveErrors: []) }
+        let report = runner.executor.execute(reviewed.limited(to: plan), dryRun: false, onProgress: onProgress)
+        var errors: [String] = []
+        do {
+            try runner.record(JobRunResult(job: evaluation.job, date: now, evaluation: evaluation, action: .cleaned(report)))
+        } catch {
+            errors.append("Couldn't save the job's state: \(error.localizedDescription)")
+        }
+        guard let suggestion else { return Outcome(report: report, suggestion: nil, saveErrors: errors) }
+        let fate = settle(suggestion, after: report)
+        do {
+            switch fate {
+            case .dismissed: try runner.context.suggestions.remove(suggestion.id)
+            case .kept(let kept): try runner.context.suggestions.update(kept)
+            }
+        } catch {
+            errors.append("Couldn't save the suggestion: \(error.localizedDescription)")
+        }
+        return Outcome(report: report, suggestion: fate, saveErrors: errors)
+    }
+
+    /// The suggestion's still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows
+    /// the person unticked.
+    private func settle(_ suggestion: Suggestion, after report: CleanupReport) -> SuggestionFate {
+        let removedItems = Set(report.items.filter(\.outcome.isRemoved).map(\.item.id))
+        let ranCommands = Set(report.commands.filter(\.outcome.isRemoved).map(\.command.id))
+        let executor = runner.executor
+        var left = candidate
+        left.items = candidate.items.filter {
+            !removedItems.contains($0.id) && Self.exists($0.path) && !executor.verdict(for: $0, context: .manual).isBlocked
+        }
+        left.commands = candidate.commands.filter {
+            !ranCommands.contains($0.id) && !executor.verdict(for: $0, context: .manual).isBlocked
+        }
+        guard !left.isEmpty else { return .dismissed }
+        var kept = suggestion
+        kept.plan = left
+        kept.problems = report.problemDetails
+        return .kept(kept)
+    }
+
+    private static func exists(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0
+    }
+}
+
+extension CleanupReport {
+    /// One line per thing the run left undone, with its reason.
+    var problemDetails: [String] {
+        failures.map { "\(PathUtil.abbreviate($0.item.path)): \($0.reason)" }
+            + skipped.map { "\(PathUtil.abbreviate($0.item.path)): \($0.reason)" }
+            + unfinishedCommands.map { "\($0.command.displayString): \($0.reason)" } + warnings
+    }
+}

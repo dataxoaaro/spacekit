@@ -4,8 +4,8 @@ import SpaceKitCore
 extension TUIApp {
     /// Shows the review of `plan`: every item and command with all of the guard's reasons. The footer, always on
     /// screen, counts what will be removed and says where it goes. `y` works only once the whole list has been shown,
-    /// so pressing it acknowledges every warning listed.
-    func confirmCleanup(_ plan: CleanupPlan, title: String, job: JobEvaluation? = nil) {
+    /// so pressing it acknowledges every warning listed. A job run by hand (`job`) completes through `ManualJobRun`.
+    func confirmCleanup(_ plan: CleanupPlan, title: String, job: ManualJobRun? = nil) {
         let review = CleanupReview(plan, executor: context.executor)
         let clean = TerminalText.sanitize
         var lines: [String] = []
@@ -50,7 +50,7 @@ extension TUIApp {
         return footer
     }
 
-    func execute(_ plan: ReviewedPlan, job: JobEvaluation? = nil) {
+    func execute(_ plan: ReviewedPlan, job: ManualJobRun? = nil) {
         guard state.activity == nil else {
             flash("Busy: \(state.activity?.text ?? "")")
             return
@@ -61,12 +61,17 @@ extension TUIApp {
         terminal.holdTerminationSignals(true)
         let (executor, inbox) = (context.executor, inbox)
         Thread.detachNewThread {
-            let report = executor.execute(plan, dryRun: false)
-            inbox.post(.cleaned(report, job))
+            guard let job else {
+                inbox.post(.cleaned(executor.execute(plan, dryRun: false), nil))
+                return
+            }
+            let outcome = job.complete(plan)
+            inbox.post(.cleaned(outcome.report, outcome))
         }
     }
 
-    func cleanupFinished(_ report: CleanupReport, job: JobEvaluation?) {
+    /// `job` is the outcome of a job run by hand, whose state may not have been saved.
+    func cleanupFinished(_ report: CleanupReport, job: ManualJobRun.Outcome?) {
         state.activity = nil
         terminal.holdTerminationSignals(false)
         let removals = Removal.from(report)
@@ -79,7 +84,7 @@ extension TUIApp {
         refreshFindings(ruleIDs: report.rulesToReevaluate)
         var lines = reportLines(report)
         if let job {
-            if let problem = record(job, report: report) { lines.append(problem.fg(ANSI.protected)) }
+            lines += job.saveErrors.map { TerminalText.sanitize($0).fg(ANSI.protected) }
             refreshAutomation()
         }
         if state.quitWhenIdle || terminal.heldSignal != nil {

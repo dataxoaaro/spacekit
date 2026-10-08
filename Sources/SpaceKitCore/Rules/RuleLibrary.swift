@@ -35,12 +35,15 @@ public struct RuleLibrary: Sendable {
         self.builtinIDs = builtinIDs
     }
 
+    /// The source named for a rule that didn't come from a file, such as one parsed from text in a test.
+    public static let inlineSource = "<inline>"
+
     /// User rules loaded in place of a built-in rule with the same id.
     public var overrides: [Rule] { rules.filter { !$0.isBuiltin && builtinIDs.contains($0.id) } }
 
     /// Loads the built-in rules and every `*.yaml` / `*.yml` in `directories`.
     ///
-    /// A user rule with the id of an earlier rule replaces it. A replacement of a built-in rule may only narrow it
+    /// A user rule with the id of an earlier rule replaces it. An override of a built-in rule may only narrow it
     /// (`overrideProblems`), and a built-in `protected` rule can't be replaced at all. Rules with validation errors
     /// are reported in `issues` but not loaded, and `disabled` never turns off a `protected` rule.
     public static func load(builtin: BuiltinRules = .standard, directories: [String] = [], disabled: Set<String> = []) -> RuleLibrary {
@@ -70,14 +73,14 @@ public struct RuleLibrary: Sendable {
                 issues += ruleIssues
                 if ruleIssues.contains(where: { $0.severity == .error }) { continue }
                 if let original = builtinByID[rule.id], !isBuiltin {
-                    let problems = overrideIssues(builtin: original, replacement: rule)
+                    let problems = overrideIssues(builtin: original, override: rule)
                     if !problems.isEmpty {
                         issues += problems
                         continue
                     }
                 }
                 if let existing = byID[rule.id] {
-                    let origin = PathUtil.abbreviate(existing.source ?? "<inline>")
+                    let origin = PathUtil.abbreviate(existing.source ?? inlineSource)
                     issues.append(
                         RuleIssue(severity: .warning, source: file.source, ruleID: rule.id, message: "replaces the rule from \(origin)"))
                 } else {
@@ -94,7 +97,7 @@ public struct RuleLibrary: Sendable {
                 guard rule.safety.level == .protected else { continue }
                 issues.append(
                     RuleIssue(
-                        severity: .warning, source: rule.source ?? "<inline>", ruleID: rule.id,
+                        severity: .warning, source: rule.source ?? inlineSource, ruleID: rule.id,
                         message: "protected rules can't be disabled; it stays active (rules.disabled)"))
             }
             rules.append(rule)
@@ -126,7 +129,7 @@ public struct RuleLibrary: Sendable {
         if !asBuiltin {
             for rule in rules {
                 guard let original = library.rule(id: rule.id), original.isBuiltin else { continue }
-                issues += overrideIssues(builtin: original, replacement: rule)
+                issues += overrideIssues(builtin: original, override: rule)
             }
         }
         return (rules, issues)
@@ -161,7 +164,7 @@ public struct RuleLibrary: Sendable {
 
     /// Parses a rule file. A file is either a single rule (has `name` at the top level) or a list under `rules:`
     /// with optional file-wide `group` and `category` defaults.
-    public static func parse(yaml: String, source: String = "<inline>") throws -> [Rule] {
+    public static func parse(yaml: String, source: String = inlineSource) throws -> [Rule] {
         guard let node = try Yams.compose(yaml: yaml), let mapping = node.mapping else { return [] }
         let decoder = YAMLDecoder()
         var rules: [Rule]
@@ -211,7 +214,7 @@ public struct RuleLibrary: Sendable {
         var issues: [RuleIssue] = []
         var seen: [String: String] = [:]
         for rule in rules {
-            let source = rule.source ?? "<inline>"
+            let source = rule.source ?? Self.inlineSource
             if let other = seen[rule.id], other != source {
                 issues.append(
                     RuleIssue(
@@ -228,7 +231,7 @@ public struct RuleLibrary: Sendable {
     static func issues(for rule: Rule, home: String = PathUtil.home) -> [RuleIssue] {
         var issues: [RuleIssue] = []
         func issue(_ severity: RuleIssue.Severity, _ message: String) {
-            issues.append(RuleIssue(severity: severity, source: rule.source ?? "<inline>", ruleID: rule.id, message: message))
+            issues.append(RuleIssue(severity: severity, source: rule.source ?? inlineSource, ruleID: rule.id, message: message))
         }
         if rule.paths.isEmpty && rule.match == nil {
             issue(.error, "needs either `path` or `match`")

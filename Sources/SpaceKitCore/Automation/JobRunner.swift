@@ -263,7 +263,8 @@ public struct JobRunner: Sendable {
         for job in due {
             log("Running \(job.id) (\(job.mode.rawValue))")
             for rule in context.library.overrides where job.rules.contains(rule.id) {
-                log("  Uses your rule \(rule.id) from \(PathUtil.abbreviate(rule.source ?? "<inline>")) in place of the built-in one")
+                let source = PathUtil.abbreviate(rule.source ?? RuleLibrary.inlineSource)
+                log("  Uses your rule \(rule.id) from \(source) in place of the built-in one")
             }
             let result = run(job, now: now)
             log("  \(result.summary)")

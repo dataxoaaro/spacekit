@@ -1,34 +1,34 @@
 import Foundation
 
 extension RuleLibrary {
-    /// `overrideProblems` as errors on the replacement rule, which then doesn't load.
-    static func overrideIssues(builtin: Rule, replacement: Rule) -> [RuleIssue] {
-        overrideProblems(builtin: builtin, replacement: replacement).map {
-            RuleIssue(severity: .error, source: replacement.source ?? "<inline>", ruleID: replacement.id, message: $0)
+    /// `overrideProblems` as errors on the override, which then doesn't load.
+    static func overrideIssues(builtin: Rule, override: Rule) -> [RuleIssue] {
+        overrideProblems(builtin: builtin, override: override).map {
+            RuleIssue(severity: .error, source: override.source ?? inlineSource, ruleID: override.id, message: $0)
         }
     }
 
-    /// Why `replacement` may not take the place of the built-in rule with the same id; empty when it may.
+    /// Why `override` may not take the place of the built-in rule with the same id; empty when it may.
     ///
     /// Jobs and the starter config name rules by id, and jobs from 🟢 rules run automatically. So a file in the user
     /// rules folder, which any program running as the person can write, would otherwise widen what an existing
-    /// automatic job removes just by reusing an id. A replacement may only narrow the built-in rule: keep its paths
+    /// automatic job removes just by reusing an id. An override may only narrow the built-in rule: keep its paths
     /// within the built-in ones, add exclusions, raise its thresholds and ages, schedule its jobs less often, keep or
     /// raise its safety level, drop its action. Turning it into a `protected` rule only adds protection, so that is
     /// always allowed. Anything new has to be a rule of its own.
-    static func overrideProblems(builtin: Rule, replacement: Rule) -> [String] {
+    static func overrideProblems(builtin: Rule, override: Rule) -> [String] {
         if builtin.safety.level == .protected {
             return ["can't replace the built-in protected rule with the same id; protected rules keep SpaceKit from touching that data"]
         }
-        if replacement.safety.level < builtin.safety.level {
+        if override.safety.level < builtin.safety.level {
             return [
                 "can't lower the safety level of the built-in rule from \(builtin.safety.level.rawValue) to "
-                    + "\(replacement.safety.level.rawValue); add it to rules.disabled to turn it off instead"
+                    + "\(override.safety.level.rawValue); add it to rules.disabled to turn it off instead"
             ]
         }
-        if replacement.safety.level == .protected { return [] }
+        if override.safety.level == .protected { return [] }
 
-        let widened = locationProblems(builtin, replacement) + actionProblems(builtin, replacement) + policyProblems(builtin, replacement)
+        let widened = locationProblems(builtin, override) + actionProblems(builtin, override) + policyProblems(builtin, override)
         guard !widened.isEmpty else { return [] }
         return widened.map {
             "can't widen the built-in rule: \($0). A rule with a built-in id may only narrow it (add exclusions, raise "
@@ -36,12 +36,12 @@ extension RuleLibrary {
         }
     }
 
-    private static func locationProblems(_ builtin: Rule, _ replacement: Rule) -> [String] {
+    private static func locationProblems(_ builtin: Rule, _ override: Rule) -> [String] {
         var problems: [String] = []
-        for path in replacement.paths where !builtin.paths.contains(where: { covers($0, path) }) {
+        for path in override.paths where !builtin.paths.contains(where: { covers($0, path) }) {
             problems.append("adds the path '\(path)'")
         }
-        switch (builtin.match, replacement.match) {
+        switch (builtin.match, override.match) {
         case (nil, .some):
             problems.append("adds a name pattern (match)")
         case (.some(let original), .some(let pattern)):
@@ -55,36 +55,36 @@ extension RuleLibrary {
         default:
             break
         }
-        if replacement.granularity != builtin.granularity { problems.append("changes its granularity") }
-        for exclusion in builtin.exclusions where !replacement.exclusions.contains(exclusion) {
+        if override.granularity != builtin.granularity { problems.append("changes its granularity") }
+        for exclusion in builtin.exclusions where !override.exclusions.contains(exclusion) {
             problems.append("drops the exclusion '\(exclusion)'")
         }
         return problems
     }
 
-    private static func actionProblems(_ builtin: Rule, _ replacement: Rule) -> [String] {
+    private static func actionProblems(_ builtin: Rule, _ override: Rule) -> [String] {
         var problems: [String] = []
-        let action = replacement.action
+        let action = override.action
         if action.remove && !builtin.action.remove { problems.append("adds remove to its action") }
         if let command = action.command, command != builtin.action.command { problems.append("changes its command") }
         if let command = action.itemCommand, command != builtin.action.itemCommand { problems.append("changes its itemCommand") }
-        if let ai = replacement.ai {
+        if let ai = override.ai {
             if ai.layout != builtin.ai?.layout || ai.tool != builtin.ai?.tool { problems.append("changes its ai layout") }
             if let command = ai.removeCommand, command != builtin.ai?.removeCommand { problems.append("changes its ai.removeCommand") }
         }
-        if builtin.safety.trash && !replacement.safety.trash { problems.append("turns off the Trash (safety.trash)") }
+        if builtin.safety.trash && !override.safety.trash { problems.append("turns off the Trash (safety.trash)") }
         return problems
     }
 
-    private static func policyProblems(_ builtin: Rule, _ replacement: Rule) -> [String] {
+    private static func policyProblems(_ builtin: Rule, _ override: Rule) -> [String] {
         let original = builtin.policy
-        let policy = replacement.policy
+        let policy = override.policy
         var problems = [
             lowered("threshold", from: original?.threshold, to: policy?.threshold),
             lowered("olderThan", from: original?.olderThan, to: policy?.olderThan),
             lowered("keepRecent", from: original?.keepRecent, to: policy?.keepRecent),
         ].compactMap { $0 }
-        let job = Job.suggested(for: replacement)
+        let job = Job.suggested(for: override)
         let originalJob = Job.suggested(for: builtin)
         if job.mode > originalJob.mode {
             problems.append("makes jobs from it start in \(job.mode.rawValue) mode instead of \(originalJob.mode.rawValue)")
@@ -95,9 +95,9 @@ extension RuleLibrary {
         return problems
     }
 
-    /// A limit the built-in rule's policy sets that the replacement lowers or leaves out (no limit is the lowest).
-    private static func lowered<Limit: Comparable>(_ name: String, from original: Limit?, to replacement: Limit?) -> String? {
-        guard let original, replacement.map({ $0 < original }) ?? true else { return nil }
+    /// A limit the built-in rule's policy sets that the override lowers or leaves out (no limit is the lowest).
+    private static func lowered<Limit: Comparable>(_ name: String, from original: Limit?, to limit: Limit?) -> String? {
+        guard let original, limit.map({ $0 < original }) ?? true else { return nil }
         return "lowers its policy \(name) below \(original)"
     }
 

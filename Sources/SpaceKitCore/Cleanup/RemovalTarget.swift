@@ -2,10 +2,10 @@ import Foundation
 
 /// One thing to remove, read from the disk once: where it is, what is there, and every fact the guard judges.
 ///
-/// The guard, the Trash-or-delete decision and the removal itself all work from the same target. Each of them used to
-/// resolve the path on its own, and a symlink swapped between two of those resolutions let the removal act somewhere
-/// the guard never looked. Now the parent folder is resolved once, the folder and the item are pinned by device and
-/// inode, and the removal refuses whatever no longer matches them.
+/// The guard, the Trash-or-delete decision and the removal itself all work from the same target, so a symlink swapped
+/// between two of them can't make the removal act somewhere the guard never looked. The parent folder is resolved
+/// once, the folder and the item are pinned by device and inode, and the removal refuses whatever no longer matches
+/// them.
 public struct RemovalTarget: Sendable, Equatable {
     /// A file's device and inode: the same file, wherever it is and whatever its path says now.
     public struct Identity: Sendable, Hashable {

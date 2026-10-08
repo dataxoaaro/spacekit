@@ -494,4 +494,29 @@ struct SafetyGuardAutomationTests {
         let job = CleanupContext.automatic(AutomationContext(jobID: "a", customPaths: ["/tmp/spacekit-none"]))
         #expect(!guardian.evaluate(path: item + "/old", context: job).reasons.contains { $0.hasPrefix("Automatic jobs only remove") })
     }
+
+    @Test("An item spelled through a symlinked parent (/var for /private/var) keeps its rule's recognition")
+    func itemSpelledThroughSymlink() throws {
+        let tree = try TempTree()
+        try tree.file("cache/a/x", bytes: 100)
+        try tree.file("elsewhere/b/x", bytes: 100)
+        // The temporary folder lives under /private/var, which /var links to.
+        let written = tree.path("cache").replacingOccurrences(of: "/private/var/", with: "/var/")
+        try #require(written != tree.path("cache"))
+        let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
+        let rule = Rule(
+            id: "c", name: "c", paths: [written], granularity: .children, safety: SafetySpec(level: .safe),
+            action: ActionSpec(remove: true))
+        let manual = CleanupContext.manual(confirmed: false)
+
+        #expect(guardian.evaluate(path: written + "/a", rule: rule, context: manual).decision == .allow)
+        #expect(guardian.evaluate(path: written + "/a", rule: rule, context: automatic).decision == .allow)
+        let job = CleanupContext.automatic(AutomationContext(jobID: "j", customPaths: [written]))
+        #expect(guardian.evaluate(path: written + "/a", context: job).decision == .allow)
+
+        // Where the spelling resolves to still decides.
+        try FileManager.default.createSymbolicLink(atPath: tree.path("cache/link"), withDestinationPath: tree.path("elsewhere"))
+        #expect(guardian.evaluate(path: written + "/link/b", rule: rule, context: manual).decision == .confirm)
+        #expect(guardian.evaluate(path: written + "/link/b", rule: rule, context: automatic).isBlocked)
+    }
 }

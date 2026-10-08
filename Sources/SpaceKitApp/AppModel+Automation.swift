@@ -32,12 +32,18 @@ extension AppModel {
     }
 
     /// Opens the review of a run that goes ahead. One that would skip says why, and asks about running anyway when
-    /// only the job's threshold holds it back.
+    /// only the job's threshold holds it back. An approval with nothing left is finished there and then: the
+    /// suggestion is dismissed and the job's run recorded.
     func review(_ run: ManualJobRun, title: String) {
         if let plan = run.plan {
             review(plan, title: title, job: run)
         } else if run.canForce {
             skippedRun = SkippedRun(run: run, title: title)
+        } else if let outcome = run.settleWithNothingLeft() {
+            finishJobRun(outcome)
+            if outcome.saveErrors.isEmpty {
+                errorMessage = "\(run.evaluation.job.name): \(run.skipReason ?? ""), so the suggestion was dismissed."
+            }
         } else {
             errorMessage = "\(run.evaluation.job.name): \(run.skipReason ?? "")."
         }

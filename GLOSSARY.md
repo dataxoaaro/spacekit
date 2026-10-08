@@ -82,6 +82,6 @@
 
 **Suggestion**: a cleanup plan a `suggest` job prepared, waiting for a person to approve or dismiss it. _Avoid_: pending cleanup, proposal.
 
-**Approval**: a manual job run of a suggestion: its plan, narrowed to what the job's conditions still allow, reviewed and run. The job's size threshold doesn't hold it back: it held when the suggestion was made, and approving is the person's go-ahead. _Avoid_: acceptance (that's for warnings).
+**Approval**: a manual job run of a suggestion: its plan, narrowed to what the job's conditions still allow, reviewed and run; with nothing left, approving dismisses it without a run. Either way it records the job's last run. The job's size threshold doesn't hold it back: it held when the suggestion was made, and approving is the person's go-ahead. _Avoid_: acceptance (that's for warnings).
 
 **Settling a suggestion**: what an approval does with it afterwards: dismiss it when nothing eligible is left, otherwise keep it narrowed to what's left with the problems the run hit. _Avoid_: cleanup of suggestions.

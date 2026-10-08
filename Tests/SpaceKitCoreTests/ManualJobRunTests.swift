@@ -223,6 +223,44 @@ struct ManualJobRunTests {
         #expect(fixture.context.suggestions.all().isEmpty)
     }
 
+    @Test("Approving a suggestion with nothing left dismisses it and records the job's run without running anything")
+    func nothingEligibleAtPrepare() throws {
+        var fixture = try buildFixture(["a"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        try FileManager.default.removeItem(atPath: fixture.tree.path("home/build/a"))
+        let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        #expect(run.plan == nil)
+        #expect(!run.canForce)
+        #expect(run.hasNothingLeft)
+
+        let date = Date(timeIntervalSince1970: 7_000)
+        let outcome = try #require(run.settleWithNothingLeft(now: date))
+
+        #expect(outcome.suggestion == .dismissed)
+        #expect(outcome.report.items.isEmpty && outcome.report.commands.isEmpty)
+        #expect(outcome.saveErrors.isEmpty)
+        #expect(fixture.context.suggestions.all().isEmpty)
+        #expect(lastRun(fixture) == date)
+    }
+
+    @Test("Only an approval with nothing left settles without a run")
+    func settlingNeedsNothingLeft() throws {
+        var fixture = try buildFixture(["a"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        let approval = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let jobRun = try ManualJobRun.prepare(job, runner: fixture.runner)
+        let suggested = lastRun(fixture)
+
+        #expect(!approval.hasNothingLeft && approval.settleWithNothingLeft() == nil)
+        #expect(!jobRun.hasNothingLeft && jobRun.settleWithNothingLeft() == nil)
+        #expect(fixture.context.suggestions.get(suggestion.id) != nil)
+        #expect(lastRun(fixture) == suggested)
+    }
+
     @Test("Approving drops items that no longer meet the job's conditions, and isn't held back by its threshold")
     func approvalNarrows() throws {
         var fixture = try buildFixture(["a", "b"])

@@ -116,19 +116,33 @@ public struct ManualJobRun: Sendable {
         guard let plan else { return Outcome(report: CleanupReport(dryRun: false), suggestion: nil, saveErrors: []) }
         let report = executor.execute(reviewed.limited(to: plan), dryRun: false, onProgress: onProgress)
         if report.reviewOutdated { return Outcome(report: report, suggestion: nil, saveErrors: []) }
+        return finish(report, action: .cleaned(report), now: now) { left(after: report, executor: executor) }
+    }
+
+    /// An approval of a suggestion nothing of which still meets the job's conditions. There is nothing to review or
+    /// force; `settleWithNothingLeft(now:)` finishes it.
+    public var hasNothingLeft: Bool { suggestion != nil && candidate.isEmpty }
+
+    /// Finishes an approval with nothing left (`hasNothingLeft`) without running anything: records the job's run, as
+    /// every approval does, and dismisses the suggestion. `nil` for any other run, which finishes through `complete`.
+    public func settleWithNothingLeft(now: Date = Date()) -> Outcome? {
+        guard hasNothingLeft else { return nil }
+        return finish(CleanupReport(dryRun: false), action: .notTriggered(skipReason ?? ""), now: now) { CleanupPlan() }
+    }
+
+    /// Records the job's run and settles the suggestion being approved to what's `left` of it. The suggestion is
+    /// settled as stored now, under the store's lock: another approval may have settled some of it meanwhile.
+    private func finish(_ report: CleanupReport, action: JobRunResult.Action, now: Date, left: () -> CleanupPlan) -> Outcome {
         var errors: [String] = []
         do {
-            try runner.record(JobRunResult(job: evaluation.job, date: now, evaluation: evaluation, action: .cleaned(report)))
+            try runner.record(JobRunResult(job: evaluation.job, date: now, evaluation: evaluation, action: action))
         } catch {
             errors.append("Couldn't save the job's state: \(error.localizedDescription)")
         }
         guard let suggestion else { return Outcome(report: report, suggestion: nil, saveErrors: errors) }
-        // Settled against the suggestion as stored now, under the store's lock: another approval may have settled
-        // some of it meanwhile.
-        let left = left(after: report, executor: executor)
         let fate: SuggestionFate
         do {
-            switch try runner.context.suggestions.narrow(suggestion.id, to: left, problems: report.problemDetails) {
+            switch try runner.context.suggestions.narrow(suggestion.id, to: left(), problems: report.problemDetails) {
             case .gone: fate = .gone
             case .removed: fate = .dismissed
             case .kept(let kept): fate = .kept(kept)

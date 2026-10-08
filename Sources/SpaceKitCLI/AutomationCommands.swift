@@ -418,8 +418,9 @@ struct SuggestionsCommand: ParsableCommand {
                 The job is evaluated again first: items used since the suggestion was made, or no longer matching the
                 job's age conditions, are dropped. --yes runs what the guard allows outright; items with warnings also
                 need --accept-warnings. Approving records the job's last run. Afterwards the suggestion is dismissed when
-                nothing in it is left to clean; otherwise it's kept with what's left and the problems the run hit. The exit
-                status is nonzero when anything failed or a warning was raised.
+                nothing in it is left to clean (also when nothing in it still met the job's conditions, so nothing ran);
+                otherwise it's kept with what's left and the problems the run hit. The exit status is nonzero when anything
+                failed or a warning was raised.
                 """
         )
         @OptionGroup var global: GlobalOptions
@@ -446,10 +447,7 @@ struct SuggestionsCommand: ParsableCommand {
             notes += run.dropped.map { "  no longer eligible: ".dim + Output.path($0.path) }
             Output.emit(notes, toStandardError: json)
             guard let plan = run.plan else {
-                Output.emit([Output.safe(run.skipReason ?? "") + ". Dismiss it: " + dismiss], toStandardError: json)
-                if json {
-                    try Output.json(RunJSON(plan: PlanJSON(CleanupReview(CleanupPlan(), executor: runner.executor))))
-                }
+                try settleNothingLeft(run, suggestion: suggestion, executor: runner.executor, dismiss: dismiss)
                 return
             }
             var outcome: ManualJobRun.Outcome?
@@ -464,20 +462,39 @@ struct SuggestionsCommand: ParsableCommand {
                         return completed.report
                     })
             else { return }
-            switch outcome?.suggestion {
-            case .kept(let kept):
-                let count = kept.plan.items.count + kept.plan.commands.count
-                Output.emit(
-                    ["Kept the suggestion with \(count) left to clean, so you can try again or dismiss it."], toStandardError: json)
-            case .gone:
-                Output.emit(
-                    ["The suggestion was dismissed or replaced while this ran, so it's left as it is now."], toStandardError: json)
-            case .dismissed, nil:
-                break
-            }
+            if let outcome { Output.emit(Self.fateLines(outcome.suggestion), toStandardError: json) }
             let unsaved = outcome.map(JobsCommand.warnUnsaved) ?? false
             try CleanupOutput.exitIfProblems(report)
             if unsaved { throw ExitCode(1) }
+        }
+
+        /// Nothing in the suggestion still meets its job's conditions. Approving it (`--yes`) runs nothing, records the
+        /// job's run and dismisses it; the plan printed is the suggestion's own, with nothing left in it.
+        private func settleNothingLeft(_ run: ManualJobRun, suggestion: Suggestion, executor: CleanupExecutor, dismiss: String) throws {
+            let reason = Output.safe(run.skipReason ?? "")
+            var left = suggestion.plan
+            left.items = []
+            left.commands = []
+            let plan = PlanJSON(CleanupReview(left, executor: executor))
+            guard acknowledgement.yes, let outcome = run.settleWithNothingLeft() else {
+                Output.emit([reason + ". Approving it with --yes dismisses it, as does: " + dismiss], toStandardError: json)
+                if json { try Output.json(RunJSON(plan: plan)) }
+                return
+            }
+            Output.emit([reason + "."] + Self.fateLines(outcome.suggestion), toStandardError: json)
+            if json { try Output.json(RunJSON(plan: plan, result: ReportJSON(outcome.report))) }
+            if JobsCommand.warnUnsaved(outcome) { throw ExitCode(1) }
+        }
+
+        private static func fateLines(_ fate: ManualJobRun.SuggestionFate?) -> [String] {
+            switch fate {
+            case .kept(let kept):
+                let count = kept.plan.items.count + kept.plan.commands.count
+                return ["Kept the suggestion with \(count) left to clean, so you can try again or dismiss it."]
+            case .dismissed: return ["Dismissed the suggestion: nothing in it is left to clean."]
+            case .gone: return ["The suggestion was dismissed or replaced while this ran, so it's left as it is now."]
+            case nil: return []
+            }
         }
     }
 

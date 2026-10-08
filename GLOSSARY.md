@@ -34,6 +34,14 @@
 
 **Automatic plan**: the plan `JobRunner` hands the executor for an automatic run (`AutomaticPlan`); it acknowledges nothing. _Avoid_: scheduled plan.
 
+## Removing
+
+**Removal target**: one item as the guard and the removal see it, read from the disk once (`RemovalTarget`): its folder with every symlink resolved, the folder and the item pinned by device and inode, whether it is or contains a git repository, and its size. _Avoid_: checked path, checked directory.
+
+**Remover**: the module that takes an item off its place (`Remover`): it builds the item's removal target, decides Trash or delete in one place, and moves or deletes the item only while it still matches its target. _Avoid_: deleter, safe removal (that's only its handle-level deletion, `SafeRemoval`).
+
+**Removal**: one item a cleanup took off its place, as the report and the trees record it (`Removal`), whether deleted or moved to the Trash. _Avoid_: deletion.
+
 ## Suggestions
 
 **Suggestion**: a cleanup plan a `suggest` job prepared, waiting for a person to approve or dismiss it. _Avoid_: pending cleanup, proposal.

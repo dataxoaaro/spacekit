@@ -32,7 +32,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
 | `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
 | `Safety/` | `SafetyGuard`, the single gate for removals, and `RuleScope` (where a rule applies, shared by the guard, `RuleIndex` and `RuleEngine` so they agree). See [SAFETY.md](SAFETY.md). |
-| `Cleanup/` | `CleanupPlan`, `CleanupReview` (the guard's verdict per row, unticked rows, totals and Trash wording; the only maker of a `ReviewedPlan`), `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `SafeRemoval` (deletion through directory handles under a checked folder, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove), `Journal`. |
+| `Cleanup/` | `CleanupPlan`, `CleanupReview` (the guard's verdict per row, unticked rows, totals and Trash wording; the only maker of a `ReviewedPlan`), `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `RemovalTarget` (one item's location, pinned identity, repository flags and size, read once for the guard and the removal), `Remover` (the Trash-or-delete decision, and the move or deletion checked against the target), `SafeRemoval` (deletion through checked directory handles, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove, staying on the item's volume), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
@@ -130,7 +130,10 @@ Finding / selection ──► CleanupPlan (each item carries its scan start)
 JobRunner (automatic) ─► AutomaticPlan      ReviewedPlan
                               └───────┬───────┘
                                       ▼
-   CleanupExecutor: for each item ─► SafetyGuard (again; an unshown warning skips) ─► budget ─► Trash / delete by handle ─► journal entry
+   CleanupExecutor: for each item ─► RemovalTarget (resolved once: folder, pinned dev+inode, repositories, size)
+                                         ─► Trash or delete ─► SafetyGuard (again; an unshown warning skips) ─► budget
+                                         ─► Remover: identity checked ─► trashItem + check what moved │ delete via handles, same volume
+                                         ─► journal entry
                     for each command ─► gates + trusted? ─► run without shell ─► measure freed ─► journal entry
                                       │
                                       ▼

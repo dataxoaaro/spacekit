@@ -9,6 +9,8 @@ public struct JobEvaluation: Sendable {
     public var eligible: [Finding]
     /// When the scan behind these findings started. Files changed after it weren't part of what was evaluated.
     public var scanStarted: Date
+    /// Problems with the job's rules as the analysis resolved them (`Analysis.ruleIssues`).
+    public var ruleIssues: [RuleIssue] = []
 
     public var matchedBytes: UInt64 { findings.reduce(0) { $0 &+ $1.size } }
     public var eligibleBytes: UInt64 { eligible.reduce(0) { $0 &+ $1.size } }
@@ -125,7 +127,8 @@ public struct JobRunner: Sendable {
             let items = finding.eligibleItems(olderThan: job.when.olderThan, keepRecent: job.when.keepRecent, now: now)
             return items.isEmpty ? nil : Finding(rule: finding.rule, items: items)
         }
-        return JobEvaluation(job: job, findings: analysis.findings, eligible: eligible, scanStarted: analysis.scanStarted)
+        return JobEvaluation(
+            job: job, findings: analysis.findings, eligible: eligible, scanStarted: analysis.scanStarted, ruleIssues: analysis.ruleIssues)
     }
 
     public func plan(for evaluation: JobEvaluation) -> CleanupPlan {
@@ -267,6 +270,7 @@ public struct JobRunner: Sendable {
                 log("  Uses your rule \(rule.id) from \(source) in place of the built-in one")
             }
             let result = run(job, now: now)
+            for issue in result.evaluation?.ruleIssues ?? [] { log("  \(issue.description)") }
             log("  \(result.summary)")
             if let problem = result.recordError { log("  \(problem)") }
             results.append(result)

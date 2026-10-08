@@ -108,11 +108,37 @@ public struct RuleEngine: Sendable {
     /// Bundles are opaque: never search inside them.
     static let bundleSuffixes = [".app", ".photoslibrary", ".bundle", ".framework", ".xcarchive", ".musiclibrary", ".tvlibrary"]
 
+    /// Problems with the rules as this engine resolved them: an override's paths it left out (`checkedOverride`).
+    public let issues: [RuleIssue]
+
     /// Rule and root paths are resolved through symlinks once here (`PathUtil.canonicalPattern`), because
     /// the scan tree holds resolved paths: a rule for `/tmp/x` must match a scan of `/tmp`, stored as `/private/tmp`.
     public init(rules: [Rule], devRoots: [String] = ScanSettings.defaultDevRoots) {
-        self.rules = rules.map(RuleEngine.canonical)
+        let checked = rules.map(RuleEngine.checkedOverride)
+        self.rules = checked.map(\.rule)
+        self.issues = checked.flatMap(\.issues)
         self.devRoots = devRoots.map { PathUtil.canonicalPattern($0) }
+    }
+
+    /// `canonical(rule)`; for an override, without the paths that no longer stay within the built-in rule it narrows,
+    /// each with an issue. The library checked the override when the rules loaded, but a folder on the way can change
+    /// before an analysis resolves it again: a symlink pointed elsewhere would move a literal path out of the built-in
+    /// glob. So the check is repeated here with the resolved paths the engine then uses.
+    static func checkedOverride(_ rule: Rule) -> (rule: Rule, issues: [RuleIssue]) {
+        var resolved = canonical(rule)
+        guard let narrowing = rule.narrowing else { return (resolved, []) }
+        let builtinPaths = narrowing.builtinPaths.map { PathUtil.canonicalPattern($0) }
+        let exclusions = narrowing.builtinExclusions.map { PathUtil.canonicalPattern($0) }
+        var issues: [RuleIssue] = []
+        resolved.paths = zip(rule.paths, resolved.paths).compactMap { written, path in
+            if RuleLibrary.staysWithin(canonical: path, builtinPaths: builtinPaths, exclusions: exclusions) { return path }
+            let message =
+                "leaves out the path '\(written)': it leads to \(path) now, outside the built-in rule it narrows (a folder on the "
+                + "way changed since the rules were loaded)"
+            issues.append(RuleIssue(severity: .error, source: rule.source ?? RuleLibrary.inlineSource, ruleID: rule.id, message: message))
+            return nil
+        }
+        return (resolved, issues)
     }
 
     static func canonical(_ rule: Rule) -> Rule {

@@ -72,6 +72,7 @@ public struct RuleLibrary: Sendable {
                         issues += problems
                         continue
                     }
+                    rule.narrowing = Rule.Narrowing(builtinPaths: original.paths, builtinExclusions: pathExclusions(original))
                 }
                 if let existing = byID[rule.id] {
                     let origin = PathUtil.abbreviate(existing.source ?? inlineSource)

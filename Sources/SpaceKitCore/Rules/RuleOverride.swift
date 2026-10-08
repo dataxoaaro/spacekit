@@ -100,30 +100,46 @@ extension RuleLibrary {
 
     /// The override's paths that name a location none of the built-in paths do, or one a built-in exclusion names.
     private static func pathProblems(_ builtin: Rule, _ override: Rule) -> [String] {
-        // Only exclusions written as paths name folders; `active_projects` and relative globs don't.
-        let exclusions = builtin.exclusions.filter { $0.hasPrefix("/") || $0.hasPrefix("~") }
+        let exclusions = pathExclusions(builtin)
         return override.paths.flatMap { path in
             let added = builtin.paths.contains { covers($0, path) } ? [] : ["adds the path '\(path)'"]
             return added + exclusions.filter { isInside(path, exclusion: $0) }.map { "names '\(path)' in its exclusion '\($0)'" }
         }
     }
 
+    /// A rule's exclusions written as paths, which name folders; `active_projects` and relative globs don't.
+    static func pathExclusions(_ rule: Rule) -> [String] {
+        rule.exclusions.filter { $0.hasPrefix("/") || $0.hasPrefix("~") }
+    }
+
     /// True when `path` names only locations `builtin` names, at the same depth. Both are compared where the engine
-    /// looks for them (`enginePath`), and each component of `path` must equal the built-in one or be a glob whose names
-    /// are a subset of its names: a built-in segment `X*` covers `X<more>*`. A deeper path would change the items the
-    /// built-in rule judges: `DerivedData/*` would weigh keepRecent per build folder instead of per project.
+    /// looks for them (through `PathUtil.canonicalPattern`, as `RuleEngine.canonical` resolves every rule path), and
+    /// each component of `path` must equal the built-in one or be a glob whose names are a subset of its names: a
+    /// built-in segment `X*` covers `X<more>*`. A deeper path would change the items the built-in rule judges:
+    /// `DerivedData/*` would weigh keepRecent per build folder instead of per project. Comparing the text instead would
+    /// let a symlinked folder inside a built-in path lead an override anywhere.
     static func covers(_ builtin: String, _ path: String) -> Bool {
-        let outer = PathUtil.components(enginePath(builtin))
-        let inner = PathUtil.components(enginePath(path))
+        covers(canonical: PathUtil.canonicalPattern(builtin), PathUtil.canonicalPattern(path))
+    }
+
+    /// `covers` for paths already resolved through `PathUtil.canonicalPattern`, as the engine holds them.
+    static func covers(canonical builtin: String, _ path: String) -> Bool {
+        let outer = PathUtil.components(compared(builtin))
+        let inner = PathUtil.components(compared(path))
         return outer.count == inner.count && zip(outer, inner).allSatisfy { covers(segment: $1, pattern: $0) }
     }
 
-    /// True when `path` is the location `exclusion` names or lies inside it. The engine leaves out only items an
-    /// exclusion names, so an override rooted at or below an excluded folder would hand out everything in it.
-    /// A `**` in the exclusion counts as holding everything below it.
+    /// True when `path` is the location `exclusion` names or lies inside it, both where the engine looks for them. The
+    /// engine leaves out only items an exclusion names, so an override rooted at or below an excluded folder would hand
+    /// out everything in it. A `**` in the exclusion counts as holding everything below it.
     static func isInside(_ path: String, exclusion: String) -> Bool {
-        let outer = PathUtil.components(enginePath(exclusion))
-        let inner = PathUtil.components(enginePath(path))
+        isInside(canonical: PathUtil.canonicalPattern(path), exclusion: PathUtil.canonicalPattern(exclusion))
+    }
+
+    /// `isInside` for paths already resolved through `PathUtil.canonicalPattern`, as the engine holds them.
+    static func isInside(canonical path: String, exclusion: String) -> Bool {
+        let outer = PathUtil.components(compared(exclusion))
+        let inner = PathUtil.components(compared(path))
         guard inner.count >= outer.count else { return false }
         for (pattern, segment) in zip(outer, inner) {
             if pattern == "**" { return true }
@@ -132,11 +148,17 @@ extension RuleLibrary {
         return true
     }
 
-    /// `path` as the engine looks for it: through `PathUtil.canonicalPattern`, the function `RuleEngine.canonical` runs
-    /// every rule path through, then expanded as `PathUtil.glob` expands it, and case-folded as the guard compares paths.
-    /// Comparing the text instead would let a symlinked folder inside a built-in path lead an override anywhere.
-    private static func enginePath(_ path: String) -> String {
-        PathUtil.comparisonKey(PathUtil.expand(PathUtil.canonicalPattern(path)))
+    /// True when an override's `path` stays within the built-in rule it narrows: one of `builtinPaths` covers it and
+    /// none of `exclusions` holds it. All three are resolved through `PathUtil.canonicalPattern`, as the engine holds
+    /// them, so the engine can check again with the paths it is about to use.
+    static func staysWithin(canonical path: String, builtinPaths: [String], exclusions: [String]) -> Bool {
+        builtinPaths.contains { covers(canonical: $0, path) } && !exclusions.contains { isInside(canonical: path, exclusion: $0) }
+    }
+
+    /// A resolved rule path as it is compared: expanded as `PathUtil.glob` expands it, and case-folded as the guard
+    /// compares paths.
+    private static func compared(_ canonical: String) -> String {
+        PathUtil.comparisonKey(PathUtil.expand(canonical))
     }
 
     /// True when every name `segment` matches, `pattern` matches too, the way glob(3) expands a rule path: one

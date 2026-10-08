@@ -12,9 +12,10 @@ extension RuleLibrary {
     ///
     /// Jobs and the starter config name rules by id, and jobs from 🟢 rules run automatically. So a file in the user
     /// rules folder, which any program running as the person can write, would otherwise widen what an existing
-    /// automatic job removes just by reusing an id. A replacement may only narrow the built-in rule: add exclusions,
-    /// raise its thresholds and ages, keep or raise its safety level, drop its action. Turning it into a
-    /// `protected` rule only adds protection, so that is always allowed. Anything new has to be a rule of its own.
+    /// automatic job removes just by reusing an id. A replacement may only narrow the built-in rule: keep its paths
+    /// within the built-in ones, add exclusions, raise its thresholds and ages, schedule its jobs less often, keep or
+    /// raise its safety level, drop its action. Turning it into a `protected` rule only adds protection, so that is
+    /// always allowed. Anything new has to be a rule of its own.
     static func overrideProblems(builtin: Rule, replacement: Rule) -> [String] {
         if builtin.safety.level == .protected {
             return ["can't replace the built-in protected rule with the same id; protected rules keep SpaceKit from touching that data"]
@@ -37,7 +38,9 @@ extension RuleLibrary {
 
     private static func locationProblems(_ builtin: Rule, _ replacement: Rule) -> [String] {
         var problems: [String] = []
-        for path in replacement.paths where !builtin.paths.contains(path) { problems.append("adds the path '\(path)'") }
+        for path in replacement.paths where !builtin.paths.contains(where: { covers($0, path) }) {
+            problems.append("adds the path '\(path)'")
+        }
         switch (builtin.match, replacement.match) {
         case (nil, .some):
             problems.append("adds a name pattern (match)")
@@ -81,10 +84,13 @@ extension RuleLibrary {
             lowered("olderThan", from: original?.olderThan, to: policy?.olderThan),
             lowered("keepRecent", from: original?.keepRecent, to: policy?.keepRecent),
         ].compactMap { $0 }
-        let mode = Job.suggested(for: replacement).mode
-        let originalMode = Job.suggested(for: builtin).mode
-        if mode > originalMode {
-            problems.append("makes jobs from it start in \(mode.rawValue) mode instead of \(originalMode.rawValue)")
+        let job = Job.suggested(for: replacement)
+        let originalJob = Job.suggested(for: builtin)
+        if job.mode > originalJob.mode {
+            problems.append("makes jobs from it start in \(job.mode.rawValue) mode instead of \(originalJob.mode.rawValue)")
+        }
+        if job.schedule.every < originalJob.schedule.every {
+            problems.append("makes jobs from it run \(job.schedule.every.rawValue) instead of \(originalJob.schedule.every.rawValue)")
         }
         return problems
     }
@@ -93,5 +99,34 @@ extension RuleLibrary {
     private static func lowered<Limit: Comparable>(_ name: String, from original: Limit?, to replacement: Limit?) -> String? {
         guard let original, replacement.map({ $0 < original }) ?? true else { return nil }
         return "lowers its policy \(name) below \(original)"
+    }
+
+    /// True when every location `path` describes lies in one `builtin` describes. Both are compared as the guard
+    /// compares paths (`~` and `$HOME` expanded, `.`, `..` and extra slashes collapsed, case-folded), and `path` may be
+    /// the same location, one inside it, or a glob whose names are a subset: a built-in segment `X*` covers `X<more>*`.
+    static func covers(_ builtin: String, _ path: String) -> Bool {
+        let outer = PathUtil.components(comparable(builtin))
+        let inner = PathUtil.components(comparable(path))
+        guard inner.count >= outer.count else { return false }
+        for (pattern, segment) in zip(outer, inner) {
+            if pattern == "**" { return true }
+            guard covers(segment: segment, pattern: pattern) else { return false }
+        }
+        return true
+    }
+
+    private static func comparable(_ path: String) -> String {
+        PathUtil.comparisonKey(PathUtil.expand(path))
+    }
+
+    /// True when every name `segment` matches, `pattern` matches too. `**` crosses folders and may match none, so a
+    /// segment holding it is covered only by the same segment.
+    private static func covers(segment: Substring, pattern: Substring) -> Bool {
+        if segment == pattern { return true }
+        if segment.contains("**") { return false }
+        if !PathUtil.isGlob(String(segment)) { return fnmatch(String(pattern), String(segment), 0) == 0 }
+        guard pattern.hasSuffix("*"), !pattern.hasSuffix("**") else { return false }
+        let prefix = pattern.dropLast()
+        return !PathUtil.isGlob(String(prefix)) && segment.hasPrefix(prefix)
     }
 }

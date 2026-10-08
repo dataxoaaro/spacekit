@@ -176,7 +176,21 @@ public enum Weekday: String, Codable, Sendable, CaseIterable {
 
 /// When a job runs. YAML accepts `weekly`, `daily at 03:00`, or an object `{every: weekly, weekday: sunday, at: "03:00"}`.
 public struct Schedule: Codable, Sendable, Hashable, CustomStringConvertible {
-    public enum Frequency: String, Codable, Sendable, CaseIterable { case hourly, daily, weekly, monthly }
+    /// Ordered by the time between runs: `hourly` < `daily` < `weekly` < `monthly`.
+    public enum Frequency: String, Codable, Sendable, CaseIterable, Comparable {
+        case hourly, daily, weekly, monthly
+
+        public static func < (lhs: Frequency, rhs: Frequency) -> Bool { lhs.period < rhs.period }
+
+        private var period: TimeInterval {
+            switch self {
+            case .hourly: return 3_600
+            case .daily: return 86_400
+            case .weekly: return 7 * 86_400
+            case .monthly: return 28 * 86_400
+            }
+        }
+    }
 
     public var every: Frequency
     /// `HH:mm`, local time.

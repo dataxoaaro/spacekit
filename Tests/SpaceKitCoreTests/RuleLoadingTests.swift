@@ -133,7 +133,7 @@ struct RuleLoadingTests {
             path: ~/.base/cache
             safety: review
             exclusions: ["*/keep"]
-            policy: { threshold: 50GB, olderThan: 90d, mode: observe }
+            policy: { threshold: 50GB, olderThan: 90d, mode: observe, schedule: monthly }
             action:
               command: [brew, cleanup]
             """)
@@ -179,6 +179,10 @@ struct RuleLoadingTests {
             ),
             ("base.cache", "path: ~/.base/cache\nsafety: safe\naction:\n  command: [brew, cleanup, --prune=all]", "command"),
             ("base.cache", "path: ~/.base/cache\nsafety: safe\naction: remove", "remove"),
+            (
+                "base.cache", "path: ~/.base/cache\nsafety: safe\npolicy: { schedule: hourly }\naction:\n  command: [brew, cleanup]",
+                "hourly"
+            ),
             ("base.cache", "path: ~/.base/cache\nmatch: { names: [cache] }\nsafety: safe\naction:\n  command: [brew, cleanup]", "pattern"),
             ("base.builds", "match: { names: [build, dist], sibling: [Makefile] }\nsafety: safe\naction: remove", "dist"),
             ("base.builds", "match: { names: [build] }\nsafety: safe\naction: remove", "pattern"),
@@ -192,6 +196,46 @@ struct RuleLoadingTests {
             #expect(found.contains { $0.message.contains(problem) }, "\(id) / \(problem): \(found.map(\.message))")
             #expect(library.rule(id: id)?.isBuiltin == true, "\(id) / \(problem)")
             #expect(library.overrides.isEmpty)
+        }
+    }
+
+    @Test("An override's paths may be the built-in paths in another spelling, inside them, or narrower globs; nothing wider")
+    func overridePaths() throws {
+        let builtin = BuiltinRules(files: [
+            RuleFileText(
+                source: "built-in rules/studio.yaml",
+                yaml: """
+                    id: base.studio
+                    name: Studio caches
+                    path: [~/.base/models, ~/Library/Caches/Google/AndroidStudio*]
+                    safety: safe
+                    action: remove
+                    """)
+        ])
+        func problems(_ paths: [String]) throws -> [String] {
+            let tree = try TempTree()
+            try tree.directory("user")
+            let list = paths.map { "\"\($0)\"" }.joined(separator: ", ")
+            try "id: base.studio\nname: Mine\npath: [\(list)]\nsafety: safe\naction: remove\n".write(
+                toFile: tree.path("user/studio.yaml"), atomically: true, encoding: .utf8)
+            let library = RuleLibrary.load(builtin: builtin, directories: [tree.path("user")])
+            return library.issues.filter { $0.severity == .error && $0.ruleID == "base.studio" }.map(\.message)
+        }
+        let home = PathUtil.home
+        for narrower in [
+            ["~/.base/models/"], ["\(home)/.base/models"], ["~/.BASE/Models"], ["~//.base/./models"],
+            ["~/.base/models/llama"], ["~/Library/Caches/Google/AndroidStudio2023*"], ["~/Library/Caches/Google/androidstudio2023.1"],
+            ["~/Library/Caches/Google/AndroidStudio2023.1/caches"], ["~/Library/Caches/Google/AndroidStudio*/log"],
+        ] {
+            let found = try problems(narrower)
+            #expect(found.isEmpty, "\(narrower): \(found)")
+        }
+        for wider in [
+            "~/.base", "~/.base/models-old", "~/.base/models/../../Documents", "~/Library/Caches/Google/*",
+            "~/Library/Caches/Google/IntelliJ*", "~/Library/Caches/Google/**", "~/Library/Caches/Google/Android*",
+            "~/Library/Caches/Google/AndroidStudio**/x", "/Users/someone-else/.base/models",
+        ] {
+            #expect(try problems([wider]).contains { $0.contains("adds the path") }, "\(wider)")
         }
     }
 

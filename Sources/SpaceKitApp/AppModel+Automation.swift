@@ -7,8 +7,9 @@ extension AppModel {
 
     var jobRunner: JobRunner { JobRunner(context: context) }
 
-    /// Evaluates a job in the background and opens the review sheet with its plan. A job whose conditions aren't
-    /// met doesn't run, as in the CLI and the TUI: the check is recorded and its result shown.
+    /// Evaluates a job in the background and opens the review sheet with its plan. A job below its size threshold
+    /// doesn't run unless the person chooses Run Anyway, as in the CLI (`--force`) and the TUI; a skipped run records
+    /// nothing (`review(_:title:)`).
     func previewJob(_ job: Job) {
         let runner = jobRunner
         Task {

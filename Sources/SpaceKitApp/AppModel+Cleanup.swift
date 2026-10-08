@@ -32,12 +32,6 @@ extension AppModel {
         pendingCleanup = PendingCleanup(title: title, plan: plan, run: run)
     }
 
-    /// A plan for items picked from the map or the cleanup list, moved to the Trash. Each item carries the start time
-    /// of the scan it came from, so loose files changed since aren't touched, even in a list kept across rescans.
-    func manualPlan(_ items: [CleanupItem]) -> CleanupPlan {
-        CleanupPlan(items: items, useTrash: true)
-    }
-
     /// `finding` is one of the current analysis's findings; its items carry that analysis's scan start time, which is
     /// the Explore scan's unless the analysis scanned the rule locations itself.
     func reviewFinding(_ finding: Finding, items: [FindingItem]? = nil) {

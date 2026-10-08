@@ -46,6 +46,8 @@ public struct CleanupReview: Sendable {
     private let trashed: Set<String>
     /// Where each item was judged, by id: the reviewed plan binds the person's go-ahead to it.
     private let locations: [String: RemovalTarget.Location]
+    /// Where each command's tool was found, by id, for the same reason. Missing for a tool that isn't installed.
+    private let executables: [String: String]
     /// Decides where items go, for the wording.
     private let remover: Remover
     /// The executor the verdicts came from; only it runs the reviewed plan.
@@ -59,7 +61,14 @@ public struct CleanupReview: Sendable {
         items = targets.map { item, target in
             Row(subject: item, verdict: executor.verdict(for: target, ruleID: item.ruleID, context: .manual), key: .item(item.id))
         }
-        commands = plan.commands.map { Row(subject: $0, verdict: executor.verdict(for: $0, context: .manual), key: .command($0.id)) }
+        // Each tool looked up once, for the verdict and for the record, so the review shows the program a run would start.
+        let found = plan.commands.map { ($0, executor.runner.locate($0.arguments.first ?? "")) }
+        commands = found.map { command, executable in
+            let verdict = executor.verdict(for: command, context: .manual, executable: executable)
+            return Row(subject: command, verdict: verdict, key: .command(command.id))
+        }
+        let located = found.compactMap { command, executable in executable.map { (command.id, $0) } }
+        executables = Dictionary(located, uniquingKeysWith: { first, _ in first })
         manualSteps = plan.manualSteps
         useTrash = plan.useTrash
         canChooseTrash = remover.method(inTrash: false, useTrash: false, rule: nil, context: .manual) == .delete
@@ -157,10 +166,14 @@ public struct CleanupReview: Sendable {
     /// it was judged at. The executor holds the run to that record: a reason the review didn't show for the row, or an
     /// item no longer at that location, skips the row as changed since the review.
     public func acknowledge(acceptingWarnings: Bool) -> ReviewedPlan {
-        func record<Subject>(_ rows: [Row<Subject>], location: (Row<Subject>) -> RemovalTarget.Location?) -> [String: ReviewRecord.Row] {
+        func record<Subject>(
+            _ rows: [Row<Subject>], location: (Row<Subject>) -> RemovalTarget.Location? = { _ in nil },
+            executable: (Row<Subject>) -> String? = { _ in nil }
+        ) -> [String: ReviewRecord.Row] {
             let selected = rows.filter(isIncluded).map { row in
                 let accepted = acceptingWarnings || !row.needsAcknowledgement
-                return (row.id, ReviewRecord.Row(shown: Set(row.verdict.reasons), accepted: accepted, location: location(row)))
+                let shown = Set(row.verdict.reasons)
+                return (row.id, ReviewRecord.Row(shown: shown, accepted: accepted, location: location(row), executable: executable(row)))
             }
             // Two rows with one id (the same path listed twice) hold the run to what both of them showed.
             return Dictionary(selected, uniquingKeysWith: { $0.both($1) })
@@ -168,7 +181,8 @@ public struct CleanupReview: Sendable {
         // The plan says what the removal module will do: with `safety.trash: always`, the Trash whatever `useTrash` says.
         let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
         let review = ReviewRecord(
-            settingsID: settingsID, items: record(items) { locations[$0.id] }, commands: record(commands) { _ in nil })
+            settingsID: settingsID, items: record(items, location: { locations[$0.id] }),
+            commands: record(commands, executable: { executables[$0.id] }))
         return ReviewedPlan(plan: plan, review: review)
     }
 }
@@ -209,14 +223,17 @@ struct ReviewRecord: Sendable {
         let accepted: Bool
         /// Where the review judged an item. `nil` for a command.
         let location: RemovalTarget.Location?
+        /// Where the review found a command's tool, the program its warnings named. `nil` for an item, or a tool that
+        /// wasn't installed.
+        let executable: String?
 
         /// What two rows for the same thing both showed and the person accepted for both.
         func both(_ other: Row) -> Row {
-            Row(shown: shown.intersection(other.shown), accepted: accepted && other.accepted, location: location)
+            Row(shown: shown.intersection(other.shown), accepted: accepted && other.accepted, location: location, executable: executable)
         }
 
         /// A row with no record: everything about it is unseen.
-        static let unseen = Row(shown: [], accepted: false, location: nil)
+        static let unseen = Row(shown: [], accepted: false, location: nil, executable: nil)
 
         /// Whether `reason`, raised at removal time, is one the review showed: the same text, or the same text with
         /// every number in it no larger. An item shown as holding 12% of the disk is the same warning at 11%, not

@@ -281,6 +281,77 @@ struct CommandTrustTests {
         }
     }
 
+    /// The attacker SpaceKit defends against can write rule files and the config alike, so `safety.allowedCommands`
+    /// can't tell a command the person wants from one planted next to it. Their acknowledgement can, once they see what
+    /// would run.
+    @Test("A command from your own rule always needs acknowledgement, which sees its full arguments and resolved path")
+    func ownRuleCommandsNeedAcknowledgement() throws {
+        let tree = try TempTree()
+        let real = try program(tree, "tools/tidy-1.2")
+        try tree.directory("bin")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("bin/tidy"), withDestinationPath: real)
+        let arguments = ["tidy", "--all", "dir with space", "\u{1B}[2Khidden"]
+        let mine = rule("mine", builtin: false, command: arguments)
+        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "mine", arguments: arguments, estimatedBytes: 1)])
+        let runner = RecordingRunner(searchPath: [tree.path("bin")])
+        let executor = executor(tree, rules: [mine], runner: runner, allowed: ["tidy"])
+
+        let review = CleanupReview(plan, executor: executor)
+        let row = try #require(review.commands.first)
+        #expect(row.verdict.decision == .confirm)
+        #expect(review.needsAcknowledgement)
+        let reason = row.verdict.reasons.joined(separator: "\n")
+        #expect(reason.contains("tidy --all 'dir with space' \\u{1B}[2Khidden"), "every argument, control characters made visible")
+        #expect(reason.contains(tree.path("bin/tidy")) && reason.contains(real), "where it was found and the file that is")
+        #expect(!reason.unicodeScalars.contains { $0.value == 0x1B })
+
+        // `--yes` alone: selected, left undone, and reported.
+        let unacknowledged = executor.execute(review.acknowledge(acceptingWarnings: false), dryRun: false)
+        #expect(skipReason(unacknowledged.commands.first?.outcome)?.hasPrefix(CleanupExecutor.notAccepted) == true)
+        #expect(runner.calls.isEmpty)
+        let acknowledged = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
+        #expect(skipReason(acknowledged.commands.first?.outcome) == nil)
+        #expect(runner.calls == [arguments])
+
+        // The same tool in a built-in rule runs without one.
+        let builtin = rule("mine", builtin: true, command: arguments)
+        let trusted = CleanupReview(plan, executor: self.executor(tree, rules: [builtin], runner: runner, allowed: ["tidy"]))
+        #expect(trusted.commands.first?.verdict.decision == .allow)
+    }
+
+    @Test("A command your review saw at one path doesn't run a program found at another")
+    func reviewedExecutableBound() throws {
+        let tree = try TempTree()
+        try program(tree, "bin2/tidy")
+        try tree.directory("bin1")
+        for builtin in [false, true] {
+            let tool = rule("tool", builtin: builtin, command: ["tidy", "--all"])
+            let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: ["tidy", "--all"], estimatedBytes: 1)])
+            let runner = RecordingRunner(searchPath: [tree.path("bin1"), tree.path("bin2")])
+            let executor = executor(tree, rules: [tool], runner: runner, allowed: ["tidy"])
+            let reviewed = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
+            // Found earlier on the search path after the review. Only a digit differs, which a share of the disk may do.
+            try program(tree, "bin1/tidy")
+            defer { unlink(tree.path("bin1/tidy")) }
+            let report = executor.execute(reviewed, dryRun: false)
+            #expect(skipReason(report.commands.first?.outcome)?.hasPrefix(CleanupExecutor.changedSinceReview) == true, "\(builtin)")
+            #expect(runner.calls.isEmpty)
+        }
+    }
+
+    @Test("Your review shows a launcher behind an allowed name as blocked")
+    func reviewBlocksLauncherBehindName() throws {
+        let tree = try TempTree()
+        try tree.directory("bin")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("bin/cleanup-tool"), withDestinationPath: "/bin/sh")
+        let tool = rule("tool", builtin: false, command: ["cleanup-tool", "-c", "true"])
+        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: ["cleanup-tool", "-c", "true"], estimatedBytes: 1)])
+        let runner = RecordingRunner(searchPath: [tree.path("bin")])
+        let review = CleanupReview(plan, executor: executor(tree, rules: [tool], runner: runner, allowed: ["cleanup-tool"]))
+        #expect(review.commands.first?.verdict.isBlocked == true)
+        #expect(review.commands.first?.verdict.reasons.contains { $0.contains("'sh'") } == true)
+    }
+
     @Test("What a command frees is charged to the run's budget; the next command that doesn't fit isn't started")
     func budgetCharging() throws {
         let tree = try TempTree()

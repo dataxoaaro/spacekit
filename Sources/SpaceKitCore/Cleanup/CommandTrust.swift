@@ -51,7 +51,8 @@ public struct CommandTrust: Sendable {
     }
 
     /// `safety.allowedCommands`: executables allowed beyond the trusted list, and the only ones a person's own rules
-    /// may run. A code launcher listed here never counts.
+    /// may run, each time only once the person has acknowledged the command. A code launcher's name listed here
+    /// doesn't count.
     public let allowedCommands: Set<String>
 
     public init(allowedCommands: Set<String>) {
@@ -81,7 +82,8 @@ public struct CommandTrust: Sendable {
     }
 
     /// Built-in rules may use `trustedCommands`; every other rule only `allowedCommands`, and only in manual runs.
-    /// A code launcher never counts as allowed, whoever lists it.
+    /// A code launcher's name is refused even when listed; that is a backstop for mistakes, not the barrier against a
+    /// planted command, which is the person's acknowledgement (`ownRuleWarning`).
     func executableRefusal(_ executable: String, isBuiltin: Bool, context: CleanupContext) -> String? {
         guard Shell.isBareName(executable) else {
             return "Commands must name a tool by its bare name, not a path: '\(executable)'"
@@ -98,26 +100,39 @@ public struct CommandTrust: Sendable {
         return CommandTrust.untrustedRuleCommand(executable)
     }
 
-    /// Why the program a command found may not start, checked right before it would: the name may run, but the file
-    /// may not be what the name says, or the tool would act on another machine. `arguments` is the command, its first
-    /// the bare name; `executable` is where that was found.
-    func launchRefusal(_ arguments: [String], at executable: String, isBuiltin: Bool, runner: any ProcessRunner, kind: Shell.RunKind)
-        -> String?
-    {
-        let name = arguments.first ?? ""
-        if !(isBuiltin && CommandTrust.trustedCommands.contains(name)),
-            let refusal = launcherIdentityRefusal(name, at: executable, runner: runner)
-        {
-            return refusal
+    /// Why the program found for `command` at `executable` may not run, or `nil`: the file checks of
+    /// `launcherIdentityRefusal`, for every command but a built-in rule's trusted tool, whose name is fixed in the binary
+    /// and some of which (`npm`) are scripts a launcher runs. Nothing to check while the tool isn't installed.
+    func programRefusal(_ command: PlannedCommand, rule: Rule, at executable: String?, runner: any ProcessRunner) -> String? {
+        guard let executable, let name = command.arguments.first, !(rule.isBuiltin && CommandTrust.trustedCommands.contains(name)) else {
+            return nil
         }
-        return name == "docker" ? dockerRefusal(arguments, docker: DockerCLI(path: executable, runner: runner, kind: kind)) : nil
+        return launcherIdentityRefusal(name, at: executable, runner: runner)
+    }
+
+    /// The warning every command from a rule outside the built-in library carries in a manual run, so it never runs
+    /// without the person's acknowledgement (`--yes` alone skips it). Whoever can write such a rule can write the config
+    /// too, so `safety.allowedCommands` and the launcher names are only a backstop: the person reading the whole command
+    /// and the file it starts is the barrier. Automatic runs refuse these commands outright (`executableRefusal`).
+    func ownRuleWarning(_ command: PlannedCommand, rule: Rule, context: CleanupContext, at executable: String?) -> String? {
+        guard !rule.isBuiltin, !context.isAutomatic else { return nil }
+        let program: String
+        if let executable {
+            let real = PathUtil.realpath(executable) ?? executable
+            program = real == executable ? executable : "\(executable), which is \(real)"
+        } else {
+            program = "nothing: '\(command.arguments.first ?? "")' isn't installed"
+        }
+        return "Runs \(TerminalText.sanitize(command.displayString)) with \(TerminalText.sanitize(program)), from your own rule "
+            + "\(TerminalText.sanitize(rule.id)), not SpaceKit's built-in library. SpaceKit can't tell what it does; accept it "
+            + "only if you know this command"
     }
 
     /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
     /// executor's refusal say the same thing.
     static func untrustedRuleCommand(_ executable: String) -> String {
         "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
-            + "It runs only in manual runs, and only if you add it to safety.allowedCommands"
+            + "It runs only in manual runs, only if you add it to safety.allowedCommands, and each time only once you accept it in the review"
     }
 
     /// What validating a rule says about one of its commands: errors keep the rule from loading, warnings say what

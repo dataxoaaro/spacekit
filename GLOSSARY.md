@@ -12,13 +12,15 @@
 
 **Built-in rule**: a rule compiled into SpaceKit from the repository's `rules/` folder (`BuiltinRules.embedded`), which may run the tools on the built-in trusted list without configuration; only a debug build's `SPACEKIT_RULES_DIR` replaces them. _Avoid_: default rule, system rule, bundled rule.
 
-**User rule**: a rule loaded from a rule folder on disk (the user rules folder or `rules.directories`); its commands run only when listed in `safety.allowedCommands` and only in manual runs. _Avoid_: custom rule, third-party rule.
+**User rule**: a rule loaded from a rule folder on disk (the user rules folder or `rules.directories`); its commands run only when listed in `safety.allowedCommands`, only in manual runs, and each time only once the person accepts the command's warning. _Avoid_: custom rule, third-party rule.
 
 **Override**: a user rule with a built-in rule's id, loaded in its place; it may only narrow the built-in rule (paths within the built-in paths, added exclusions, higher thresholds, ages or safety level, a less frequent schedule). _Avoid_: replacement rule, customisation.
 
 **Command trust**: the module (`CommandTrust`) that decides whether a rule's tool command runs, from the rule's origin, the kind of run and the executable policy. _Avoid_: command allowlist (only part of it).
 
-**Executable policy**: which executables may run: the built-in trusted list (built-in rules only), `safety.allowedCommands`, and the code launchers neither may grant. _Avoid_: whitelist.
+**Executable policy**: which executables may run: the built-in trusted list (built-in rules only), `safety.allowedCommands`, and the code launchers neither may grant; for a user rule's command a backstop behind the person's acknowledgement. _Avoid_: whitelist.
+
+**Own-rule warning**: the warning every user rule's command carries in a manual run (`CommandTrust.ownRuleWarning`), naming all its arguments and the file its tool was found at; it is never allowed outright, so `--yes` alone doesn't run it. _Avoid_: command confirmation.
 
 **Code launcher**: an executable that runs whatever code or program its arguments or configuration name (a shell, an interpreter, `env`, `xargs`, `find`, `open`, `xcrun`, `git`, `rsync`); `safety.allowedCommands` can't list one in any spelling, and a tool whose real file has a launcher's name, or is a script a launcher runs, is refused when it would start. _Avoid_: interpreter (too narrow), dangerous command.
 

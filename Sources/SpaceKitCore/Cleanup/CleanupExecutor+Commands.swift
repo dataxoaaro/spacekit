@@ -2,8 +2,14 @@ import Foundation
 
 extension CleanupExecutor {
     /// Checks one tool command without running it: the same gates as items (root, config, rule safety, the guard
-    /// for the item an `itemCommand` names), plus which executables may run at all.
+    /// for the item an `itemCommand` names), plus which executables may run at all, judged at the place its tool is
+    /// found now.
     public func verdict(for command: PlannedCommand, context: CleanupContext) -> SafetyVerdict {
+        verdict(for: command, context: context, executable: runner.locate(command.arguments.first ?? ""))
+    }
+
+    /// `executable`: where the command's tool is found, the program a run would start; `nil` when it isn't installed.
+    func verdict(for command: PlannedCommand, context: CleanupContext, executable: String?) -> SafetyVerdict {
         var verdict = SafetyVerdict.allow
         refuseIfConfigInvalid(&verdict)
         if safety.isRunningAsRoot {
@@ -17,6 +23,10 @@ extension CleanupExecutor {
             verdict.raise(.block, "The command no longer matches rule \(rule.id); refresh the plan")
         }
         for reason in commandTrust.refusals(command, rule: rule, context: context) { verdict.raise(.block, reason) }
+        if let refusal = commandTrust.programRefusal(command, rule: rule, at: executable, runner: runner) { verdict.raise(.block, refusal) }
+        if let warning = commandTrust.ownRuleWarning(command, rule: rule, context: context, at: executable) {
+            verdict.raise(.confirm, warning)
+        }
 
         if let itemPath = command.itemPath {
             let target = RemovalTarget.at(
@@ -40,6 +50,12 @@ extension CleanupExecutor {
         return verdict
     }
 
+    /// Why a reviewed command doesn't run: its tool isn't found where the review found it.
+    static func foundElsewhere(_ name: String, now executable: String?) -> String {
+        let now = executable.map { "is found at \(TerminalText.sanitize($0)) now" } ?? "isn't installed any more"
+        return "'\(TerminalText.sanitize(name))' \(now), not where you reviewed it"
+    }
+
     /// What the rule says this command is now. A plan's command that differs (an edited rule, an old suggestion)
     /// doesn't run.
     func expectedArguments(for command: PlannedCommand, rule: Rule) -> [String]? {
@@ -53,16 +69,23 @@ extension CleanupExecutor {
     }
 
     /// `reviewed`: what the person's review showed for this command; `nil` in an automatic run.
+    ///
+    /// The tool is looked up once: the verdict judges the program found, and that program is the one started.
     func runCommand(
         _ command: PlannedCommand, context: CleanupContext, reviewed: ReviewRecord.Row?, run: inout Run
     ) -> (CleanupOutcome, String) {
-        if let refused = CleanupExecutor.refusal(verdict(for: command, context: context), reviewed: reviewed) { return (refused, "") }
+        let name = command.arguments.first ?? ""
+        let found = runner.locate(name)
+        if let reviewed, reviewed.executable != found {
+            return (.skipped(reason: CleanupExecutor.changedSinceReview + CleanupExecutor.foundElsewhere(name, now: found)), "")
+        }
+        let verdict = verdict(for: command, context: context, executable: found)
+        if let refused = CleanupExecutor.refusal(verdict, reviewed: reviewed) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
-        let name = command.arguments[0]
-        guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
-        let isBuiltin = rules[command.ruleID]?.isBuiltin == true
+        guard let executable = found else { return (.skipped(reason: "'\(name)' is not installed"), "") }
         let kind: Shell.RunKind = context.isAutomatic ? .automatic : .manual
-        if let refusal = commandTrust.launchRefusal(command.arguments, at: executable, isBuiltin: isBuiltin, runner: runner, kind: kind) {
+        let docker = DockerCLI(path: executable, runner: runner, kind: kind)
+        if name == "docker", let refusal = commandTrust.dockerRefusal(command.arguments, docker: docker) {
             return (.skipped(reason: refusal), "")
         }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }

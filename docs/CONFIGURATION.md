@@ -36,7 +36,7 @@ safety:
   trash: always             # always: everything goes to the Trash · rules: regenerable caches may be deleted directly
   maxBytesPerRun: 100GB     # an automatic run never removes more than this
   protectedPaths: []        # your own never-touch list, e.g. [~/Work/client-archive]; adds to the built-in list
-  allowedCommands: []       # tools rule commands may run beyond the trusted list (plain names, no shells or launchers); your own rules' commands run by hand only
+  allowedCommands: []       # tools rule commands may run beyond the trusted list (plain names, no shells or launchers); your own rules' commands run by hand only, each after you accept it
 
 rules:
   disabled: []              # rule ids to ignore, e.g. [cache.user-caches]
@@ -99,13 +99,13 @@ schedule: { every: weekly, weekday: friday, at: "18:30" }
 
 A monthly job runs on `day` 1 to 28 (default 1), so it runs every month; a larger day is an error. Monthly text schedules always run on day 1; use the object form for another day.
 
-**Allowed commands.** `safety.allowedCommands` names tools by their plain names: ASCII letters, digits, `.`, `_`, `+` and `-` only, so no other spelling can reach a different program through the file system's case and Unicode folding (APFS finds `/bin/bash` for `baſh`). It can't name a program that runs whatever code or program its arguments or configuration give it:
+**Allowed commands.** `safety.allowedCommands` is a backstop list, not what makes a command safe to run. Anything that can write a rule file of yours can usually write this config file too, so a tool listed here still runs from your own rule only when you start a cleanup by hand and accept that command in the review, which shows every argument and the file the tool was found at (see [SAFETY.md](SAFETY.md#tool-commands)). Your acknowledgement is the barrier; the list catches mistakes. It names tools by their plain names: ASCII letters, digits, `.`, `_`, `+` and `-` only, so no other spelling can reach a different program through the file system's case and Unicode folding (APFS finds `/bin/bash` for `baſh`). It can't name a program that runs whatever code or program its arguments or configuration give it:
 
 - shells: `sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `mksh`, `oksh`, `csh`, `tcsh`, `pwsh`, `nu`
 - interpreters and runtimes: `python` and every `python…` name, `perl`, `ruby`, `irb`, `node`, `nodejs`, `deno`, `bun`, `bunx`, `npx`, `php`, `lua`, `luajit`, `tclsh`, `wish`, `expect`, `R`, `Rscript`, `java`, `jshell`, `julia`, `awk`, `gawk`, `nawk`, `mawk`, `sqlite3`, `osascript`, `swift`
 - tools that start another program or run commands: `env`, `arch`, `nohup`, `nice`, `time`, `timeout`, `gtimeout`, `caffeinate`, `sudo`, `su`, `doas`, `script`, `xargs`, `find`, `open`, `xcrun`, `make`, `gmake`, `git` (aliases and hooks), `ssh`, `rsync` (`-e`), `launchctl`, `sandbox-exec`, `watch`, `parallel`, `stdbuf`, `unbuffer`, `chroot`
 
-Names are compared with full Unicode case folding and without a version suffix, so `Python3`, `python3.12`, `perl5.30` and `baſh` count too. Listing one, or a name that isn't plain, makes the config invalid, for example `safety.allowedCommands: 'sh' runs whatever code its arguments name, so it can't be allowed`. When a tool you allowed is about to run, SpaceKit also checks the file it found: a symlink whose real file has a launcher's name (`cleanup-tool` leading to `/bin/sh`), or a script whose `#!` line runs a launcher (`#!/bin/sh`, `#!/usr/bin/env python3`), is refused. Commands from your own rules run only when you start a cleanup by hand, never in an automatic job (see [SAFETY.md](SAFETY.md#tool-commands)).
+Names are compared with full Unicode case folding and without a version suffix, so `Python3`, `python3.12`, `perl5.30` and `baſh` count too. Listing one, or a name that isn't plain, makes the config invalid, for example `safety.allowedCommands: 'sh' runs whatever code its arguments name, so it can't be allowed`. When a tool you allowed is about to run, SpaceKit also checks the file it found: a symlink whose real file has a launcher's name (`cleanup-tool` leading to `/bin/sh`), or a script whose `#!` line runs a launcher (`#!/bin/sh`, `#!/usr/bin/env python3`), is refused. These checks are a backstop too: a tool that runs code from its arguments under an ordinary name (`brew sh`, `npm exec`, `go run`, an editor's `-c`) passes them, which is why every command from your own rules waits for your acknowledgement. Commands from your own rules run only when you start a cleanup by hand, never in an automatic job.
 
 **`checkEvery`** is kept between 5 minutes and 24 hours: a shorter value is raised to 5m and a longer one lowered to 24h. `spacekit agent install --every` uses the same range and prints the interval it actually installed.
 

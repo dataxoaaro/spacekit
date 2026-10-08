@@ -66,18 +66,24 @@ public struct Removal: Sendable, Hashable {
 
     /// This removal for `tree`, a scan that started before the cleanup finished: the scan may have reached the item
     /// before it went, or after. `nil` when the tree doesn't show the item where it was (a file the tree counts only in
-    /// its folder's small files can't be told apart, so it is left too); without the move when the tree already shows
-    /// the item in the Trash, and without the loose files it already shows there. A partly deleted folder is rescanned
-    /// anyway.
+    /// its folder's small files can't be told apart, so it is left too). Only the removal from where it was is carried:
+    /// whether the scan saw a moved item or loose file in the Trash can't be told (it may have walked the Trash before
+    /// the move, or counted a small file only in the Trash's total), so the workspace scans the Trash again instead
+    /// (`trashFolders`). A partly deleted folder is rescanned anyway.
     func carried(over tree: ScanTree) -> Removal? {
         if partial { return self }
         if kind == .looseFiles {
             guard tree.node(at: path) != nil else { return nil }
-            return Removal(path: path, kind: kind, bytes: bytes, trashedFiles: trashedFiles.filter { !tree.shows($0) })
+            return Removal(path: path, kind: kind, bytes: bytes)
         }
         guard tree.shows(path) else { return nil }
-        guard let trashedTo, tree.shows(trashedTo) else { return self }
         return Removal(path: path, kind: kind, bytes: bytes)
+    }
+
+    /// The Trash folders this removal moved something into. Loose files name each file they moved (`trashedTo` is the
+    /// Trash folder itself for them); an item names where it went.
+    var trashFolders: Set<String> {
+        Set((kind == .looseFiles ? trashedFiles : [trashedTo].compactMap { $0 }).map(PathUtil.parent))
     }
 
     /// True if this removal took away everything at `path` (the item itself or a folder containing it).

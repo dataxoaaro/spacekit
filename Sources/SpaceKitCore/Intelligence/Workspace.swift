@@ -6,7 +6,8 @@ import Synchronization
 /// A `DirNode` can't be read while it changes, and background work reads the tree for seconds at a time: an analysis
 /// that reuses it, the app's map layout. The workspace is the one place that decides when the tree changes:
 /// - Background work reads the tree only inside `read`, or during a lease begun with `beginRead` on the front end's
-///   thread before nodes are handed over; either counts it as a reader.
+///   thread before nodes are handed over; either counts it as a reader. A tree being shown has none yet, so `show`
+///   applies the cleanups it must carry over at once.
 /// - Changes (a cleanup's removals, a re-synced folder) wait until no reader is left, then run in a step the front end
 ///   runs on its own thread (`Deliver`: the app's main actor, the TUI's loop), holding the gate so no reader starts
 ///   meanwhile. That thread may therefore read the tree directly, without `read`.
@@ -86,10 +87,13 @@ public final class Workspace: Sendable {
     /// dropped too: they were worked out on it. A cleanup that finished after this scan started is applied to it again
     /// (`Removal.carried(over:)`): the scan may have counted an item before it went, whether the cleanup was applied to
     /// the previous tree, still waited for it, or came while none was shown. Earlier ones are forgotten, since the scan
-    /// shows them already. Call it on the front end's own thread; the cleanups are applied in a step it delivers.
+    /// shows them already. Call it on the front end's own thread, before anything reads the new tree: the cleanups are
+    /// applied here and now, so an analysis started right after (and the History snapshot it records) never sees what
+    /// they removed. No event announces them; the state returned shows them. A Trash such a cleanup moved anything into
+    /// is scanned again and re-synced (`resync`), since whether this scan saw what arrived there can't be told.
     @discardableResult
     public func show(_ tree: ScanTree?) -> State {
-        let (state, drainNow) = gate.withLock { shared in
+        let (state, trashes) = gate.withLock { shared -> (State, [String: SpaceKitContext]) in
             shared.analysisProgress?.cancel()
             shared.analysisProgress = nil
             shared.analysisRun += 1
@@ -97,14 +101,28 @@ public final class Workspace: Sendable {
             shared.result = nil
             shared.refreshing = [:]
             shared.pending = []
-            if let tree {
-                shared.cleanups.removeAll { $0.finished <= tree.scanStarted }
-                shared.pending = shared.cleanups.map { .cleanup($0, carried: true) }
+            guard let tree else { return (shared.state, [:]) }
+            shared.cleanups.removeAll { $0.finished <= tree.scanStarted }
+            // Nothing reads this tree yet: readers counted now read the previous one, and new ones get it only after this.
+            var trashes: [String: SpaceKitContext] = [:]
+            for cleanup in shared.cleanups {
+                _ = Workspace.perform(cleanup, carried: true, on: &shared)
+                for folder in cleanup.removals.flatMap(\.trashFolders) where tree.covers(folder) { trashes[folder] = cleanup.context }
             }
-            return (shared.state, shared.readers == 0 && !shared.pending.isEmpty)
+            return (shared.state, trashes)
         }
-        if drainNow { deliver { [self] in drain() } }
+        for (folder, context) in trashes { rescan(folder, over: state, context: context) }
         return state
+    }
+
+    /// Scans `folder`, a Trash shown in `shown`, again and re-syncs it, re-evaluating the rules that describe it.
+    private func rescan(_ folder: String, over shown: State, context: SpaceKitContext) {
+        guard let options = shown.tree.map({ Trash.scanOptions($0.options) }) else { return }
+        let rules = Set(Trash.rules(in: context.library.rules, home: PathUtil.parent(folder)).map(\.id))
+        Thread.detachNewThread { [self] in
+            guard let fresh = try? Scanner(options: options).scan(folder), !fresh.root.flags.contains(.unreadable) else { return }
+            resync(fresh, at: folder, over: shown, context: context, reevaluating: rules)
+        }
     }
 
     /// Evaluates every rule of `context`, reusing the tree when it covers the locations they need, and records a
@@ -177,7 +195,7 @@ public final class Workspace: Sendable {
     func apply(_ report: CleanupReport, finished: Date, context: SpaceKitContext) {
         let cleanup = FinishedCleanup(
             removals: Removal.from(report), finished: finished, reevaluate: report.rulesToReevaluate, context: context)
-        enqueue(.cleanup(cleanup, carried: false))
+        enqueue(.cleanup(cleanup))
     }
 
     /// Replaces the folder at `path` in the trees that hold it with `fresh`, a scan of it (the Trash, emptied in
@@ -206,7 +224,7 @@ public final class Workspace: Sendable {
     private func enqueue(_ change: PendingChange) {
         let drainNow = gate.withLock { shared in
             // Kept for the next tree shown, which may have been scanned before the cleanup finished.
-            if case .cleanup(let cleanup, carried: false) = change { shared.cleanups.append(cleanup) }
+            if case .cleanup(let cleanup) = change { shared.cleanups.append(cleanup) }
             shared.pending.append(change)
             return shared.readers == 0
         }
@@ -235,15 +253,15 @@ public final class Workspace: Sendable {
     /// One change, made while the gate is held and no reader is left.
     private static func perform(_ pending: PendingChange, on shared: inout Shared) -> (Change?, Refresh?) {
         switch pending {
-        case .cleanup(let cleanup, let carried):
-            return perform(cleanup, carried: carried, on: &shared)
+        case .cleanup(let cleanup):
+            return perform(cleanup, carried: false, on: &shared)
         case .resync(let resync):
             return perform(resync, on: &shared)
         }
     }
 
-    /// A cleanup's removals. `carried`: the tree was scanned before the cleanup finished, so only what it still shows
-    /// where it was is removed.
+    /// A cleanup's removals. `carried`: the tree was scanned before the cleanup finished (`show`), so only what it still
+    /// shows where it was is removed.
     private static func perform(_ cleanup: FinishedCleanup, carried: Bool, on shared: inout Shared) -> (Change?, Refresh?) {
         let tree = shared.tree
         let removals = carried ? tree.map { tree in cleanup.removals.compactMap { $0.carried(over: tree) } } ?? [] : cleanup.removals
@@ -341,8 +359,7 @@ public final class Workspace: Sendable {
 
     /// A change waiting for the readers to finish; applied, it becomes a `Change`.
     private enum PendingChange: Sendable {
-        /// `carried`: the cleanup is applied again to a tree scanned before it finished (`show`).
-        case cleanup(FinishedCleanup, carried: Bool)
+        case cleanup(FinishedCleanup)
         case resync(Resync)
     }
 

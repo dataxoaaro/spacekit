@@ -376,13 +376,105 @@ struct WorkspaceTests {
         let expected = try fixture.scanHome()
         workspace.apply(report, finished: newer.scanStarted.addingTimeInterval(1), context: fixture.context)
 
-        workspace.show(newer)
+        // Applied as the tree is shown, before anything reads it.
+        let shown = workspace.show(newer)
+        #expect(shown.tree === newer && newer.node(at: fixture.tree.path("home/cache/c0")) == nil)
         held.release.signal()
-        #expect(recorder.wait { $0.changes.contains { $0.state.tree === newer } })
-
-        let change = try #require(recorder.changes.last)
-        #expect(change.removals.map(\.path) == [fixture.tree.path("home/cache/c0")])
         expectTree(workspace, is: newer, like: expected, fixture)
+    }
+
+    /// The app and the TUI show a finished scan and start its analysis at once. The analysis reads the tree, so a cleanup
+    /// waiting for readers would wait for it, and the analysis and its History snapshot would count what was removed.
+    @Test("A scan shown and analysed at once is analysed without what a cleanup carried over to it removed")
+    func showThenAnalyze() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let c0 = fixture.tree.path("home/cache/c0")
+        let sawRemoved = Mutex<Bool?>(nil)
+        let analyze: Workspace.Analyze = { context, tree, progress in
+            sawRemoved.withLock { $0 = tree?.node(at: c0) != nil }
+            return try context.analyzer.analyzeSync(reusing: tree, progress: progress)
+        }
+        let workspace = Workspace(deliver: recorder.deliver, analyze: analyze)
+        workspace.show(try fixture.scanHome())
+        let newer = try fixture.scanHome()
+        let report = fixture.clean(["c0"])
+        workspace.apply(report, finished: newer.scanStarted.addingTimeInterval(1), context: fixture.context)
+
+        workspace.show(newer)
+        workspace.analyze(fixture.context)
+
+        #expect(recorder.wait { !$0.analysed.isEmpty })
+        #expect(sawRemoved.withLock { $0 } == false)
+        let findings = fixture.items(try #require(recorder.analysed.last?.result).analysis.findings)
+        let fresh = try fixture.freshFindings()
+        #expect(findings[c0] == nil && findings == fresh)
+    }
+
+    /// A small file is counted only in its folder's total, so whether the scan already counted a trashed loose file in
+    /// the Trash can't be told: the Trash is scanned again instead.
+    @Test("Loose files a carried cleanup trashed are counted in the Trash once, from a fresh scan of it")
+    func carriedTrashedLooseFiles() throws {
+        let fixture = try Fixture()
+        let (cache, trash) = (fixture.tree.path("home/cache"), fixture.tree.path("home/.Trash"))
+        let names = ["a.tmp", "b.tmp"]
+        for name in names { try fixture.tree.file("home/cache/\(name)", bytes: 8_000) }
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        // The cleanup moves the files before the new scan reaches the Trash: it counts them there, in its small files.
+        for name in names { try FileManager.default.moveItem(atPath: "\(cache)/\(name)", toPath: "\(trash)/\(name)") }
+        let newer = try fixture.scanHome()
+        let expected = try fixture.scanHome()
+        var report = CleanupReport(dryRun: false)
+        let item = CleanupItem(path: cache, kind: .looseFiles, size: 16_000, looseFileNames: names, scanStarted: Date())
+        report.items = [(item, .removed(bytes: 16_000, trashedTo: trash))]
+        report.trashedLooseFiles[cache] = names.map { "\(trash)/\($0)" }
+        workspace.apply(report, finished: newer.scanStarted.addingTimeInterval(1), context: fixture.context)
+
+        workspace.show(newer)
+        usleep(200_000)
+
+        expectTree(workspace, is: newer, like: expected, fixture)
+    }
+
+    @Test("A carried removal keeps only the removal from where the item was, and names the Trash to scan again")
+    func carriedRemovals() throws {
+        let fixture = try Fixture()
+        try fixture.tree.file("home/cache/a.tmp", bytes: 8_000)
+        let tree = try fixture.scanHome()
+        let (cache, trash) = (fixture.tree.path("home/cache"), fixture.tree.path("home/.Trash"))
+        let item = Removal(path: "\(cache)/c0", kind: .directory, bytes: 1, trashedTo: "\(trash)/c0")
+        #expect(item.carried(over: tree) == Removal(path: "\(cache)/c0", kind: .directory, bytes: 1))
+        #expect(item.trashFolders == [trash])
+        let loose = Removal(path: cache, kind: .looseFiles, bytes: 8_000, trashedTo: trash, trashedFiles: ["\(trash)/a.tmp"])
+        #expect(loose.carried(over: tree) == Removal(path: cache, kind: .looseFiles, bytes: 8_000))
+        #expect(loose.trashFolders == [trash])
+        // Not where it was in this tree: nothing to carry.
+        #expect(Removal(path: "\(cache)/gone", kind: .directory, bytes: 1).carried(over: tree) == nil)
+    }
+
+    /// The scan may have walked the Trash before the cleanup moved an item there, so it shows the item nowhere once the
+    /// removal is carried over; the fresh scan of the Trash brings it back.
+    @Test("An item a carried cleanup trashed after the scan walked the Trash arrives there from a fresh scan of it")
+    func carriedTrashedItem() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        let newer = try fixture.scanHome()
+        let report = fixture.clean(["c1"], useTrash: true)
+        let expected = try fixture.scanHome()
+        let trashed = try #require(report.items.first?.outcome.trashedTo)
+        #expect(PathUtil.parent(trashed) == fixture.tree.path("home/.Trash"))
+        workspace.apply(report, finished: newer.scanStarted.addingTimeInterval(1), context: fixture.context)
+
+        workspace.show(newer)
+
+        let trash = fixture.tree.path("home/.Trash")
+        #expect(recorder.wait { $0.changes.contains { $0.rescanned == [trash] } })
+        expectTree(workspace, is: newer, like: expected, fixture)
+        workspace.read { #expect($0?.node(at: trashed) != nil) }
     }
 
     @Test("A cleanup that finished after the shown scan started changes only what that scan still shows where it was")
@@ -407,9 +499,10 @@ struct WorkspaceTests {
         workspace.apply(report, finished: newer.scanStarted.addingTimeInterval(1), context: fixture.context)
 
         workspace.show(newer)
+        // The Trash is scanned again, and holds what it held when the scan walked it.
+        usleep(200_000)
 
         // c0 is left as the scan found it, and c1 leaves the cache without arriving in the Trash a second time.
-        #expect(recorder.changes.filter { $0.state.tree === newer }.map { $0.removals.map(\.path) } == [[c1]])
         workspace.read { tree in
             #expect(tree?.inconsistencies() == [])
             #expect(tree?.root.size == before.root - c1Size)

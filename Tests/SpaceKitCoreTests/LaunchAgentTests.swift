@@ -64,6 +64,15 @@ struct LaunchAgentTests {
         #expect(LaunchAgent.clampedInterval(.nan) == 300)
     }
 
+    @Test("The plist is written 0644 in a folder made 0755, whatever the umask")
+    func plistModes() throws {
+        let tree = try TempTree()
+        let installed = agent(tree, FakeLaunchctl())
+        try withUmask(0o077) { _ = try installed.install(executable: "/usr/local/bin/spacekit", interval: 3600) }
+        #expect(FileTrustTests.mode(installed.directory) == 0o755)
+        #expect(FileTrustTests.mode(installed.plistPath) == 0o644)
+    }
+
     @Test("The agent runs the bundled CLI, else the running spacekit, else spacekit on PATH, links resolved")
     func executable() throws {
         let tree = try TempTree()

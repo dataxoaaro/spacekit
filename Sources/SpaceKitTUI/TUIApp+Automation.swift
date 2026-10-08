@@ -148,7 +148,7 @@ extension TUIApp {
             state.modal = Modal(title: name, lines: [TerminalText.sanitize(error.localizedDescription)])
         case .success(let run):
             if let plan = run.plan {
-                confirmCleanup(plan, title: title, job: run)
+                confirmCleanup(plan, title: title, run: run)
                 return
             }
             let reason = TerminalText.sanitize(run.skipReason ?? "")
@@ -159,7 +159,7 @@ extension TUIApp {
             }
             state.modal = Modal(
                 title: name, lines: [reason, "", "Run it anyway?"],
-                onConfirm: { [unowned self] in self.confirmCleanup(plan, title: title, job: forced) },
+                onConfirm: { [unowned self] in self.confirmCleanup(plan, title: title, run: forced) },
                 confirmLabel: "y run anyway · n cancel")
         }
     }

@@ -140,7 +140,7 @@ final class AppModel {
         var title: String
         var plan: CleanupPlan
         /// Set for a job run by hand or a suggestion being approved: the reviewed plan completes it.
-        var job: ManualJobRun?
+        var run: ManualJobRun?
     }
 
     /// A job run by hand that would skip because the job is below its threshold; the person may run it anyway.

@@ -36,7 +36,7 @@ extension AppModel {
     /// suggestion is dismissed and the job's run recorded.
     func review(_ run: ManualJobRun, title: String) {
         if let plan = run.plan {
-            review(plan, title: title, job: run)
+            review(plan, title: title, run: run)
         } else if run.canForce {
             skippedRun = SkippedRun(run: run, title: title)
         } else if let outcome = run.settleWithNothingLeft() {

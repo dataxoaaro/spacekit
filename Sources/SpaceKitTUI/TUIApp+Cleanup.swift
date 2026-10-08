@@ -4,8 +4,8 @@ import SpaceKitCore
 extension TUIApp {
     /// Shows the review of `plan`: every item and command with all of the guard's reasons. The footer, always on
     /// screen, counts what will be removed and says where it goes. `y` works only once the whole list has been shown,
-    /// so pressing it acknowledges every warning listed. A job run by hand (`job`) completes through `ManualJobRun`.
-    func confirmCleanup(_ plan: CleanupPlan, title: String, job: ManualJobRun? = nil) {
+    /// so pressing it acknowledges every warning listed. A job run by hand (`run`) completes through `ManualJobRun`.
+    func confirmCleanup(_ plan: CleanupPlan, title: String, run: ManualJobRun? = nil) {
         let review = CleanupReview(plan, executor: context.executor)
         let clean = TerminalText.sanitize
         var lines: [String] = []
@@ -34,7 +34,7 @@ extension TUIApp {
         }
         state.modal = Modal(
             title: title, lines: lines, footer: cleanupFooter(review),
-            onConfirm: { [unowned self] in self.execute(review.acknowledge(acceptingWarnings: true), job: job) },
+            onConfirm: { [unowned self] in self.execute(review.acknowledge(acceptingWarnings: true), run: run) },
             confirmLabel: "y clean · n cancel")
     }
 
@@ -50,7 +50,7 @@ extension TUIApp {
         return footer
     }
 
-    func execute(_ plan: ReviewedPlan, job: ManualJobRun? = nil) {
+    func execute(_ plan: ReviewedPlan, run: ManualJobRun? = nil) {
         guard state.activity == nil else {
             flash("Busy: \(state.activity?.text ?? "")")
             return
@@ -61,24 +61,24 @@ extension TUIApp {
         terminal.holdTerminationSignals(true)
         let (executor, inbox) = (context.executor, inbox)
         Thread.detachNewThread {
-            guard let job else {
+            guard let run else {
                 inbox.post(.cleaned(executor.execute(plan, dryRun: false), nil))
                 return
             }
-            let outcome = job.complete(plan, executor: executor)
+            let outcome = run.complete(plan, executor: executor)
             inbox.post(.cleaned(outcome.report, outcome))
         }
     }
 
-    /// `job` is the outcome of a job run by hand, whose state may not have been saved.
-    func cleanupFinished(_ report: CleanupReport, job: ManualJobRun.Outcome?) {
+    /// `outcome` is that of a job run by hand, whose state may not have been saved.
+    func cleanupFinished(_ report: CleanupReport, outcome: ManualJobRun.Outcome?) {
         state.activity = nil
         terminal.holdTerminationSignals(false)
         for removal in Removal.from(report) where !removal.partial { state.marked[removal.path] = nil }
         workspace.apply(report, context: context)
         var lines = reportLines(report)
-        if let job {
-            lines += job.saveErrors.map { TerminalText.sanitize($0).fg(ANSI.protected) }
+        if let outcome {
+            lines += outcome.saveErrors.map { TerminalText.sanitize($0).fg(ANSI.protected) }
             refreshAutomation()
         }
         if state.quitWhenIdle || terminal.heldSignal != nil {

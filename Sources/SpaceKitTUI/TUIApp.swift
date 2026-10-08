@@ -259,8 +259,8 @@ public final class TUIApp {
             for event in step() { handle(event) }
         case .evaluated(let job, let result):
             jobEvaluated(job, result)
-        case .cleaned(let report, let job):
-            cleanupFinished(report, job: job)
+        case .cleaned(let report, let outcome):
+            cleanupFinished(report, outcome: outcome)
         }
     }
 

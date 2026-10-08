@@ -119,6 +119,7 @@ enum CleanupOutput {
             if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
             return nil
         }
+        Output.emit([""] + summaryLines(review), toStandardError: json)
         let acceptingWarnings: Bool
         if acknowledgement.yes {
             acceptingWarnings = acknowledgement.acceptWarnings
@@ -153,16 +154,16 @@ enum CleanupOutput {
         if report.hasProblems { throw ExitCode(1) }
     }
 
-    /// "Clean 1.2 GB to the Trash and run 1 tool command?", saying when the answer accepts the printed warnings.
+    /// Where the selected items go and what the selected commands do, in the review's own words.
+    static func summaryLines(_ review: CleanupReview) -> [String] {
+        let disposal = review.disposalSummary.map { review.disposal == .moveToTrash ? $0.bold : $0.bold.fg(ANSI.protected) }
+        return [disposal, review.commandSummary].compactMap { $0 }
+    }
+
+    /// "Clean now?", saying when the answer accepts the printed warnings. What it cleans and where it goes is on the
+    /// lines above (`summaryLines`).
     static func question(_ review: CleanupReview, verb: String) -> String {
-        let commands = review.selectedCommands.count
-        let parts = [
-            review.selectedItems.isEmpty
-                ? "" : ByteCount.format(review.itemBytes) + (review.disposal == .moveToTrash ? " to the Trash" : " permanently"),
-            commands > 0 ? "run \(commands) tool command\(commands == 1 ? "" : "s")" : "",
-        ]
-        let warnings = review.needsAcknowledgement ? ", accepting the warnings above" : ""
-        return "\(verb) " + parts.filter { !$0.isEmpty }.joined(separator: " and ") + warnings + "?"
+        "\(verb) now" + (review.needsAcknowledgement ? ", accepting the warnings above" : "") + "?"
     }
 }
 

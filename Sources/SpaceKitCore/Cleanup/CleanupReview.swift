@@ -60,7 +60,7 @@ public struct CleanupReview: Sendable {
         commands = plan.commands.map { Row(subject: $0, verdict: executor.verdict(for: $0, context: .manual), key: .command($0.id)) }
         manualSteps = plan.manualSteps
         useTrash = plan.useTrash
-        canChooseTrash = !executor.alwaysTrash
+        canChooseTrash = remover.method(inTrash: false, useTrash: false, rule: nil, context: .manual) == .delete
         trashed = Set(targets.filter { remover.isInsideTrash($1) }.map { $0.0.id })
         locations = Dictionary(targets.map { ($0.id, $1.location) }, uniquingKeysWith: { first, _ in first })
         self.remover = remover
@@ -116,7 +116,12 @@ public struct CleanupReview: Sendable {
     public var disposal: Disposal {
         let selected = selectedItems
         if !selected.isEmpty && selected.allSatisfy({ trashed.contains($0.id) }) { return .deleteFromTrash }
-        return remover.method(inTrash: false, useTrash: useTrash, rule: nil, context: .manual) == .trash ? .moveToTrash : .delete
+        return movesToTrash ? .moveToTrash : .delete
+    }
+
+    /// Items not already in the Trash go there, as the removal module decides for a manual run with `useTrash`.
+    private var movesToTrash: Bool {
+        remover.method(inTrash: false, useTrash: useTrash, rule: nil, context: .manual) == .trash
     }
 
     /// "1.2 GB will be moved to the Trash." `nil` with no item selected.
@@ -157,9 +162,8 @@ public struct CleanupReview: Sendable {
             // Two rows with one id (the same path listed twice) hold the run to what both of them showed.
             return Dictionary(selected, uniquingKeysWith: { $0.both($1) })
         }
-        // With `safety.trash: always` the executor moves everything to the Trash, and the plan says so too.
-        let plan = CleanupPlan(
-            items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: useTrash || !canChooseTrash)
+        // The plan says what the removal module will do: with `safety.trash: always`, the Trash whatever `useTrash` says.
+        let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
         let review = ReviewRecord(items: record(items) { locations[$0.id] }, commands: record(commands) { _ in nil })
         return ReviewedPlan(plan: plan, review: review)
     }

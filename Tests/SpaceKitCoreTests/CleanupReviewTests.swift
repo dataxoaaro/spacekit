@@ -233,6 +233,8 @@ struct CleanupReviewTests {
         let forced = CleanupReview(CleanupPlan(items: [project], useTrash: false), executor: always)
         #expect(!forced.canChooseTrash)
         #expect(forced.disposal == .moveToTrash)
+        #expect(forced.acknowledge(acceptingWarnings: true).plan.useTrash, "the reviewed plan says what the removal will do")
+        #expect(!review.usingTrash(false).acknowledge(acceptingWarnings: true).plan.useTrash)
     }
 
     @Test("The unticked Trash choice is what runs")

@@ -102,23 +102,16 @@ struct CleanupSheet: View {
         }
     }
 
+    /// The Trash choice where the person has one, and where the items go in the review's own words.
     @ViewBuilder
     private func disposal(_ review: CleanupReview) -> some View {
-        if review.disposal == .deleteFromTrash {
-            Label(
-                "These items are already in the Trash. Removing them deletes them permanently.",
-                systemImage: "exclamationmark.triangle.fill"
-            )
-            .font(.callout).foregroundStyle(Theme.critical)
-        } else if !review.canChooseTrash {
-            Label("Items go to the Trash, so you can put them back. Empty the Trash to free the space.", systemImage: "trash")
-                .font(.callout).foregroundStyle(.secondary)
-        } else {
+        if review.canChooseTrash && review.disposal != .deleteFromTrash {
             Toggle("Move to Trash instead of deleting", isOn: useTrash)
-            if !review.useTrash {
-                Label("Deleted items can't be recovered.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.critical)
-                    .font(.callout)
-            }
+        }
+        if let summary = review.disposalSummary {
+            let trashing = review.disposal == .moveToTrash
+            Label(summary, systemImage: trashing ? "trash" : "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(trashing ? Color.secondary : Theme.critical)
         }
     }
 

@@ -64,6 +64,22 @@ public struct Removal: Sendable, Hashable {
         return existed && (tree.root.size != before || tree.node(at: path) == nil)
     }
 
+    /// This removal for `tree`, a scan that started before the cleanup finished: the scan may have reached the item
+    /// before it went, or after. `nil` when the tree doesn't show the item where it was (a file the tree counts only in
+    /// its folder's small files can't be told apart, so it is left too); without the move when the tree already shows
+    /// the item in the Trash, and without the loose files it already shows there. A partly deleted folder is rescanned
+    /// anyway.
+    func carried(over tree: ScanTree) -> Removal? {
+        if partial { return self }
+        if kind == .looseFiles {
+            guard tree.node(at: path) != nil else { return nil }
+            return Removal(path: path, kind: kind, bytes: bytes, trashedFiles: trashedFiles.filter { !tree.shows($0) })
+        }
+        guard tree.shows(path) else { return nil }
+        guard let trashedTo, tree.shows(trashedTo) else { return self }
+        return Removal(path: path, kind: kind, bytes: bytes)
+    }
+
     /// True if this removal took away everything at `path` (the item itself or a folder containing it).
     func covers(_ path: String) -> Bool {
         !partial && kind != .looseFiles && PathUtil.isAncestorOrEqual(self.path, of: path)
@@ -86,6 +102,15 @@ public struct Removal: Sendable, Hashable {
         case (.directory, .looseFiles): return PathUtil.isAncestorOrEqual(item.path, of: path)
         case (.directory, _): return PathUtil.isStrictAncestor(item.path, of: path)
         }
+    }
+}
+
+extension ScanTree {
+    /// True if the tree has a folder at `path`, or a file there it lists by name (not only in its folder's small files).
+    fileprivate func shows(_ path: String) -> Bool {
+        if node(at: path) != nil { return true }
+        let name = PathUtil.lastComponent(path)
+        return node(at: PathUtil.parent(path))?.files.contains { $0.name == name } ?? false
     }
 }
 

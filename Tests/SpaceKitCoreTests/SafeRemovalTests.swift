@@ -30,8 +30,9 @@ struct SafeRemovalTests {
     }
 
     static func target(_ name: String, in directory: String) -> RemovalTarget {
-        let repositories = RemovalTarget.Repositories.recorded(isRepository: false, containsRepository: false)
-        return RemovalTarget.at(PathUtil.join(directory, name), home: directory, size: 0, repositories: repositories)
+        RemovalTarget.at(
+            PathUtil.join(directory, name), home: directory, size: 0, isRepository: false, containsRepository: false,
+            probingRepositories: false)
     }
 
     /// Deletes `relative` the way a cleanup does: through its removal target.

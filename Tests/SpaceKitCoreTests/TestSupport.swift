@@ -99,7 +99,8 @@ extension SafetyGuard {
         containsRepository: Bool = false
     ) -> SafetyVerdict {
         let target = RemovalTarget.at(
-            path, home: home, size: size, repositories: .recorded(isRepository: isRepository, containsRepository: containsRepository))
+            path, home: home, size: size, isRepository: isRepository, containsRepository: containsRepository,
+            probingRepositories: false)
         return evaluate(target, rule: rule, context: context)
     }
 }

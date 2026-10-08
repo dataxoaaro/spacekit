@@ -226,7 +226,8 @@ public struct SafetyGuard: Sendable {
     /// removal judge the facts once they are known.
     public func locationRefusal(of path: String, rule: Rule?, context: CleanupContext) -> [String]? {
         // No size and no repository are the facts that add no reason; the verdict is the location's alone.
-        let location = RemovalTarget.at(path, home: home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
+        let location = RemovalTarget.at(
+            path, home: home, size: 0, isRepository: false, containsRepository: false, probingRepositories: false)
         let verdict = evaluate(location, rule: rule, context: context)
         return verdict.isBlocked ? verdict.entries.filter { $0.decision == .block }.map(\.reason) : nil
     }

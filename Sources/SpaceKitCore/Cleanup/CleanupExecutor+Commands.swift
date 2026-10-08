@@ -21,7 +21,7 @@ extension CleanupExecutor {
         if let itemPath = command.itemPath {
             let target = RemovalTarget.at(
                 itemPath, home: safety.home, size: command.estimatedBytes,
-                repositories: .probed(recordedRepository: false, recordedContains: false), resolve: resolve)
+                isRepository: false, containsRepository: false, probingRepositories: true, resolve: resolve)
             verdict = verdict.merging(safety.evaluate(target, rule: rule, context: context))
         } else {
             switch rule.safety.level {

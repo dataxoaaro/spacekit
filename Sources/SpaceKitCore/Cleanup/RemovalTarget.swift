@@ -18,14 +18,6 @@ public struct RemovalTarget: Sendable, Equatable {
         }
     }
 
-    /// Where the guard learns about git working copies at or below the target.
-    public enum Repositories: Sendable {
-        /// What a scan recorded. Reviews use this: probing every row of a large plan would stall them.
-        case recorded(isRepository: Bool, containsRepository: Bool)
-        /// What the disk says now, plus any repository the scan recorded. Removal uses this, since a plan can be stale.
-        case probed(recordedRepository: Bool, recordedContains: Bool)
-    }
-
     /// The path as the plan names it, `~` expanded and standardized, never trimmed. Not absolute: the guard refuses it.
     public let path: String
     /// The folder the item is removed from, every symlink resolved. `nil` when that folder doesn't exist.
@@ -83,21 +75,23 @@ public struct RemovalTarget: Sendable, Equatable {
 extension RemovalTarget {
     /// Builds the target for `rawPath` from the disk as it is now. The one place a removal's location is resolved.
     ///
-    /// `resolve` turns the parent folder into its real location. The executor passes its own, which tests replace to
-    /// swap symlinks at the worst moment.
+    /// `isRepository` and `containsRepository` are what a scan recorded. `probingRepositories` adds what the disk says
+    /// now: removal probes, since a plan can be stale; reviews don't, since probing every row of a large plan would stall
+    /// them. `resolve` turns the parent folder into its real location. The executor passes its own, which tests replace
+    /// to swap symlinks at the worst moment.
     static func at(
-        _ rawPath: String, home: String, size: UInt64, repositories: Repositories, resolve: (String) -> String? = PathUtil.realpath
+        _ rawPath: String, home: String, size: UInt64, isRepository: Bool, containsRepository: Bool, probingRepositories: Bool,
+        resolve: (String) -> String? = PathUtil.realpath
     ) -> RemovalTarget {
         // `~name` would otherwise expand relative to the working directory.
         let isAbsolute = rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/")
         // Exactly as given, trailing spaces and all: `report ` and `report` are different items.
         let path = isAbsolute ? PathUtil.expandArgument(rawPath, home: home) : rawPath
         let name = PathUtil.lastComponent(path)
-        let recorded = repositories.recorded
         guard isAbsolute, path != "/", let directory = resolve(PathUtil.parent(path)) else {
             return RemovalTarget(
                 path: path, directory: nil, name: name, onDiskPath: nil, identity: nil, directoryIdentity: nil, isFolder: false,
-                lastChange: nil, isRepository: recorded.isRepository, containsRepository: recorded.containsRepository, size: size)
+                lastChange: nil, isRepository: isRepository, containsRepository: containsRepository, size: size)
         }
 
         let resolvedPath = PathUtil.join(directory, name)
@@ -106,16 +100,12 @@ extension RemovalTarget {
         let isFolder = kind == S_IFDIR
         let onDiskPath = entry != nil && kind != S_IFLNK ? PathUtil.realpath(resolvedPath) : nil
 
-        var isRepository = recorded.isRepository
-        var containsRepository = recorded.containsRepository
-        if case .probed = repositories, isFolder {
-            isRepository = isRepository || RepositoryProbe.isRepository(resolvedPath)
-            containsRepository = containsRepository || RepositoryProbe.containsRepository(resolvedPath)
-        }
+        let probes = probingRepositories && isFolder
         return RemovalTarget(
             path: path, directory: directory, name: name, onDiskPath: onDiskPath, identity: entry.map(Identity.init),
-            directoryIdentity: directoryIdentity, isFolder: isFolder, lastChange: entry.map(lastChange), isRepository: isRepository,
-            containsRepository: containsRepository, size: size)
+            directoryIdentity: directoryIdentity, isFolder: isFolder, lastChange: entry.map(lastChange),
+            isRepository: isRepository || (probes && RepositoryProbe.isRepository(resolvedPath)),
+            containsRepository: containsRepository || (probes && RepositoryProbe.containsRepository(resolvedPath)), size: size)
     }
 
     /// A plain file directly inside this target's folder, found through `fd` (the folder, opened by
@@ -152,14 +142,5 @@ extension RemovalTarget {
     static func lastChange(_ st: stat) -> Date {
         func time(_ ts: timespec) -> Date { Date(timeIntervalSince1970: Double(ts.tv_sec) + Double(ts.tv_nsec) / 1e9) }
         return max(time(st.st_mtimespec), time(st.st_ctimespec))
-    }
-}
-
-extension RemovalTarget.Repositories {
-    fileprivate var recorded: (isRepository: Bool, containsRepository: Bool) {
-        switch self {
-        case .recorded(let isRepository, let containsRepository): (isRepository, containsRepository)
-        case .probed(let isRepository, let containsRepository): (isRepository, containsRepository)
-        }
     }
 }

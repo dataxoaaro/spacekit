@@ -58,11 +58,9 @@ struct Remover: Sendable {
     /// what's pinned, and each file's own target derives from it (`RemovalTarget.entry`).
     func target(of item: CleanupItem, probingRepositories: Bool) -> RemovalTarget {
         let path = item.kind == .looseFiles ? CleanupItem.looseFilesPath(in: item.path) : item.path
-        let repositories: RemovalTarget.Repositories =
-            probingRepositories
-            ? .probed(recordedRepository: item.isRepository, recordedContains: item.containsRepository)
-            : .recorded(isRepository: item.isRepository, containsRepository: item.containsRepository)
-        return RemovalTarget.at(path, home: home, size: item.size, repositories: repositories, resolve: resolve)
+        return RemovalTarget.at(
+            path, home: home, size: item.size, isRepository: item.isRepository, containsRepository: item.containsRepository,
+            probingRepositories: probingRepositories, resolve: resolve)
     }
 
     // MARK: Trash or delete

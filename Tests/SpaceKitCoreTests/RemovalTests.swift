@@ -361,11 +361,11 @@ struct SafetyGuardTargetTests {
             volumeCapacity: { _ in VolumeCapacity(name: "Test", mountPoint: "/", total: 2000, freeNow: 1000, available: 1000) })
         let path = tree.path("home/Projects/app")
         let probed = RemovalTarget.at(
-            path, home: guardian.home, size: 0, repositories: .probed(recordedRepository: false, recordedContains: false))
+            path, home: guardian.home, size: 0, isRepository: false, containsRepository: false, probingRepositories: true)
         #expect(guardian.evaluate(probed, rule: nil, context: manual).reasons.contains("This folder is a git repository (source code)"))
 
         let large = RemovalTarget.at(
-            path, home: guardian.home, size: 300, repositories: .recorded(isRepository: false, containsRepository: false))
+            path, home: guardian.home, size: 300, isRepository: false, containsRepository: false, probingRepositories: false)
         #expect(guardian.evaluate(large, rule: nil, context: manual).reasons.contains { $0.contains("of the disk's used space") })
     }
 
@@ -382,7 +382,8 @@ struct SafetyGuardTargetTests {
             isRunningAsRoot: false)
         func verdict(_ relative: String) -> SafetyVerdict {
             let target = RemovalTarget.at(
-                tree.path(relative), home: guardian.home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
+                tree.path(relative), home: guardian.home, size: 0, isRepository: false, containsRepository: false,
+                probingRepositories: false)
             return guardian.evaluate(target, rule: nil, context: manual)
         }
         #expect(verdict("real").isBlocked)

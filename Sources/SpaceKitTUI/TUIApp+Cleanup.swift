@@ -65,7 +65,7 @@ extension TUIApp {
                 inbox.post(.cleaned(executor.execute(plan, dryRun: false), nil))
                 return
             }
-            let outcome = job.complete(plan)
+            let outcome = job.complete(plan, executor: executor)
             inbox.post(.cleaned(outcome.report, outcome))
         }
     }
@@ -86,7 +86,9 @@ extension TUIApp {
             state.quit = true
             return
         }
-        state.modal = Modal(title: report.hasProblems ? "Done, with problems" : "Done", lines: lines)
+        // A plan reviewed before the settings changed ran none of its rows, each listed with that reason.
+        let title = report.reviewOutdated ? "Nothing was removed: review it again" : report.hasProblems ? "Done, with problems" : "Done"
+        state.modal = Modal(title: title, lines: lines)
     }
 
     /// What happened, including everything that didn't: skipped and failed items, command results and

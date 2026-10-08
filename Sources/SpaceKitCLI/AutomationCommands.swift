@@ -290,7 +290,7 @@ struct JobsCommand: ParsableCommand {
                     heading: "What this run removes",
                     hint: "Preview only. Run with --yes to clean now, or --scheduled to run it the way the agent would.",
                     run: { reviewed in
-                        let completed = run.complete(reviewed)
+                        let completed = run.complete(reviewed, executor: runner.executor)
                         outcome = completed
                         return completed.report
                     })
@@ -459,7 +459,7 @@ struct SuggestionsCommand: ParsableCommand {
                     heading: "Suggested cleanup",
                     hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes",
                     run: { reviewed in
-                        let completed = run.complete(reviewed)
+                        let completed = run.complete(reviewed, executor: runner.executor)
                         outcome = completed
                         return completed.report
                     })

@@ -34,7 +34,7 @@
 
 **Manual run**: a cleanup a person reviews and starts by hand from the app, the TUI or the CLI. _Avoid_: interactive run.
 
-**Manual job run**: a job a person runs by hand, or a suggestion they approve, in two steps (`ManualJobRun`): prepare evaluates the job and says whether it goes ahead or skips and why; complete runs the reviewed plan, records the job's last run and settles the suggestion. _Avoid_: preview job, job approval.
+**Manual job run**: a job a person runs by hand, or a suggestion they approve, in two steps (`ManualJobRun`): prepare evaluates the job and says whether it goes ahead or skips and why; complete runs the reviewed plan with the executor current then, records the job's last run and settles the suggestion. _Avoid_: preview job, job approval.
 
 **Forced run**: a manual job run a person starts although the job is below its size threshold ("Run Anyway", `--force`). _Avoid_: override, threshold bypass.
 
@@ -60,7 +60,9 @@
 
 **Acknowledgement**: the person's one go-ahead for a whole review, accepting the warnings it showed or none of them. _Avoid_: confirmation (per item), approval (that's for suggestions).
 
-**Reviewed plan**: what a review produces on acknowledgement (`ReviewedPlan`): the selected rows, the reasons shown for each and where each item was judged; the executor's only input for a manual run. _Avoid_: confirmed plan.
+**Reviewed plan**: what a review produces on acknowledgement (`ReviewedPlan`): the selected rows, the reasons shown for each, where each item was judged and which executor judged them; the executor's only input for a manual run, and only that executor runs it. _Avoid_: confirmed plan.
+
+**Outdated review**: a reviewed plan handed to an executor other than the one its review was made with, because the settings changed in between; nothing runs, every row is skipped and the report is `reviewOutdated`, so the front end reviews the plan again. _Avoid_: stale plan, expired review.
 
 **Reviewed location**: where the review judged an item: its path with the folder's symlinks resolved, and the folder and the item by device and inode (`RemovalTarget.Location`); a reviewed row runs only while the item is still there. _Avoid_: checked path.
 

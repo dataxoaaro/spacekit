@@ -30,6 +30,23 @@ private struct ConfigFixture {
 
 @Suite("Config changes through the context")
 struct ContextUpdateTests {
+    @Test("A plan reviewed before a settings change is refused by the new context's executor; an unchanged one runs")
+    func reviewOutlivesNoChange() throws {
+        let fixture = try ConfigFixture()
+        try fixture.tree.file("work/old/x", bytes: 1_000)
+        let context = SpaceKitContext.load(paths: fixture.paths)
+        let plan = CleanupPlan(items: [CleanupItem(path: fixture.tree.path("work/old"), size: 1_000)], useTrash: false)
+        let reviewed = CleanupReview(plan, executor: context.executor).acknowledge(acceptingWarnings: true)
+
+        let reread = context.rereadingConfig()
+        #expect(!reread.executor.execute(reviewed, dryRun: true).reviewOutdated, "nothing changed, so the review holds")
+
+        let changed = try context.applying { $0.safety.protectedPaths = ["~/Work"] }
+        let refused = changed.executor.execute(reviewed, dryRun: true)
+        #expect(refused.reviewOutdated)
+        #expect(refused.items.map(\.outcome) == [.skipped(reason: CleanupExecutor.settingsChanged)])
+    }
+
     @Test("Changing jobs keeps the loaded rule library")
     func jobsKeepLibrary() throws {
         let fixture = try ConfigFixture()

@@ -57,8 +57,10 @@ extension AppModel {
 
     var isCleaning: Bool { runningCleanups > 0 }
 
-    /// Runs a reviewed plan, through `job` when it completes a job run by hand (which records the run and settles the
-    /// suggestion), and finishes that bookkeeping before the app may quit.
+    /// Runs a reviewed plan with the executor of the context current now, through `job` when it completes a job run by
+    /// hand (which records the run and settles the suggestion), and finishes that bookkeeping before the app may quit.
+    /// A plan reviewed before the settings changed comes back `reviewOutdated` with nothing done; the sheet reviews
+    /// it again.
     func execute(
         _ plan: ReviewedPlan, job: ManualJobRun? = nil, onProgress: @escaping @Sendable (Int, Int, String) -> Void
     ) async -> CleanupReport {
@@ -67,9 +69,10 @@ extension AppModel {
         let executor = context.executor
         let (report, outcome) = await Task.detached(priority: .userInitiated) { () -> (CleanupReport, ManualJobRun.Outcome?) in
             guard let job else { return (executor.execute(plan, dryRun: false, onProgress: onProgress), nil) }
-            let outcome = job.complete(plan, onProgress: onProgress)
+            let outcome = job.complete(plan, executor: executor, onProgress: onProgress)
             return (outcome.report, outcome)
         }.value
+        guard !report.reviewOutdated else { return report }
         if let outcome { finishJobRun(outcome) }
         applyRemovals(report)
         return report

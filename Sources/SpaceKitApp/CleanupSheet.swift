@@ -13,6 +13,8 @@ struct CleanupSheet: View {
     @State private var acknowledged = false
     @State private var phase: Phase = .review
     @State private var progress: (done: Int, total: Int, current: String) = (0, 0, "")
+    /// Set when a run was refused because the settings changed after the review, and the review was made again.
+    @State private var reviewedAgain = false
 
     enum Phase {
         case review
@@ -86,6 +88,13 @@ struct CleanupSheet: View {
                     .font(.callout).foregroundStyle(.secondary)
             } else if let review {
                 disposal(review)
+            }
+            if reviewedAgain {
+                Label(
+                    "SpaceKit's settings changed after you reviewed this, so nothing was removed. Check the list again.",
+                    systemImage: "arrow.clockwise.circle.fill"
+                )
+                .font(.callout).foregroundStyle(Theme.warning).fixedSize(horizontal: false, vertical: true)
             }
             if needsAcknowledgement {
                 Toggle("I've read the warnings above and want to remove these items", isOn: $acknowledged)
@@ -206,7 +215,16 @@ struct CleanupSheet: View {
                 onProgress: { done, total, current in
                     Task { @MainActor in progress = (done, total, current) }
                 })
-            phase = .done(report)
+            guard report.reviewOutdated else {
+                phase = .done(report)
+                return
+            }
+            // Reviewed under settings that are no longer in force: review it again under the current ones, from scratch.
+            self.review = nil
+            acknowledged = false
+            reviewedAgain = true
+            phase = .review
+            self.review = await model.cleanupReview(of: pending.plan)
         }
     }
 }

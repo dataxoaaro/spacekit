@@ -248,4 +248,27 @@ struct CleanupReviewTests {
         #expect(report.items.first?.outcome.isRemoved == true)
         #expect(report.trashedBytes == 0)
     }
+
+    @Test("A reviewed plan runs only on the executor that made its review")
+    func reviewBindsToExecutor() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/a/x", bytes: 1_000)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/a"), size: 1_000)], useTrash: false)
+        let reviewedWith = sandboxExecutor(tree)
+        let reviewed = CleanupReview(plan, executor: reviewedWith).acknowledge(acceptingWarnings: true)
+        // Settings read again (the same values, even) make another executor: the review was of the old one.
+        let current = sandboxExecutor(tree)
+
+        let refused = current.execute(reviewed, dryRun: false)
+
+        #expect(refused.reviewOutdated)
+        #expect(refused.skipped.first?.reason == CleanupExecutor.settingsChanged)
+        #expect(refused.hasProblems)
+        #expect(!refused.removedAnything)
+        #expect(onDisk(tree.path("home/Projects/a/x")))
+
+        let ran = reviewedWith.execute(reviewed, dryRun: false)
+        #expect(!ran.reviewOutdated)
+        #expect(ran.items.first?.outcome.isRemoved == true)
+    }
 }

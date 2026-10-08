@@ -48,6 +48,8 @@ public struct CleanupReview: Sendable {
     private let locations: [String: RemovalTarget.Location]
     /// Decides where items go, for the wording.
     private let remover: Remover
+    /// The executor the verdicts came from; only it runs the reviewed plan.
+    private let settingsID: UUID
     private var unticked: Set<Key> = []
 
     public init(_ plan: CleanupPlan, executor: CleanupExecutor) {
@@ -64,6 +66,7 @@ public struct CleanupReview: Sendable {
         trashed = Set(targets.filter { remover.isInsideTrash($1) }.map { $0.0.id })
         locations = Dictionary(targets.map { ($0.id, $1.location) }, uniquingKeysWith: { first, _ in first })
         self.remover = remover
+        settingsID = executor.settingsID
     }
 
     // MARK: Selection
@@ -164,7 +167,8 @@ public struct CleanupReview: Sendable {
         }
         // The plan says what the removal module will do: with `safety.trash: always`, the Trash whatever `useTrash` says.
         let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
-        let review = ReviewRecord(items: record(items) { locations[$0.id] }, commands: record(commands) { _ in nil })
+        let review = ReviewRecord(
+            settingsID: settingsID, items: record(items) { locations[$0.id] }, commands: record(commands) { _ in nil })
         return ReviewedPlan(plan: plan, review: review)
     }
 }
@@ -194,8 +198,8 @@ extension ReviewedPlan {
     }
 }
 
-/// What a person's review showed for each row, by item and command id. The executor holds a manual run to it;
-/// automatic runs have none.
+/// What a person's review showed for each row, by item and command id, and which executor showed it. The executor
+/// holds a manual run to it; automatic runs have none.
 struct ReviewRecord: Sendable {
     /// One row as the review showed it.
     struct Row: Sendable {
@@ -228,6 +232,8 @@ struct ReviewRecord: Sendable {
         }
     }
 
+    /// `CleanupExecutor.settingsID` of the executor whose verdicts the review showed.
+    let settingsID: UUID
     let items: [String: Row]
     let commands: [String: Row]
 

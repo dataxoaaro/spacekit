@@ -25,8 +25,8 @@ struct ManualJobRunTests {
         return suggestion
     }
 
-    func reviewed(_ run: ManualJobRun, _ fixture: RunnerFixture, untick: Set<String> = []) throws -> ReviewedPlan {
-        var review = CleanupReview(try #require(run.plan), executor: fixture.runner.executor)
+    func reviewed(_ run: ManualJobRun, _ executor: CleanupExecutor, untick: Set<String> = []) throws -> ReviewedPlan {
+        var review = CleanupReview(try #require(run.plan), executor: executor)
         for row in review.items where untick.contains(PathUtil.lastComponent(row.subject.path)) {
             review = review.including(row, false)
         }
@@ -39,11 +39,12 @@ struct ManualJobRunTests {
     func jobRun() throws {
         let fixture = try buildFixture(["a"])
         let run = try ManualJobRun.prepare(buildJob(), runner: fixture.runner)
+        let executor = fixture.runner.executor
         #expect(run.skipReason == nil)
         #expect(lastRun(fixture) == nil)
 
         let date = Date(timeIntervalSince1970: 5_000)
-        let outcome = run.complete(try reviewed(run, fixture), now: date)
+        let outcome = run.complete(try reviewed(run, executor), executor: executor, now: date)
 
         #expect(outcome.report.freedBytes > 0)
         #expect(outcome.saveErrors.isEmpty)
@@ -56,10 +57,40 @@ struct ManualJobRunTests {
         #expect(journal.first?.automatic == false)
     }
 
+    @Test("A run completes with the executor current at completion and refuses a review made with another one")
+    func completesWithCurrentExecutor() throws {
+        var fixture = try buildFixture(["a"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        // The settings change after the review: the context now has another executor.
+        let reviewedWith = fixture.runner.executor
+        let plan = try reviewed(run, reviewedWith)
+        let current = fixture.runner.executor
+        let suggested = lastRun(fixture)
+
+        let refused = run.complete(plan, executor: current)
+
+        #expect(refused.report.reviewOutdated)
+        #expect(refused.suggestion == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.tree.path("home/build/a")))
+        #expect(lastRun(fixture) == suggested, "a refused run records nothing")
+        let stored = try #require(fixture.context.suggestions.get(suggestion.id), "a refused run leaves the suggestion alone")
+        #expect(stored.plan.items.count == suggestion.plan.items.count)
+        #expect(stored.problems.isEmpty)
+
+        let outcome = run.complete(try reviewed(run, current), executor: current)
+        #expect(outcome.report.removedAnything)
+        #expect(outcome.suggestion == .dismissed)
+        #expect(lastRun(fixture) != suggested)
+    }
+
     @Test("A job below its threshold would skip, says why, and runs only when forced")
     func belowThreshold() throws {
         let fixture = try buildFixture(["a"])
         let run = try ManualJobRun.prepare(buildJob(sizeAbove: .gb(1)), runner: fixture.runner)
+        let executor = fixture.runner.executor
 
         #expect(run.skipReason?.hasSuffix("is below the 1.0 GB threshold") == true)
         #expect(run.canForce)
@@ -67,15 +98,15 @@ struct ManualJobRunTests {
 
         let forced = run.forced()
         #expect(forced.skipReason == nil)
-        let plan = try reviewed(forced, fixture)
+        let plan = try reviewed(forced, executor)
 
         // Only the forced run runs it: the skipped one removes nothing and records nothing.
-        let skipped = run.complete(plan)
+        let skipped = run.complete(plan, executor: executor)
         #expect(!skipped.report.removedAnything)
         #expect(FileManager.default.fileExists(atPath: fixture.tree.path("home/build/a")))
         #expect(lastRun(fixture) == nil)
 
-        let outcome = forced.complete(plan)
+        let outcome = forced.complete(plan, executor: executor)
         #expect(outcome.report.removedAnything)
         #expect(lastRun(fixture) != nil)
     }
@@ -97,9 +128,10 @@ struct ManualJobRunTests {
         fixture.config.jobs = [job]
         let suggestion = try suggest(fixture, job: job)
         let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let executor = fixture.runner.executor
 
         let date = Date(timeIntervalSince1970: 9_000)
-        let outcome = run.complete(try reviewed(run, fixture), now: date)
+        let outcome = run.complete(try reviewed(run, executor), executor: executor, now: date)
 
         #expect(outcome.suggestion == .dismissed)
         #expect(fixture.context.suggestions.all().isEmpty)
@@ -113,11 +145,12 @@ struct ManualJobRunTests {
         fixture.config.jobs = [job]
         let suggestion = try suggest(fixture, job: job)
         let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let executor = fixture.runner.executor
         // `b` can't lose its contents, so removing it fails; `c` is unticked.
         #expect(chmod(fixture.tree.path("home/build/b"), 0o555) == 0)
         defer { chmod(fixture.tree.path("home/build/b"), 0o755) }
 
-        let outcome = run.complete(try reviewed(run, fixture, untick: ["c"]))
+        let outcome = run.complete(try reviewed(run, executor, untick: ["c"]), executor: executor)
 
         guard case .kept(let kept) = outcome.suggestion else {
             Issue.record("expected the suggestion to be kept")
@@ -140,10 +173,11 @@ struct ManualJobRunTests {
         fixture.config.jobs = [job]
         let suggestion = try suggest(fixture, job: job)
         let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
-        let plan = try reviewed(run, fixture)
+        let executor = fixture.runner.executor
+        let plan = try reviewed(run, executor)
         try FileManager.default.removeItem(atPath: fixture.tree.path("home/build/a"))
 
-        let outcome = run.complete(plan)
+        let outcome = run.complete(plan, executor: executor)
 
         #expect(!outcome.report.removedAnything)
         #expect(outcome.suggestion == .dismissed)

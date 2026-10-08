@@ -4,7 +4,8 @@ import Foundation
 ///
 /// `prepare` evaluates the job now and says whether the run would go ahead or skip, and why. A suggestion's saved plan
 /// is narrowed to what the fresh evaluation still offers. `complete`, which exists only on a prepared run, executes the
-/// reviewed plan, records the job's run so its schedule moves on, and settles the suggestion. The app, the TUI and the
+/// reviewed plan with the executor current then, records the job's run so its schedule moves on, and settles the
+/// suggestion. The app, the TUI and the
 /// CLI only show the prepared run, review its plan and ask.
 public struct ManualJobRun: Sendable {
     /// The job's evaluation at `prepare` time.
@@ -95,14 +96,22 @@ public struct ManualJobRun: Sendable {
 
     // MARK: Complete
 
-    /// Runs `reviewed` and records the job's run. Only rows of this run's `plan` run, so a run that would skip removes
-    /// nothing and records nothing, and a suggestion's dropped items can't come back through another review.
+    /// Runs `reviewed` with `executor`, the one of the context current now (not the one `prepare` saw: the settings
+    /// may have changed while the person reviewed), and records the job's run. Only rows of this run's `plan` run, so
+    /// a run that would skip removes nothing and records nothing, and a suggestion's dropped items can't come back
+    /// through another review.
+    ///
+    /// A plan reviewed with another executor doesn't run (`CleanupReport.reviewOutdated`): nothing is recorded and the
+    /// suggestion stays as it is, for the person to review again.
     ///
     /// An approved suggestion is then settled: what's left of it is checked again (not removed, still on disk, not
     /// blocked). With nothing left it's dismissed; otherwise it's kept, narrowed to that, with the run's problems.
-    public func complete(_ reviewed: ReviewedPlan, now: Date = Date(), onProgress: CleanupExecutor.ProgressHandler? = nil) -> Outcome {
+    public func complete(
+        _ reviewed: ReviewedPlan, executor: CleanupExecutor, now: Date = Date(), onProgress: CleanupExecutor.ProgressHandler? = nil
+    ) -> Outcome {
         guard let plan else { return Outcome(report: CleanupReport(dryRun: false), suggestion: nil, saveErrors: []) }
-        let report = runner.executor.execute(reviewed.limited(to: plan), dryRun: false, onProgress: onProgress)
+        let report = executor.execute(reviewed.limited(to: plan), dryRun: false, onProgress: onProgress)
+        if report.reviewOutdated { return Outcome(report: report, suggestion: nil, saveErrors: []) }
         var errors: [String] = []
         do {
             try runner.record(JobRunResult(job: evaluation.job, date: now, evaluation: evaluation, action: .cleaned(report)))
@@ -110,7 +119,7 @@ public struct ManualJobRun: Sendable {
             errors.append("Couldn't save the job's state: \(error.localizedDescription)")
         }
         guard let suggestion else { return Outcome(report: report, suggestion: nil, saveErrors: errors) }
-        let fate = settle(suggestion, after: report)
+        let fate = settle(suggestion, after: report, executor: executor)
         do {
             switch fate {
             case .dismissed: try runner.context.suggestions.remove(suggestion.id)
@@ -124,10 +133,9 @@ public struct ManualJobRun: Sendable {
 
     /// The suggestion's still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows
     /// the person unticked.
-    private func settle(_ suggestion: Suggestion, after report: CleanupReport) -> SuggestionFate {
+    private func settle(_ suggestion: Suggestion, after report: CleanupReport, executor: CleanupExecutor) -> SuggestionFate {
         let removedItems = Set(report.items.filter(\.outcome.isRemoved).map(\.item.id))
         let ranCommands = Set(report.commands.filter(\.outcome.isRemoved).map(\.command.id))
-        let executor = runner.executor
         var left = candidate
         left.items = candidate.items.filter {
             !removedItems.contains($0.id) && Self.exists($0.path) && !executor.verdict(for: $0, context: .manual).isBlocked

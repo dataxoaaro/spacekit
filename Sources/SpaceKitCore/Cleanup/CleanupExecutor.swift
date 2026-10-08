@@ -55,6 +55,9 @@ public struct CleanupReport: Sendable {
     /// Folders left inside removed items because another volume is mounted on them, keyed by the item's `path`. The
     /// item's outcome is `.removed` with the bytes that went; its folder stays, holding the volume.
     public var leftOnOtherVolumes: [String: [String]] = [:]
+    /// The plan was reviewed with another executor (the settings changed since), so nothing ran: every row is skipped
+    /// with `CleanupExecutor.settingsChanged`. Review the plan again to run it.
+    public var reviewOutdated = false
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {
@@ -98,20 +101,26 @@ public struct CleanupReport: Sendable {
 
 /// Carries out cleanup plans. Every item is re-checked by the `SafetyGuard` immediately before it is
 /// touched, every removal is journaled as it happens, and automatic runs stop at the configured byte budget.
+///
+/// The settings are fixed when the executor is built (a context builds one per reading of the config), and the
+/// executor is identified by that build: a `ReviewedPlan` runs only on the executor its review was made with.
 public struct CleanupExecutor: Sendable {
-    public var safety: SafetyGuard
-    public var journal: Journal?
-    public var rules: [String: Rule]
+    public internal(set) var safety: SafetyGuard
+    public internal(set) var journal: Journal?
+    public internal(set) var rules: [String: Rule]
     /// Which tool commands may run (`safety.allowedCommands` on top of the built-in trusted list).
-    public var commandTrust: CommandTrust
+    public internal(set) var commandTrust: CommandTrust
     /// Upper bound for one automatic run.
-    public var maxBytesPerAutomaticRun: UInt64
+    public internal(set) var maxBytesPerAutomaticRun: UInt64
     /// Set when the config file exists but couldn't be read. Every removal and command is then refused, because
     /// the defaults in use lack the person's protected paths, allowed commands and disabled rules.
-    public var configError: String?
+    public internal(set) var configError: String?
     /// `safety.trash: always`: items are moved to the Trash even when a plan asks to delete them. Entries already in
     /// the Trash can still be deleted (that's emptying it).
-    public var alwaysTrash: Bool
+    public internal(set) var alwaysTrash: Bool
+    /// Made once per built executor; copies share it. A review records it, so a plan reviewed under other settings
+    /// (protected paths added, the Trash made mandatory, the config broken since) never runs under these.
+    let settingsID = UUID()
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
     /// Resolves the folder an item is removed from. Tests replace it to swap symlinks at the worst moment.
@@ -165,8 +174,21 @@ public struct CleanupExecutor: Sendable {
 
     /// Runs a plan a person reviewed and said go to. Each item and command is checked again first, and a warning
     /// the review didn't show for that row skips it.
+    ///
+    /// A plan reviewed with another executor runs none of its rows: the person judged it under settings that are no
+    /// longer the ones in force. Every row is skipped with `settingsChanged` and the report is `reviewOutdated`, so
+    /// the front end can review the plan again with this executor.
     public func execute(_ reviewed: ReviewedPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
-        execute(reviewed.plan, context: .manual, review: reviewed.review, dryRun: dryRun, onProgress: onProgress)
+        guard reviewed.review.settingsID == settingsID else { return CleanupExecutor.outdated(reviewed.plan, dryRun: dryRun) }
+        return execute(reviewed.plan, context: .manual, review: reviewed.review, dryRun: dryRun, onProgress: onProgress)
+    }
+
+    private static func outdated(_ plan: CleanupPlan, dryRun: Bool) -> CleanupReport {
+        var report = CleanupReport(dryRun: dryRun)
+        report.items = plan.items.map { ($0, .skipped(reason: settingsChanged)) }
+        report.commands = plan.commands.map { ($0, .skipped(reason: settingsChanged), "") }
+        report.reviewOutdated = true
+        return report
     }
 
     /// Runs an automatic job's plan under the automation limits. Nobody acknowledged anything, so whatever needs
@@ -265,6 +287,9 @@ public struct CleanupExecutor: Sendable {
     /// Starts the skip reason of a row that changed after the review: it gained a reason the review didn't show, or
     /// isn't at the location the review judged. Reports treat it as a problem, because the person never saw that.
     public static let changedSinceReview = "Changed since you reviewed it: "
+
+    /// Why every row of a plan reviewed with another executor is skipped.
+    public static let settingsChanged = changedSinceReview + "SpaceKit's settings changed after the review. Review it again."
 
     func overBudget() -> CleanupOutcome {
         .skipped(reason: "Over this run's budget of \(ByteCount.format(maxBytesPerAutomaticRun)) (safety.maxBytesPerRun)")

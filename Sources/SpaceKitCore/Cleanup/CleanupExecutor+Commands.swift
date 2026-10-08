@@ -5,11 +5,21 @@ extension CleanupExecutor {
     /// for the item an `itemCommand` names), plus which executables may run at all, judged at the place its tool is
     /// found now.
     public func verdict(for command: PlannedCommand, context: CleanupContext) -> SafetyVerdict {
-        verdict(for: command, context: context, executable: runner.locate(command.arguments.first ?? ""))
+        verdict(for: command, context: context, executable: runner.locate(command.arguments.first ?? ""), item: itemTarget(of: command))
+    }
+
+    /// The item an `itemCommand` acts on, read from the disk now; `nil` for a command of a whole rule or a model.
+    func itemTarget(of command: PlannedCommand) -> RemovalTarget? {
+        command.itemPath.map { path in
+            RemovalTarget.at(
+                path, home: safety.home, size: command.estimatedBytes, isRepository: false, containsRepository: false,
+                probingRepositories: true, resolve: resolve)
+        }
     }
 
     /// `executable`: where the command's tool is found, the program a run would start; `nil` when it isn't installed.
-    func verdict(for command: PlannedCommand, context: CleanupContext, executable: String?) -> SafetyVerdict {
+    /// `item`: the command's `itemTarget(of:)`, read once by the caller, which also binds a review to its location.
+    func verdict(for command: PlannedCommand, context: CleanupContext, executable: String?, item: RemovalTarget?) -> SafetyVerdict {
         var verdict = SafetyVerdict.allow
         refuseIfConfigInvalid(&verdict)
         if safety.isRunningAsRoot {
@@ -31,11 +41,8 @@ extension CleanupExecutor {
             verdict.raise(.confirm, warning)
         }
 
-        if let itemPath = command.itemPath {
-            let target = RemovalTarget.at(
-                itemPath, home: safety.home, size: command.estimatedBytes,
-                isRepository: false, containsRepository: false, probingRepositories: true, resolve: resolve)
-            verdict = verdict.merging(safety.evaluate(target, rule: rule, context: context))
+        if let item {
+            verdict = verdict.merging(safety.evaluate(item, rule: rule, context: context))
         } else {
             switch rule.safety.level {
             case .protected:
@@ -73,7 +80,8 @@ extension CleanupExecutor {
 
     /// `reviewed`: what the person's review showed for this command; `nil` in an automatic run.
     ///
-    /// The tool is looked up once: the verdict judges the program found, and that program is the one started.
+    /// The tool is looked up once: the verdict judges the program found, and that program is the one started. So is the
+    /// item an `itemCommand` names: a reviewed command runs only while the item is at the location the review judged.
     func runCommand(
         _ command: PlannedCommand, context: CleanupContext, reviewed: ReviewRecord.Row?, run: inout Run
     ) -> (CleanupOutcome, String) {
@@ -82,7 +90,11 @@ extension CleanupExecutor {
         if let reviewed, reviewed.executable != found {
             return (.changedSinceReview(CleanupExecutor.foundElsewhere(name, now: found)), "")
         }
-        let verdict = verdict(for: command, context: context, executable: found)
+        let item = itemTarget(of: command)
+        if let reviewed, reviewed.location != item?.location {
+            return (.changedSinceReview(CleanupExecutor.notWhereReviewed), "")
+        }
+        let verdict = verdict(for: command, context: context, executable: found, item: item)
         if let refused = CleanupExecutor.refusal(verdict, reviewed: reviewed) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
         guard let executable = found else { return (.skipped(reason: "'\(name)' is not installed", kind: .refused), "") }

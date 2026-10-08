@@ -343,6 +343,31 @@ struct CommandTrustTests {
         }
     }
 
+    @Test("A command for one item runs only while that item is where your review judged it")
+    func reviewedItemBound() throws {
+        let tree = try TempTree()
+        try tree.file("home/kegs/wget/bin", bytes: 1_000)
+        let kegs = rule("kegs", builtin: true, itemCommand: ["brew", "uninstall", "{path}"], paths: [tree.path("home/kegs")])
+        let item = FindingItem(path: tree.path("home/kegs/wget"), kind: .directory, name: "wget", size: 1_000)
+        let plan = CleanupPlan.make(findings: [Finding(rule: kegs, items: [item])], scanStarted: Date())
+        let runner = RecordingRunner(installed: ["brew"], in: tree)
+        let executor = executor(tree, rules: [kegs], runner: runner)
+        let reviewed = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
+        // Another folder of the same name stands where the reviewed one was.
+        try FileManager.default.removeItem(atPath: tree.path("home/kegs/wget"))
+        try tree.file("home/kegs/wget/other", bytes: 1_000)
+
+        let report = executor.execute(reviewed, dryRun: false)
+
+        #expect(skipReason(report.commands.first?.outcome)?.hasPrefix(CleanupExecutor.changedSinceReview) == true)
+        #expect(report.hasProblems)
+        #expect(runner.calls.isEmpty)
+
+        let again = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
+        #expect(executor.execute(again, dryRun: false).commands.first?.outcome.isRemoved == true)
+        #expect(runner.calls == [["brew", "uninstall", tree.path("home/kegs/wget")]])
+    }
+
     @Test("Your review shows a launcher behind an allowed name as blocked")
     func reviewBlocksLauncherBehindName() throws {
         let tree = try TempTree()

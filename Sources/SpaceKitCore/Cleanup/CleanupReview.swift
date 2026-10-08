@@ -48,6 +48,8 @@ public struct CleanupReview: Sendable {
     private let locations: [String: RemovalTarget.Location]
     /// Where each command's tool was found, by id, for the same reason. Missing for a tool that isn't installed.
     private let executables: [String: String]
+    /// Where the item each item command names was judged, by command id, for the same reason.
+    private let commandLocations: [String: RemovalTarget.Location]
     /// Decides where items go, for the wording.
     private let remover: Remover
     /// The executor the verdicts came from; only it runs the reviewed plan.
@@ -61,14 +63,17 @@ public struct CleanupReview: Sendable {
         items = targets.map { item, target in
             Row(subject: item, verdict: executor.verdict(for: target, ruleID: item.ruleID, context: .manual), key: .item(item.id))
         }
-        // Each tool looked up once, for the verdict and for the record, so the review shows the program a run would start.
-        let found = plan.commands.map { ($0, executor.runner.locate($0.arguments.first ?? "")) }
-        commands = found.map { command, executable in
-            let verdict = executor.verdict(for: command, context: .manual, executable: executable)
+        // Each tool, and the item an item command names, looked up once, for the verdict and for the record, so the
+        // review shows the program a run would start on the item it would act on.
+        let found = plan.commands.map { ($0, executor.runner.locate($0.arguments.first ?? ""), executor.itemTarget(of: $0)) }
+        commands = found.map { command, executable, item in
+            let verdict = executor.verdict(for: command, context: .manual, executable: executable, item: item)
             return Row(subject: command, verdict: verdict, key: .command(command.id))
         }
-        let located = found.compactMap { command, executable in executable.map { (command.id, $0) } }
+        let located = found.compactMap { command, executable, _ in executable.map { (command.id, $0) } }
         executables = Dictionary(located, uniquingKeysWith: { first, _ in first })
+        let commandItems = found.compactMap { command, _, item in item.map { (command.id, $0.location) } }
+        commandLocations = Dictionary(commandItems, uniquingKeysWith: { first, _ in first })
         manualSteps = plan.manualSteps
         useTrash = plan.useTrash
         canChooseTrash = remover.method(inTrash: false, useTrash: false, rule: nil, context: .manual) == .delete
@@ -162,9 +167,9 @@ public struct CleanupReview: Sendable {
     /// accepted them all, once for the whole plan. Without it, such rows stay in the plan and the executor skips them
     /// as needing confirmation, so the report lists them.
     ///
-    /// The reviewed plan records, for every selected row, the reasons the review showed and, for an item, the location
-    /// it was judged at. The executor holds the run to that record: a reason the review didn't show for the row, or an
-    /// item no longer at that location, skips the row as changed since the review.
+    /// The reviewed plan records, for every selected row, the reasons the review showed and, for an item or the item a
+    /// command names, the location it was judged at. The executor holds the run to that record: a reason the review
+    /// didn't show for the row, or an item no longer at that location, skips the row as changed since the review.
     public func acknowledge(acceptingWarnings: Bool) -> ReviewedPlan {
         func record<Subject>(
             _ rows: [Row<Subject>], location: (Row<Subject>) -> RemovalTarget.Location? = { _ in nil },
@@ -182,7 +187,7 @@ public struct CleanupReview: Sendable {
         let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
         let review = ReviewRecord(
             executorID: executorID, items: record(items, location: { locations[$0.id] }),
-            commands: record(commands, executable: { executables[$0.id] }))
+            commands: record(commands, location: { commandLocations[$0.id] }, executable: { executables[$0.id] }))
         return ReviewedPlan(plan: plan, review: review)
     }
 }
@@ -221,7 +226,7 @@ struct ReviewRecord: Sendable {
         let shown: Set<String>
         /// The person accepted `shown` (or there was nothing to accept).
         let accepted: Bool
-        /// Where the review judged an item. `nil` for a command.
+        /// Where the review judged an item, or the item a command names. `nil` for any other command.
         let location: RemovalTarget.Location?
         /// Where the review found a command's tool, the program its warnings named. `nil` for an item, or a tool that
         /// wasn't installed.

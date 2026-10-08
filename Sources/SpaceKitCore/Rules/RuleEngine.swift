@@ -273,10 +273,10 @@ public struct RuleEngine: Sendable {
         let globExcludes = patternRules.flatMap { $0.element.match!.exclude.filter { $0.contains("*") } }
 
         let roots = allRoots.sorted().filter { candidate in !allRoots.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
+        let search = PatternSearch(byName: byName, excluded: excluded, globExcludes: globExcludes)
         var claims: [Claim] = []
         for root in roots {
-            guard let start = tree.node(at: root) else { continue }
-            var stack: [(DirNode, String)] = [(start, start.path)]
+            var stack: [(DirNode, String)] = search.starts(under: root, in: tree)
             while let (node, path) = stack.popLast() {
                 for child in node.children where !child.isSkipped && child.size > 0 {
                     let childPath = PathUtil.join(path, child.name)
@@ -305,6 +305,47 @@ public struct RuleEngine: Sendable {
             }
         }
         return claims
+    }
+
+    /// Where the pattern walk under one root begins. A tree scanned only for some rules may hold just folders
+    /// below the root; the walk starts at each of them that a walk from the root would have reached.
+    private struct PatternSearch {
+        let byName: [String: [(Int, Rule, [String])]]
+        let excluded: Set<String>
+        let globExcludes: [String]
+
+        func starts(under root: String, in tree: ScanTree) -> [(DirNode, String)] {
+            if let node = tree.node(at: root) { return [(node, node.path)] }
+            var starts: [(DirNode, String)] = []
+            for scanned in tree.roots where PathUtil.isStrictAncestor(root, of: scanned) && isReached(scanned, from: root) {
+                if let node = tree.node(at: scanned) { starts.append((node, scanned)) }
+            }
+            return starts
+        }
+
+        /// False if the walk from `root` stops above or at `path`: an excluded folder, a bundle, or a folder a pattern
+        /// rule matches (checked on disk, since the tree doesn't hold the folders above its roots).
+        private func isReached(_ path: String, from root: String) -> Bool {
+            var current = root
+            for component in PathUtil.components(String(path.dropFirst(root.count))) {
+                let parent = current
+                let name = String(component)
+                current = PathUtil.join(parent, name)
+                if excluded.contains(current) { return false }
+                if RuleEngine.bundleSuffixes.contains(where: { name.hasSuffix($0) }) { return false }
+                if globExcludes.contains(where: { PathUtil.matches(current, glob: $0) }) { return false }
+                if matches(current, name: name, parent: parent) { return false }
+            }
+            return true
+        }
+
+        private func matches(_ path: String, name: String, parent: String) -> Bool {
+            let exists = { (folder: String, entry: String) -> Bool in FileManager.default.fileExists(atPath: PathUtil.join(folder, entry)) }
+            return (byName[name] ?? []).contains { _, rule, ruleRoots in
+                guard let match = rule.match, ruleRoots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
+                return match.markersPresent(sibling: { exists(parent, $0) }, inside: { exists(path, $0) })
+            }
+        }
     }
 
     /// When a project was last worked on, ignoring the generated folder itself.

@@ -194,38 +194,95 @@ struct CommandTrustTests {
         #expect(runner.calls == [["du", "-s", "/Users/tester/.tool/cache"]])
     }
 
-    @Test("An allowed name whose program is a launcher's (a symlink, a copy or a hard link) is refused and never started")
-    func launcherUnderAnotherName() throws {
+    /// Writes an executable file to `relative` in `tree`: a script when `text` starts with `#!`, otherwise a stand-in
+    /// for a compiled program. Nothing runs it: the recording runner only finds it.
+    @discardableResult
+    func program(_ tree: TempTree, _ relative: String, _ text: String = "\u{CF}\u{FA}\u{ED}\u{FE} stand-in", mode: mode_t = 0o755) throws
+        -> String
+    {
+        let path = tree.path(relative)
+        try FileManager.default.createDirectory(atPath: PathUtil.parent(path), withIntermediateDirectories: true)
+        try text.write(toFile: path, atomically: false, encoding: .utf8)
+        #expect(chmod(path, mode) == 0)
+        return path
+    }
+
+    /// Runs `name` from a rule of yours that allows it, by hand, with tools found in `tree`'s `bin` first. Nothing
+    /// starts: the runner records what would.
+    func runAllowed(_ name: String, in tree: TempTree) -> (outcome: CleanupOutcome?, calls: [[String]]) {
+        let runner = RecordingRunner(searchPath: [tree.path("bin")] + Shell.searchPath)
+        let tool = rule("tool", builtin: false, command: [name, "--all"])
+        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: [name, "--all"], estimatedBytes: 1)])
+        let report = manualRun(plan, with: executor(tree, rules: [tool], runner: runner, allowed: [name]))
+        return (report.commands.first?.outcome, runner.calls)
+    }
+
+    @Test("An allowed name whose real file is a launcher, or a script a launcher runs, is refused and never started")
+    func launcherBehindAName() throws {
         let tree = try TempTree()
         let files = FileManager.default
-        try tree.directory("renamed")
-        try files.createSymbolicLink(atPath: tree.path("renamed/cleanup-tool"), withDestinationPath: "/bin/sh")
-        try files.copyItem(atPath: "/bin/zsh", toPath: tree.path("renamed/cache-tool"))
-        try "#!/bin/sh\necho tidy\n".write(toFile: tree.path("renamed/fine-tool"), atomically: true, encoding: .utf8)
-        #expect(chmod(tree.path("renamed/fine-tool"), 0o755) == 0)
-        // /bin is on the system volume, so a hard link needs a launcher of its own: an `sh` found before /bin's.
-        try tree.directory("linked")
-        try "#!/bin/sh\nexit 0\n".write(toFile: tree.path("linked/sh"), atomically: true, encoding: .utf8)
-        #expect(chmod(tree.path("linked/sh"), 0o755) == 0)
-        #expect(link(tree.path("linked/sh"), tree.path("linked/tidy-tool")) == 0)
+        try tree.directory("bin")
+        // Symlinks: the real file's name is a launcher's, in any spelling APFS finds it by.
+        try files.createSymbolicLink(atPath: tree.path("bin/cleanup-tool"), withDestinationPath: "/bin/sh")
+        try program(tree, "real/ZSH")
+        try files.createSymbolicLink(atPath: tree.path("bin/cache-tool"), withDestinationPath: tree.path("real/ZSH"))
+        // Scripts a launcher runs, directly, through a hard link, or through env and its options.
+        try program(tree, "bin/sh-script", "#!/bin/sh\nexit 0\n")
+        #expect(link(tree.path("bin/sh-script"), tree.path("bin/tidy-tool")) == 0)
+        try program(tree, "bin/env-python", "#!/usr/bin/env python3\nprint(1)\n")
+        try program(tree, "bin/env-split", "#!/usr/bin/env -S perl -w\n")
+        try program(tree, "bin/env-attached", "#!/usr/bin/env -iSruby\n")
+        try program(tree, "bin/env-options", "#!/usr/bin/env -u HOME LANG=C node\n")
+        try program(tree, "bin/env-long", "#!/usr/bin/env --split-string=tidy\n")
+        try program(tree, "bin/env-nothing", "#!/usr/bin/env -i\n")
+        // A script whose interpreter is a script a launcher runs.
+        try program(tree, "bin/helper", "#!/bin/bash\n")
+        try program(tree, "bin/env-helper", "#!/usr/bin/env helper\n")
+        try program(tree, "bin/direct-helper", "#!\(tree.path("bin/helper")) -x\n")
+        // Interpreters that can't be told: relative, missing, none at all, and a file that can't be read.
+        try program(tree, "bin/relative", "#!bin/sh\n")
+        try program(tree, "bin/env-missing", "#!/usr/bin/env no-such-tool-for-spacekit\n")
+        try program(tree, "bin/bare", "#!\n")
+        try program(tree, "bin/unreadable", mode: 0o111)
 
-        func run(_ name: String, in folder: String) -> (outcome: CleanupOutcome?, calls: [[String]]) {
-            let runner = RecordingRunner(searchPath: [tree.path(folder)] + Shell.searchPath)
-            let tool = rule("tool", builtin: false, command: [name, "--all"])
-            let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: [name, "--all"], estimatedBytes: 1)])
-            let report = manualRun(plan, with: executor(tree, rules: [tool], runner: runner, allowed: [name]))
-            return (report.commands.first?.outcome, runner.calls)
-        }
-        let renamed = [("cleanup-tool", "renamed", "'sh'"), ("cache-tool", "renamed", "'zsh'"), ("tidy-tool", "linked", "'sh'")]
-        for (name, folder, launcher) in renamed {
-            let result = run(name, in: folder)
+        let refused = [
+            ("cleanup-tool", "'sh'"), ("cache-tool", "'ZSH'"), ("sh-script", "'sh'"), ("tidy-tool", "'sh'"),
+            ("env-python", "'python3'"), ("env-split", "'perl'"), ("env-attached", "'ruby'"), ("env-options", "'node'"),
+            ("env-long", "env"), ("env-nothing", "env"), ("env-helper", "'bash'"), ("direct-helper", "'bash'"),
+            ("relative", "bin/sh"), ("env-missing", "no-such-tool-for-spacekit"), ("bare", "interpreter"), ("unreadable", "read"),
+        ]
+        for (name, mentioning) in refused {
+            let result = runAllowed(name, in: tree)
             let reason = skipReason(result.outcome)
-            #expect(reason?.contains("same program as \(launcher)") == true, "\(name): \(String(describing: result.outcome))")
+            #expect(reason?.contains(mentioning) == true, "\(name): \(reason ?? "ran")")
             #expect(result.calls.isEmpty, "\(name)")
         }
-        let fine = run("fine-tool", in: "renamed")
-        #expect(skipReason(fine.outcome) == nil)
-        #expect(fine.calls == [["fine-tool", "--all"]])
+    }
+
+    /// The Command Line Tools install one shim file under dozens of names (`git`, `pip3`, `swiftc`, `strip`), and Volta
+    /// and mise link every tool to one shim; each picks what to run from the name it was started as. Comparing files
+    /// would take `pip3` for `git`.
+    @Test("Tools that share one program file with a launcher, or a shim that dispatches by name, run under their own names")
+    func sharedProgramFiles() throws {
+        let tree = try TempTree()
+        let files = FileManager.default
+        try program(tree, "bin/git")
+        #expect(link(tree.path("bin/git"), tree.path("bin/pip3")) == 0)
+        try program(tree, "shims/volta-shim")
+        for name in ["node", "yarn"] {
+            try files.createSymbolicLink(atPath: tree.path("bin/\(name)"), withDestinationPath: tree.path("shims/volta-shim"))
+        }
+        try program(tree, "bin/interpreter")
+        try program(tree, "bin/by-env", "#!/usr/bin/env -i LANG=C interpreter --quiet\n")
+        try program(tree, "bin/by-path", "#!\(tree.path("bin/interpreter")) -q\n")
+        // A copy of a launcher under another name has its own file; the review names where it was found.
+        try files.copyItem(atPath: "/bin/zsh", toPath: tree.path("bin/zsh-copy"))
+
+        for name in ["pip3", "yarn", "by-env", "by-path", "zsh-copy"] {
+            let result = runAllowed(name, in: tree)
+            #expect(skipReason(result.outcome) == nil, "\(name): \(String(describing: result.outcome))")
+            #expect(result.calls == [[name, "--all"]], "\(name)")
+        }
     }
 
     @Test("What a command frees is charged to the run's budget; the next command that doesn't fit isn't started")

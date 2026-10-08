@@ -117,27 +117,6 @@ public struct CommandTrust: Sendable {
         return name == "docker" ? dockerRefusal(arguments, docker: executable, runner: runner) : nil
     }
 
-    /// Why the program found for the allowed name `name` is a code launcher after all, or `nil`. A name check can't
-    /// see a symlink, a hard link or a copy of `sh` that a rule calls `cleanup-tool`, so the file is compared with
-    /// every copy of each launcher on the search path the command was found on: same real path, same (device, inode),
-    /// or same bytes.
-    func launcherIdentityRefusal(_ name: String, at executable: String, runner: any ProcessRunner) -> String? {
-        guard let program = ProgramFile(executable) else {
-            return "Couldn't read '\(name)' at \(executable) to check which program it is"
-        }
-        for launcher in CommandTrust.locatableLaunchers {
-            for path in runner.locateAll(launcher) {
-                guard let other = ProgramFile(path), program.isSameProgram(as: other) else { continue }
-                return "'\(name)' is the same program as '\(launcher)' (\(path)), which runs whatever code its arguments name, "
-                    + "so it can't be allowed"
-            }
-        }
-        return nil
-    }
-
-    /// Launcher names to look up for `launcherIdentityRefusal`, in a fixed order so the reason names the same one each time.
-    private static let locatableLaunchers = (codeLaunchers.union(["python3"])).sorted()
-
     /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
     /// executor's refusal say the same thing.
     static func untrustedRuleCommand(_ executable: String) -> String {
@@ -167,28 +146,5 @@ public struct CommandTrust: Sendable {
             issues.append((.error, "commands run without a shell; remove shell syntax (; && | ` $( )"))
         }
         return issues
-    }
-}
-
-/// The file a program name leads to, as far as telling two programs apart goes.
-private struct ProgramFile {
-    let realPath: String
-    let device: dev_t
-    let inode: ino_t
-    let size: off_t
-
-    /// `nil` when nothing readable is there.
-    init?(_ path: String) {
-        var st = stat()
-        guard stat(path, &st) == 0, let real = PathUtil.realpath(path) else { return nil }
-        realPath = real
-        device = st.st_dev
-        inode = st.st_ino
-        size = st.st_size
-    }
-
-    func isSameProgram(as other: ProgramFile) -> Bool {
-        if realPath == other.realPath || (device == other.device && inode == other.inode) { return true }
-        return size == other.size && FileManager.default.contentsEqual(atPath: realPath, andPath: other.realPath)
     }
 }

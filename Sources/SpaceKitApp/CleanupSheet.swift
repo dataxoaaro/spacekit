@@ -27,7 +27,7 @@ struct CleanupSheet: View {
     private var needsAcknowledgement: Bool { review?.needsAcknowledgement ?? false }
 
     private func inclusion<Subject>(_ row: CleanupReview.Row<Subject>) -> Binding<Bool> {
-        Binding(get: { review?.isIncluded(row) ?? false }, set: { review = review?.including(row, $0) })
+        Binding(get: { review?.isIncluded(row) ?? false }, set: { review = review?.setting(row, included: $0) })
     }
 
     private var useTrash: Binding<Bool> {

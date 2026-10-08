@@ -200,7 +200,7 @@ struct CleanupReviewTests {
             ], useTrash: false)
         let review = CleanupReview(plan, executor: executor)
         let keepB = try #require(review.items.first { $0.subject.path == tree.path("home/Projects/b") })
-        let narrowed = review.including(keepB, false)
+        let narrowed = review.setting(keepB, included: false)
         #expect(review.isIncluded(keepB))
         #expect(!narrowed.isIncluded(keepB))
         #expect(narrowed.selectedItems.map(\.path) == [tree.path("home/Projects/a")])
@@ -211,7 +211,7 @@ struct CleanupReviewTests {
         #expect(report.items.map(\.item.path) == [tree.path("home/Projects/a")])
         #expect(!onDisk(tree.path("home/Projects/a")))
         #expect(onDisk(tree.path("home/Projects/b/y")))
-        #expect(narrowed.including(keepB, true).selectedItems.count == 2)
+        #expect(narrowed.setting(keepB, included: true).selectedItems.count == 2)
     }
 
     @Test("Blocked rows can't be ticked and never reach the executor")
@@ -232,7 +232,7 @@ struct CleanupReviewTests {
         #expect(review.blockedCount == 2)
         let home = try #require(review.items.first { $0.subject.path == tree.path("home") })
         #expect(home.verdict.isBlocked)
-        #expect(!review.including(home, true).isIncluded(home))
+        #expect(!review.setting(home, included: true).isIncluded(home))
         #expect(review.selectedItems.map(\.path) == [tree.path("home/Projects/a")])
         #expect(review.selectedCommands.isEmpty)
 

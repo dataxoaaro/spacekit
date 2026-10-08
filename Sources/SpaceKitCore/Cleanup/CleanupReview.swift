@@ -77,7 +77,7 @@ public struct CleanupReview: Sendable {
     }
 
     /// This review with `row` ticked or unticked. Ticking a blocked row changes nothing.
-    public func including<Subject>(_ row: Row<Subject>, _ included: Bool) -> CleanupReview {
+    public func setting<Subject>(_ row: Row<Subject>, included: Bool) -> CleanupReview {
         var review = self
         if included { review.unticked.remove(row.key) } else { review.unticked.insert(row.key) }
         return review

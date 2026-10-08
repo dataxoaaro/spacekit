@@ -28,7 +28,7 @@ struct ManualJobRunTests {
     func reviewed(_ run: ManualJobRun, _ executor: CleanupExecutor, untick: Set<String> = []) throws -> ReviewedPlan {
         var review = CleanupReview(try #require(run.plan), executor: executor)
         for row in review.items where untick.contains(PathUtil.lastComponent(row.subject.path)) {
-            review = review.including(row, false)
+            review = review.setting(row, included: false)
         }
         return review.acknowledge(acceptingWarnings: false)
     }

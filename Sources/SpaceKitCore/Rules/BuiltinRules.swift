@@ -25,7 +25,7 @@ public struct BuiltinRules: Sendable {
     /// Where the rules came from, for `spacekit rules dirs` and `spacekit doctor`.
     public let origin: String
 
-    init(files: [RuleFileText], issues: [RuleIssue] = [], origin: String = "given") {
+    init(files: [RuleFileText], issues: [RuleIssue] = [], origin: String = "rule files passed in directly") {
         self.files = files
         self.issues = issues
         self.origin = origin

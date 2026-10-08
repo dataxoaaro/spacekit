@@ -70,9 +70,9 @@ public struct RuleLibrary: Sendable {
                 issues += ruleIssues
                 if ruleIssues.contains(where: { $0.severity == .error }) { continue }
                 if let original = builtinByID[rule.id], !isBuiltin {
-                    let problems = overrideProblems(builtin: original, replacement: rule)
+                    let problems = overrideIssues(builtin: original, replacement: rule)
                     if !problems.isEmpty {
-                        issues += problems.map { RuleIssue(severity: .error, source: file.source, ruleID: rule.id, message: $0) }
+                        issues += problems
                         continue
                     }
                 }
@@ -126,9 +126,7 @@ public struct RuleLibrary: Sendable {
         if !asBuiltin {
             for rule in rules {
                 guard let original = library.rule(id: rule.id), original.isBuiltin else { continue }
-                issues += overrideProblems(builtin: original, replacement: rule).map {
-                    RuleIssue(severity: .error, source: rule.source ?? "<inline>", ruleID: rule.id, message: $0)
-                }
+                issues += overrideIssues(builtin: original, replacement: rule)
             }
         }
         return (rules, issues)

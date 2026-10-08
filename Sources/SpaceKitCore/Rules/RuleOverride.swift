@@ -1,6 +1,13 @@
 import Foundation
 
 extension RuleLibrary {
+    /// `overrideProblems` as errors on the replacement rule, which then doesn't load.
+    static func overrideIssues(builtin: Rule, replacement: Rule) -> [RuleIssue] {
+        overrideProblems(builtin: builtin, replacement: replacement).map {
+            RuleIssue(severity: .error, source: replacement.source ?? "<inline>", ruleID: replacement.id, message: $0)
+        }
+    }
+
     /// Why `replacement` may not take the place of the built-in rule with the same id; empty when it may.
     ///
     /// Jobs and the starter config name rules by id, and jobs from 🟢 rules run automatically. So a file in the user
@@ -67,24 +74,24 @@ extension RuleLibrary {
     }
 
     private static func policyProblems(_ builtin: Rule, _ replacement: Rule) -> [String] {
-        var problems: [String] = []
         let original = builtin.policy
         let policy = replacement.policy
-        if let threshold = original?.threshold, (policy?.threshold).map({ $0 < threshold }) ?? true {
-            problems.append("lowers its policy threshold below \(threshold)")
-        }
-        if let age = original?.olderThan, (policy?.olderThan).map({ $0 < age }) ?? true {
-            problems.append("lowers its policy olderThan below \(age)")
-        }
-        if let age = original?.keepRecent, (policy?.keepRecent).map({ $0 < age }) ?? true {
-            problems.append("lowers its policy keepRecent below \(age)")
-        }
-        let modes: [Job.Mode] = [.observe, .suggest, .automatic]
+        var problems = [
+            lowered("threshold", from: original?.threshold, to: policy?.threshold),
+            lowered("olderThan", from: original?.olderThan, to: policy?.olderThan),
+            lowered("keepRecent", from: original?.keepRecent, to: policy?.keepRecent),
+        ].compactMap { $0 }
         let mode = Job.suggested(for: replacement).mode
         let originalMode = Job.suggested(for: builtin).mode
-        if modes.firstIndex(of: mode) ?? 0 > modes.firstIndex(of: originalMode) ?? 0 {
+        if mode > originalMode {
             problems.append("makes jobs from it start in \(mode.rawValue) mode instead of \(originalMode.rawValue)")
         }
         return problems
+    }
+
+    /// A limit the built-in rule's policy sets that the replacement lowers or leaves out (no limit is the lowest).
+    private static func lowered<Limit: Comparable>(_ name: String, from original: Limit?, to replacement: Limit?) -> String? {
+        guard let original, replacement.map({ $0 < original }) ?? true else { return nil }
+        return "lowers its policy \(name) below \(original)"
     }
 }

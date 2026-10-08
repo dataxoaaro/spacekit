@@ -2,7 +2,8 @@ import Foundation
 
 /// A scheduled cleanup ("Automation" in the app, `jobs:` in the config).
 public struct Job: Codable, Sendable, Identifiable, Hashable {
-    public enum Mode: String, Codable, Sendable, CaseIterable {
+    /// Ordered by how much a job does on its own: `observe` < `suggest` < `automatic`.
+    public enum Mode: String, Codable, Sendable, CaseIterable, Comparable {
         /// Tell me when this gets large.
         case observe
         /// Prepare a cleanup, but ask me first.
@@ -23,6 +24,16 @@ public struct Job: Codable, Sendable, Identifiable, Hashable {
             case .observe: return "Notify me when it grows past the threshold."
             case .suggest: return "Prepare a cleanup and ask before removing anything."
             case .automatic: return "Clean on schedule. Regenerable items only, unless review items are included."
+            }
+        }
+
+        public static func < (lhs: Mode, rhs: Mode) -> Bool { lhs.autonomy < rhs.autonomy }
+
+        private var autonomy: Int {
+            switch self {
+            case .observe: return 0
+            case .suggest: return 1
+            case .automatic: return 2
             }
         }
     }

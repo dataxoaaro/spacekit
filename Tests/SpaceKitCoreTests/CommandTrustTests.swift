@@ -232,7 +232,7 @@ struct CommandTrustTests {
         try program(tree, "bin/env-python", "#!/usr/bin/env python3\nprint(1)\n")
         try program(tree, "bin/env-split", "#!/usr/bin/env -S perl -w\n")
         try program(tree, "bin/env-attached", "#!/usr/bin/env -iSruby\n")
-        try program(tree, "bin/env-options", "#!/usr/bin/env -u HOME LANG=C node\n")
+        try program(tree, "bin/env-options", "#!/usr/bin/env -S -u HOME LANG=C node\n")
         try program(tree, "bin/env-long", "#!/usr/bin/env --split-string=tidy\n")
         try program(tree, "bin/env-nothing", "#!/usr/bin/env -i\n")
         // A script whose interpreter is a script a launcher runs.
@@ -273,7 +273,7 @@ struct CommandTrustTests {
             try files.createSymbolicLink(atPath: tree.path("bin/\(name)"), withDestinationPath: tree.path("shims/volta-shim"))
         }
         try program(tree, "bin/interpreter")
-        try program(tree, "bin/by-env", "#!/usr/bin/env -i LANG=C interpreter --quiet\n")
+        try program(tree, "bin/by-env", "#!/usr/bin/env -S -i LANG=C interpreter --quiet\n")
         try program(tree, "bin/by-path", "#!\(tree.path("bin/interpreter")) -q\n")
         // A copy of a launcher under another name has its own file; the review names where it was found.
         try files.copyItem(atPath: "/bin/zsh", toPath: tree.path("bin/zsh-copy"))

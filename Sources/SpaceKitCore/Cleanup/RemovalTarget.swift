@@ -52,9 +52,7 @@ public struct RemovalTarget: Sendable, Equatable {
     /// Every spelling the guard checks: as named, with its folder resolved, and as stored on disk. A symlink in a parent
     /// folder can't smuggle a protected location in under another name.
     public var spellings: [String] {
-        [path, resolvedPath, onDiskPath].compactMap { $0 }.reduce(into: []) { result, spelling in
-            if !result.contains(spelling) { result.append(spelling) }
-        }
+        PathUtil.unique([path, resolvedPath, onDiskPath].compactMap { $0 })
     }
 
     /// Something was there when the target was built.

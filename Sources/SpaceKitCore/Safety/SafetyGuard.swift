@@ -123,9 +123,9 @@ public struct SafetyGuard: Sendable {
         scope = RuleScope(home: home, patternRoots: patternRoots)
         // Resolved once, for every list: a home that is (or sits behind) a symlink is protected at its real location
         // too, whichever spelling an item arrives under.
-        let homes = SafetyGuard.unique([home, PathUtil.realpath(home)].compactMap { $0 })
+        let homes = PathUtil.unique([home, PathUtil.realpath(home)].compactMap { $0 })
         func locations(_ list: (String) -> [String]) -> [Location] {
-            SafetyGuard.unique(homes.flatMap(list)).map(Location.init)
+            PathUtil.unique(homes.flatMap(list)).map(Location.init)
         }
         critical = locations(SafetyGuard.criticalPaths)
         sealed = locations(SafetyGuard.sealedTrees)
@@ -142,7 +142,7 @@ public struct SafetyGuard: Sendable {
         protectedPatterns = self.protectedRules.map { rule in
             let patterns = rule.paths.flatMap { path in homes.map { PathUtil.comparisonKey(PathUtil.expand(path, home: $0)) } }
             return ProtectedPattern(
-                rule: rule, patterns: SafetyGuard.unique(patterns), names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
+                rule: rule, patterns: PathUtil.unique(patterns), names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
         }
     }
 
@@ -373,12 +373,6 @@ public struct SafetyGuard: Sendable {
     private func abbreviated(_ path: String) -> String {
         let real = PathUtil.realpath(home)
         return [home, real].compactMap { $0 }.lazy.map { PathUtil.abbreviate(path, home: $0) }.first { $0 != path } ?? path
-    }
-
-    private static func unique(_ paths: [String]) -> [String] {
-        paths.reduce(into: []) { result, path in
-            if !result.contains(path) { result.append(path) }
-        }
     }
 }
 

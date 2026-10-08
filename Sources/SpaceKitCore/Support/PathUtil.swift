@@ -156,6 +156,13 @@ public enum PathUtil {
         (path as NSString).deletingLastPathComponent
     }
 
+    /// `paths` in order, each once.
+    static func unique(_ paths: [String]) -> [String] {
+        paths.reduce(into: []) { result, path in
+            if !result.contains(path) { result.append(path) }
+        }
+    }
+
     /// Expands shell-style globs (`*`, `?`, `[...]`) after `~` expansion. Non-glob paths are returned as-is if they exist.
     public static func glob(_ pattern: String, home: String = PathUtil.home) -> [String] {
         let expanded = expand(pattern, home: home)

@@ -192,8 +192,14 @@ final class AppModel {
         }
     }
 
-    /// Picks up edits made to the config file elsewhere (an editor, the CLI) while SpaceKit was in the background.
-    func rereadConfig() { adopt(context.rereadingConfig()) }
+    /// Picks up edits made to the config file elsewhere (an editor, the CLI) while SpaceKit was in the background. A file
+    /// that became invalid stops every cleanup, so its error is shown the way Reload shows it, besides the banner, once
+    /// per new error rather than on every activation.
+    func rereadConfig() {
+        let before = context.configError
+        adopt(context.rereadingConfig())
+        if let error = context.configError, error != before { errorMessage = "Config problem: \(error)" }
+    }
 
     /// Replaces the context with `new` and refreshes only what depends on what changed: the rule labels when rule
     /// settings or developer roots differ (the context reloaded its library only for rule settings), the Automation

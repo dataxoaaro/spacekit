@@ -148,6 +148,17 @@ A verdict keeps each reason with the decision it calls for on its own (`SafetyVe
 3. evaluates each job with a targeted scan, applies `when` conditions, and observes, suggests or cleans. Automatic runs hand the executor an automatic plan, which acknowledges nothing;
 4. takes the weekly full snapshot for History.
 
+A person running a job by hand, or approving a suggestion, goes through one Core module, `ManualJobRun`, in two steps. `prepare` evaluates the job now and says whether the run goes ahead or skips, and why; a suggestion's saved plan is narrowed to the items the fresh evaluation still offers. A job below its size threshold skips unless the person forces it ("Run Anyway", `--force`); a suggestion is held back only when nothing in it is still eligible. The prepared plan goes through the review like any other cleanup. `complete`, which exists only on a prepared run, runs the reviewed plan (only rows of the prepared plan), records the job's run so its schedule moves on, and settles the suggestion: dismissed when nothing eligible is left, otherwise kept, narrowed to what's left, with the problems the run hit. The app, the TUI and the CLI only show the prepared run and ask.
+
+```
+ManualJobRun.prepare(job | suggestion) ─► skipReason? ─► forced() ─► plan ─► CleanupReview ─► ReviewedPlan
+                                                                                                    │
+ManualJobRun.complete ◄─────────────────────────────────────────────────────────────────────────────┘
+        ├─► CleanupExecutor ─► report
+        ├─► job state (lastRun, outcome)
+        └─► suggestion: dismissed, or kept with what's left and its problems
+```
+
 Job state, suggestions and config edits are read-modify-write under a lock file (`FileLock`), so the agent, the CLI and the app don't overwrite each other's changes.
 
 ## Colors

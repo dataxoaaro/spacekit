@@ -105,14 +105,16 @@ public struct CommandTrust: Sendable {
     }
 
     /// Why the program a command found may not start, checked right before it would: the name may run, but the file
-    /// may not be what the name says. `name` is the command's bare name, `executable` where it was found.
-    func launchRefusal(_ name: String, at executable: String, isBuiltin: Bool, runner: any ProcessRunner) -> String? {
+    /// may not be what the name says, or the tool would act on another machine. `arguments` is the command, its first
+    /// the bare name; `executable` is where that was found.
+    func launchRefusal(_ arguments: [String], at executable: String, isBuiltin: Bool, runner: any ProcessRunner) -> String? {
+        let name = arguments.first ?? ""
         if !(isBuiltin && CommandTrust.trustedCommands.contains(name)),
             let refusal = launcherIdentityRefusal(name, at: executable, runner: runner)
         {
             return refusal
         }
-        return endpointRefusal(name, runner: runner)
+        return name == "docker" ? dockerRefusal(arguments, docker: executable, runner: runner) : nil
     }
 
     /// Why the program found for the allowed name `name` is a code launcher after all, or `nil`. A name check can't
@@ -165,42 +167,6 @@ public struct CommandTrust: Sendable {
             issues.append((.error, "commands run without a shell; remove shell syntax (; && | ` $( )"))
         }
         return issues
-    }
-
-    // MARK: Where the tool acts
-
-    /// The `docker context inspect` call that tells which daemon `docker` would talk to.
-    static let dockerEndpointQuery = ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]
-
-    /// Why a tool would act on something other than this Mac, or `nil`. Docker rules prune images and build cache,
-    /// and a Docker CLI can be pointed at a daemon on another machine (a CI builder, a shared server). Those
-    /// commands run only when the daemon is reached through a unix socket, which is how Docker Desktop, OrbStack,
-    /// Colima and Podman's Docker socket serve a local VM. Tools run without DOCKER_HOST and DOCKER_CONTEXT (see
-    /// `Shell.toolEnvironment`), so the context `docker context inspect` reports in that environment is the one the
-    /// command uses.
-    func endpointRefusal(_ executable: String, runner: any ProcessRunner) -> String? {
-        guard executable == "docker" else { return nil }
-        if let host = runner.environment["DOCKER_HOST"], !host.isEmpty, !host.hasPrefix("unix://") {
-            return "DOCKER_HOST points Docker at \(CommandTrust.shown(host)), not at a socket on this Mac; "
-                + "SpaceKit only cleans a Docker running on this Mac"
-        }
-        guard let docker = runner.locate(executable) else { return nil }
-        let result = runner.run(docker, CommandTrust.dockerEndpointQuery, timeout: 30)
-        let endpoint = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard result.status == 0, !result.timedOut else {
-            return "Couldn't tell which Docker the active context uses (docker context inspect: \(CommandTrust.shown(endpoint)))"
-        }
-        guard endpoint.hasPrefix("unix://") else {
-            return "The active Docker context points at \(endpoint.isEmpty ? "no endpoint" : CommandTrust.shown(endpoint)), "
-                + "not at a socket on this Mac; SpaceKit only cleans a Docker running on this Mac (docker context use)"
-        }
-        return nil
-    }
-
-    /// Tool output quoted in a reason: one line, kept short.
-    private static func shown(_ text: String) -> String {
-        let line = text.split(separator: "\n").first.map(String.init) ?? ""
-        return line.count > 120 ? String(line.prefix(120)) + "…" : line
     }
 }
 

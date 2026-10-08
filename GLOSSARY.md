@@ -28,7 +28,7 @@
 
 **Process runner**: the port the executor finds and runs tools through (`ProcessRunner`); `SystemProcessRunner` starts real processes, tests use a recording runner. _Avoid_: shell (tools never run in one).
 
-**Local Docker endpoint**: a Docker context whose endpoint is a unix socket on this Mac (Docker Desktop, OrbStack, Colima); `docker` rule commands run only against one. _Avoid_: local daemon.
+**Local Docker endpoint**: a Docker context whose endpoint is a unix socket on this Mac (Docker Desktop, OrbStack, Colima); `docker` rule commands run only against one, and `docker builder` commands only when the selected buildx builder is a `docker` or `docker-container` builder on one. _Avoid_: local daemon.
 
 ## Runs
 

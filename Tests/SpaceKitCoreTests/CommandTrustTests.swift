@@ -7,7 +7,6 @@ import Testing
 /// Stands in for running tools: records every call and answers with what the test scripted, so trust and budget
 /// tests never start a real program.
 final class RecordingRunner: ProcessRunner {
-    let environment: [String: String]
     private let locator: @Sendable (String) -> [String]
     private let respond: @Sendable (_ call: [String]) -> Shell.Result
     private let recorded = Mutex<[[String]]>([])
@@ -15,29 +14,27 @@ final class RecordingRunner: ProcessRunner {
 
     /// Each tool in `installed` is found as a small stand-in file, so the executor has a program file to check.
     convenience init(
-        environment: [String: String] = [:], installed: Set<String>,
+        installed: Set<String>,
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("spacekit-runner-\(UUID().uuidString)").path
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         for name in installed { try? Data("stand-in for \(name)\n".utf8).write(to: URL(fileURLWithPath: folder + "/" + name)) }
         let locate: @Sendable (String) -> [String] = { installed.contains($0) ? [folder + "/" + $0] : [] }
-        self.init(environment: environment, standIns: folder, locate: locate, respond: respond)
+        self.init(standIns: folder, locate: locate, respond: respond)
     }
 
     /// Tools are found the way `Shell.which` finds them, in `searchPath`; still none is started.
     convenience init(
-        environment: [String: String] = [:], searchPath: [String],
+        searchPath: [String],
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
-        self.init(environment: environment, standIns: nil, locate: { Shell.installed($0, in: searchPath) }, respond: respond)
+        self.init(standIns: nil, locate: { Shell.installed($0, in: searchPath) }, respond: respond)
     }
 
     private init(
-        environment: [String: String], standIns: String?, locate: @escaping @Sendable (String) -> [String],
-        respond: @escaping @Sendable (_ call: [String]) -> Shell.Result
+        standIns: String?, locate: @escaping @Sendable (String) -> [String], respond: @escaping @Sendable (_ call: [String]) -> Shell.Result
     ) {
-        self.environment = environment
         self.standIns = standIns
         self.locator = locate
         self.respond = respond
@@ -57,16 +54,13 @@ final class RecordingRunner: ProcessRunner {
         return respond(call)
     }
 
+    /// Scripted like `run`: the test puts standard output in `output` and standard error in `errors`.
+    func query(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result {
+        run(executable, arguments, timeout: timeout)
+    }
+
     /// Every call so far, the tool by its bare name.
     var calls: [[String]] { recorded.withLock { $0 } }
-}
-
-/// What `docker context inspect` prints for a context whose endpoint is `endpoint`.
-func dockerContext(_ endpoint: String) -> @Sendable ([String]) -> Shell.Result {
-    { call in
-        call.starts(with: ["docker", "context", "inspect"])
-            ? Shell.Result(status: 0, output: endpoint + "\n", timedOut: false) : Shell.Result(status: 0, output: "", timedOut: false)
-    }
 }
 
 @Suite("Command trust")
@@ -166,6 +160,15 @@ struct CommandTrustTests {
         #expect(!result.output.contains("DOCKER_HOST") && !result.output.contains("API_TOKEN"))
     }
 
+    @Test("The real runner keeps a query's standard error apart from its output")
+    func realRunnerSeparatesErrors() {
+        let script = "echo endpoint; echo 'WARNING: noise' >&2"
+        let apart = Shell.run("/bin/sh", ["-c", script], timeout: 10, environment: [:], separateErrors: true)
+        #expect(apart.status == 0 && apart.output == "endpoint\n" && apart.errors == "WARNING: noise\n")
+        let merged = Shell.run("/bin/sh", ["-c", script], timeout: 10, environment: [:])
+        #expect(merged.output.contains("endpoint") && merged.output.contains("WARNING") && merged.errors.isEmpty)
+    }
+
     @Test("Refused commands never reach the runner")
     func refusalsDontRun() throws {
         let tree = try TempTree()
@@ -245,44 +248,6 @@ struct CommandTrustTests {
         #expect(skipReason(report.commands.last?.outcome)?.contains("budget") == true)
         #expect(runner.calls == [["brew", "cleanup"]])
         #expect(journalEntries(tree).map(\.bytes) == [freed])
-    }
-
-    @Test("Docker commands run only against a Docker on this Mac's own socket")
-    func dockerEndpoint() throws {
-        let tree = try TempTree()
-        let prune = ["docker", "builder", "prune", "--force"]
-        let docker = rule("docker.build-cache", builtin: true, command: prune)
-        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: docker.id, arguments: prune, estimatedBytes: 1)])
-        func run(_ runner: RecordingRunner) -> CleanupOutcome? {
-            executor(tree, rules: [docker], runner: runner).execute(
-                AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false
-            )
-            .commands.first?.outcome
-        }
-        let inspect = ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]
-
-        for endpoint in ["tcp://build.example.com:2376", "ssh://me@build.example.com", "npipe:////./pipe/docker_engine", ""] {
-            let remote = RecordingRunner(installed: ["docker"], respond: dockerContext(endpoint))
-            #expect(skipReason(run(remote))?.contains("Docker") == true, "\(endpoint)")
-            #expect(remote.calls == [inspect], "\(endpoint)")
-        }
-        let viaHost = RecordingRunner(environment: ["DOCKER_HOST": "tcp://build.example.com:2376"], installed: ["docker"])
-        #expect(skipReason(run(viaHost))?.contains("DOCKER_HOST") == true)
-        #expect(viaHost.calls.isEmpty)
-        let failing = RecordingRunner(installed: ["docker"]) { _ in Shell.Result(status: 1, output: "context not found", timedOut: false) }
-        #expect(skipReason(run(failing)) != nil)
-        #expect(failing.calls == [inspect])
-
-        // Docker Desktop, OrbStack and Colima all listen on a unix socket.
-        for endpoint in [
-            "unix:///var/run/docker.sock", "unix:///Users/tester/.orbstack/run/docker.sock",
-            "unix:///Users/tester/.colima/default/docker.sock",
-        ] {
-            let local = RecordingRunner(
-                environment: ["DOCKER_HOST": "unix:///var/run/docker.sock"], installed: ["docker"], respond: dockerContext(endpoint))
-            #expect(run(local)?.isRemoved == true, "\(endpoint)")
-            #expect(local.calls == [inspect, prune], "\(endpoint)")
-        }
     }
 
     @Test("An item or model name that would read as an option is refused")

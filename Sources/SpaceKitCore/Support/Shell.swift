@@ -54,8 +54,11 @@ public enum Shell {
 
     public struct Result: Sendable {
         public var status: Int32
+        /// Standard output, and standard error too unless the run kept it apart.
         public var output: String
         public var timedOut: Bool
+        /// Standard error of a run that kept it apart (`separateErrors`); empty otherwise.
+        public var errors: String = ""
     }
 
     /// How long a tool gets to exit after SIGTERM before it (and its process group) gets SIGKILL.
@@ -94,33 +97,41 @@ public enum Shell {
     /// Runs a tool and waits until it has exited and closed its output, or until `timeout`. A tool that is still
     /// running then, or left a background child holding its output, is sent SIGTERM and then SIGKILL; its
     /// process group goes with it. Timed-out runs report status -2. The tool gets `toolEnvironment(from:)` of
-    /// `environment`, never SpaceKit's own environment as is.
+    /// `environment`, never SpaceKit's own environment as is. `separateErrors` keeps standard error out of `output`
+    /// (in `errors`), for a tool whose output is read as an answer, where a warning must not pass for one.
     public static func run(
         _ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment, separateErrors: Bool = false
     ) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = toolEnvironment(from: environment, home: PathUtil.home)
         let pipe = Pipe()
+        let errorPipe = separateErrors ? Pipe() : nil
+        let pipes = [pipe] + (errorPipe.map { [$0] } ?? [])
         process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardError = errorPipe ?? pipe
         process.standardInput = FileHandle.nullDevice
 
         let output = OutputBuffer()
-        let ended = DispatchSemaphore(value: 0)
+        let errors = OutputBuffer()
+        // Left once per pipe, when that pipe reaches its end.
+        let ended = DispatchGroup()
         let exited = DispatchSemaphore(value: 0)
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { handle.readabilityHandler = nil }
-            if output.append(chunk) { ended.signal() }
+        for (reading, buffer) in zip(pipes, [output, errors]) {
+            ended.enter()
+            reading.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil }
+                if buffer.append(chunk) { ended.leave() }
+            }
         }
         process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
-            pipe.fileHandleForReading.readabilityHandler = nil
+            for reading in pipes { reading.fileHandleForReading.readabilityHandler = nil }
             return Result(status: -1, output: error.localizedDescription, timedOut: false)
         }
         let pid = process.processIdentifier
@@ -144,9 +155,11 @@ public enum Shell {
                 if !hasExited { hasExited = exited.wait(timeout: .now() + terminationGrace) == .success }
             }
         }
-        pipe.fileHandleForReading.readabilityHandler = nil
-        try? pipe.fileHandleForReading.close()
-        return Result(status: timedOut ? -2 : process.terminationStatus, output: output.text, timedOut: timedOut)
+        for reading in pipes {
+            reading.fileHandleForReading.readabilityHandler = nil
+            try? reading.fileHandleForReading.close()
+        }
+        return Result(status: timedOut ? -2 : process.terminationStatus, output: output.text, timedOut: timedOut, errors: errors.text)
     }
 
     /// Keeps the last 64 KB of a tool's output.

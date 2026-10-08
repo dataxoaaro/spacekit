@@ -61,7 +61,7 @@ extension CleanupExecutor {
         let name = command.arguments[0]
         guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
         let isBuiltin = rules[command.ruleID]?.isBuiltin == true
-        if let refusal = commandTrust.launchRefusal(name, at: executable, isBuiltin: isBuiltin, runner: runner) {
+        if let refusal = commandTrust.launchRefusal(command.arguments, at: executable, isBuiltin: isBuiltin, runner: runner) {
             return (.skipped(reason: refusal), "")
         }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }

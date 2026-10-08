@@ -139,14 +139,17 @@ extension RuleLibrary {
         PathUtil.comparisonKey(PathUtil.expand(PathUtil.canonicalPattern(path)))
     }
 
-    /// True when every name `segment` matches, `pattern` matches too. `**` crosses folders and may match none, so a
-    /// segment holding it is covered only by the same segment.
+    /// True when every name `segment` matches, `pattern` matches too, the way glob(3) expands a rule path: one
+    /// component at a time, and a leading `.` only where the pattern spells it out (`FNM_PERIOD`), so `*` never covers
+    /// `.keys` or `.k*`. `**` crosses folders and may match none, so a segment holding it is covered only by the same
+    /// segment.
     private static func covers(segment: Substring, pattern: Substring) -> Bool {
         if segment == pattern { return true }
         if segment.contains("**") { return false }
-        if !PathUtil.isGlob(String(segment)) { return fnmatch(String(pattern), String(segment), 0) == 0 }
+        if !PathUtil.isGlob(String(segment)) { return fnmatch(String(pattern), String(segment), FNM_PERIOD) == 0 }
         guard pattern.hasSuffix("*"), !pattern.hasSuffix("**") else { return false }
         let prefix = pattern.dropLast()
-        return !PathUtil.isGlob(String(prefix)) && segment.hasPrefix(prefix)
+        let dotNameUnderWildcard = prefix.isEmpty && segment.hasPrefix(".")
+        return !PathUtil.isGlob(String(prefix)) && segment.hasPrefix(prefix) && !dotNameUnderWildcard
     }
 }

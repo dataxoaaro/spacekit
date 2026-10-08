@@ -274,6 +274,18 @@ struct RuleLoadingTests {
         #expect(try pathErrors(builtin: builtin, override: [linked + "/caches/app/data"]).isEmpty)
     }
 
+    @Test("A built-in glob covers only the names the engine's glob expands it to: a leading dot must be written out")
+    func overrideDottedName() throws {
+        let builtin = ["~/.base/tools/*", "~/.base/apps/App*"]
+        for hidden in ["~/.base/tools/.keys", "~/.base/tools/.k*", "~/.base/tools/.*"] {
+            #expect(try pathErrors(builtin: builtin, override: [hidden]).contains { $0.contains("adds the path") }, "\(hidden)")
+        }
+        for named in ["~/.base/tools/app", "~/.base/tools/app*", "~/.base/apps/AppCode", "~/.base/apps/App.old"] {
+            #expect(try pathErrors(builtin: builtin, override: [named]).isEmpty, "\(named)")
+        }
+        #expect(try pathErrors(builtin: ["~/.base/tools/.*"], override: ["~/.base/tools/.keys"]).isEmpty)
+    }
+
     /// `builtin` as a user's copy with other paths, everything else unchanged.
     func copy(of builtin: Rule, paths: [String]) -> Rule {
         var rule = builtin

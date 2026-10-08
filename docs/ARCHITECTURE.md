@@ -50,7 +50,7 @@ The scanner is the hot path. Its job is to turn millions of directory entries in
 - **Hard links are attributed deterministically.** While the scan runs, a multiply-linked file's bytes go to the first link a worker reaches, so live totals stay right. When the workers finish, the bytes move to the link in the folder whose path sorts first (then by file name), so the same disk always gives the same tree whatever the thread timing. The other links stay in their folders' file counts with no bytes. The tree keeps each multiply-linked file's group of links after the scan, so later updates know where the bytes go.
 - **The whole disk, once.** Scanning `/` crosses into every volume of the startup disk's APFS container (System, Data, VM swap, Preboot, Update) and skips data-volume paths that are also reachable through firmlinks (`/Users` ≡ `/System/Volumes/Data/Users`), using `/usr/share/firmlinks`. Other disks and virtual file systems are skipped. What the scan can't see is reported as *Hidden & Purgeable* (`used − scanned`).
 - **Progressive results.** Folders down to `liveDepth` keep an atomic running total, and each folder is published (`isListed`, release/acquire) as soon as it's listed, so the app and TUI draw the map while the scan runs.
-- **After the scan**, one non-recursive bottom-up pass computes totals, newest dates and subtree markers, and sorts children by size. After that the tree changes only through `applyRemoval`, `applyMove`, `splice` and `rescan`, which update every ancestor so views stay correct without rescanning.
+- **After the scan**, one non-recursive bottom-up pass computes totals, newest dates and subtree markers, and sorts children by size. After that the tree changes only through `applyRemoval`, `applyMove`, `applyArrival`, `splice` and `rescan`, which update every ancestor so views stay correct without rescanning.
 
 ### Who may touch a `DirNode`
 
@@ -58,7 +58,7 @@ The scanner is the hot path. Its job is to turn millions of directory entries in
 
 1. **During a scan**, the worker that lists a folder writes its fields, then publishes it (`isListed`, release/acquire). Other threads may read only `name`, `isListed` and `liveSize`, of the nodes in `ScanProgress.liveChildren`.
 2. **When the workers finish**, the scanning thread resolves hard links and aggregates totals, sorting `children` in place, before `Scanner.scan` returns.
-3. **After that**, only the tree's owner changes it, through `applyRemoval`, `applyMove`, `splice` and `rescan`, from one thread or actor at a time. Reads on other threads must be synchronized with those changes by the owner.
+3. **After that**, only the tree's owner changes it, through `applyRemoval`, `applyMove`, `applyArrival`, `splice` and `rescan`, from one thread or actor at a time. Reads on other threads must be synchronized with those changes by the owner.
 
 In the app and the TUI the owner is a `Workspace`, a `Sendable` class with a reader/writer gate on a `Mutex`. The rule: the front end's own thread reads the tree directly, because changes run only there; every other thread reads it only during a read the workspace counts.
 
@@ -144,8 +144,9 @@ JobRunner (automatic) ─► AutomaticPlan      ReviewedPlan
                                          ─► Trash or delete ─► SafetyGuard (again; an unshown warning skips) ─► budget
                                          ─► Remover: identity checked ─► trashItem (manual) or move by handle (automatic) + check what moved │ delete via handles, same volume
                                          ─► journal entry
-                    for each command ─► gates + CommandTrust ─► budget ─► launcher behind it? local Docker? ─► ProcessRunner: no shell,
-                                         cleaned environment ─► measure freed ─► charge budget ─► journal entry
+                    for each command ─► tool found where reviewed? ─► verdict: gates + CommandTrust (launcher behind it?
+                                         automatic: changeable, settings, symlinked rule folders) ─► budget ─► local Docker?
+                                         ─► ProcessRunner: no shell, cleaned environment ─► measure freed ─► charge budget ─► journal entry
                                       │
                                       ▼
                                    report ─► incremental UI update

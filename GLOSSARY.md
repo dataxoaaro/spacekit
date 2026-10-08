@@ -18,7 +18,7 @@
 
 **Command trust**: the module (`CommandTrust`) that decides whether a rule's tool command runs, from the rule's origin, the kind of run and the executable policy. _Avoid_: command allowlist (only part of it).
 
-**Executable policy**: which executables may run: the built-in trusted list (built-in rules only), `safety.allowedCommands`, and the code launchers neither may grant; for a user rule's command a backstop behind the person's acknowledgement. _Avoid_: whitelist.
+**Executable policy**: which executables may run: the built-in trusted list (built-in rules only, and the one place code launchers such as `bun`, `deno`, `swift` and `xcrun` may run, since their names and commands are fixed in the binary), `safety.allowedCommands`, and the code launchers it may never grant; for a user rule's command a backstop behind the person's acknowledgement. _Avoid_: whitelist.
 
 **Own-rule warning**: the warning every user rule's command carries in a manual run (`CommandTrust.ownRuleWarning`), naming all its arguments and the file its tool was found at; it is never allowed outright, so `--yes` alone doesn't run it. _Avoid_: command confirmation.
 
@@ -28,7 +28,7 @@
 
 **Tool environment**: the cleaned environment every tool command SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH (the search folders the person can't change), user and locale from the environment, HOME and TMPDIR from the system, plus the isolation variables (`Shell.RunKind`). The editor `spacekit config edit` opens is the one program that gets the person's whole environment. _Avoid_: sanitized env.
 
-**Changeable program**: a tool whose file, or a folder or symlink on the way to it, the person owns or can write (`CommandTrust.changeablePart`), such as anything in `~/.local/bin` or a Homebrew prefix they own, or a script whose `#!` interpreter is one; automatic runs don't start one. _Avoid_: user-writable tool, untrusted binary.
+**Changeable program**: a tool whose file, or a folder or symlink on the way to it, the person owns, can write, or that is writable by its group or by everyone (sticky or not) or through an access control list entry for anyone but root, even when the person themselves can't write it (`CommandTrust.changeablePart`), such as anything in `~/.local/bin`, a Homebrew prefix they own or an app in the admin-writable `/Applications`, or a script whose `#!` interpreter is one; automatic runs don't start one. _Avoid_: user-writable tool, untrusted binary.
 
 **Isolated tool**: a built-in rule's tool an automatic run may start, because the settings of the person's it reads are left behind (`Shell.isolationVariables`, `/` as its working folder) or decide nothing about what it deletes or runs (`CommandTrust.isolatedTools`); every other tool runs by hand only. _Avoid_: sandboxed tool, safe tool.
 
@@ -74,7 +74,7 @@
 
 **Reviewed plan**: what a review produces on acknowledgement (`ReviewedPlan`): the selected rows, the reasons shown for each, where each item was judged and which executor judged them; the executor's only input for a manual run, and only that executor runs it. _Avoid_: confirmed plan.
 
-**Outdated review**: a reviewed plan handed to an executor other than the one its review was made with, because the settings changed in between; nothing runs, every row is skipped and the report is `reviewOutdated`, so the front end reviews the plan again. _Avoid_: stale plan, expired review.
+**Outdated review**: a reviewed plan handed to an executor other than the one its review was made with, because the settings changed in between; nothing runs, every row is skipped and the report is `reviewOutdated`. The app's sheet reviews the plan again in place; the TUI says "Nothing was removed: review it again" and the person starts the review again. _Avoid_: stale plan, expired review.
 
 **Reviewed location**: where the review judged an item: its path with the folder's symlinks resolved, and the folder and the item by device and inode (`RemovalTarget.Location`); a reviewed row runs only while the item is still there. _Avoid_: checked path.
 

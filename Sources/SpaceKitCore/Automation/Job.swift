@@ -2,7 +2,7 @@ import Foundation
 
 /// A scheduled cleanup ("Automation" in the app, `jobs:` in the config).
 public struct Job: Codable, Sendable, Identifiable, Hashable {
-    /// Ordered by how much a job does on its own: `observe` < `suggest` < `automatic`.
+    /// Ordered as declared, by how much a job does on its own: `observe` < `suggest` < `automatic`.
     public enum Mode: String, Codable, Sendable, CaseIterable, Comparable {
         /// Tell me when this gets large.
         case observe
@@ -27,15 +27,7 @@ public struct Job: Codable, Sendable, Identifiable, Hashable {
             }
         }
 
-        public static func < (lhs: Mode, rhs: Mode) -> Bool { lhs.autonomy < rhs.autonomy }
-
-        private var autonomy: Int {
-            switch self {
-            case .observe: return 0
-            case .suggest: return 1
-            case .automatic: return 2
-            }
-        }
+        public static func < (lhs: Mode, rhs: Mode) -> Bool { lhs.declarationIndex < rhs.declarationIndex }
     }
 
     public enum Action: String, Codable, Sendable, CaseIterable {
@@ -166,30 +158,27 @@ public struct Job: Codable, Sendable, Identifiable, Hashable {
     }
 }
 
+extension CaseIterable where Self: Equatable, AllCases == [Self] {
+    /// The case's position in `allCases`, which lists cases as they are declared. The orders above follow it, so a
+    /// new case goes where it belongs in the order.
+    var declarationIndex: Int { Self.allCases.firstIndex(of: self) ?? Self.allCases.count }
+}
+
 public enum Weekday: String, Codable, Sendable, CaseIterable {
     case sunday, monday, tuesday, wednesday, thursday, friday, saturday
 
     /// `Calendar` weekday number (Sunday = 1).
-    public var number: Int { Weekday.allCases.firstIndex(of: self)! + 1 }
+    public var number: Int { declarationIndex + 1 }
     public var title: String { rawValue.capitalized }
 }
 
 /// When a job runs. YAML accepts `weekly`, `daily at 03:00`, or an object `{every: weekly, weekday: sunday, at: "03:00"}`.
 public struct Schedule: Codable, Sendable, Hashable, CustomStringConvertible {
-    /// Ordered by the time between runs: `hourly` < `daily` < `weekly` < `monthly`.
+    /// Ordered as declared, by the time between runs: `hourly` < `daily` < `weekly` < `monthly`.
     public enum Frequency: String, Codable, Sendable, CaseIterable, Comparable {
         case hourly, daily, weekly, monthly
 
-        public static func < (lhs: Frequency, rhs: Frequency) -> Bool { lhs.period < rhs.period }
-
-        private var period: TimeInterval {
-            switch self {
-            case .hourly: return 3_600
-            case .daily: return 86_400
-            case .weekly: return 7 * 86_400
-            case .monthly: return 28 * 86_400
-            }
-        }
+        public static func < (lhs: Frequency, rhs: Frequency) -> Bool { lhs.declarationIndex < rhs.declarationIndex }
     }
 
     public var every: Frequency

@@ -163,6 +163,16 @@ struct ConfigTests {
         #expect(Schedule.parse("monthly")?.day == 1)
         #expect(Schedule.parse("whenever") == nil)
     }
+
+    @Test("Modes order by what a job does on its own, schedules by the time between runs, weekdays from Sunday = 1")
+    func orderings() {
+        #expect(Job.Mode.allCases.sorted() == [.observe, .suggest, .automatic])
+        #expect(Job.Mode.observe < .suggest && Job.Mode.suggest < .automatic && !(Job.Mode.automatic < .automatic))
+        #expect(Schedule.Frequency.allCases.sorted() == [.hourly, .daily, .weekly, .monthly])
+        #expect(Schedule.Frequency.hourly < .monthly && !(Schedule.Frequency.weekly < .daily))
+        #expect(Weekday.allCases.map(\.number) == Array(1...7))
+        #expect(Weekday.sunday.number == 1 && Weekday.saturday.number == 7)
+    }
 }
 
 @Suite("History")

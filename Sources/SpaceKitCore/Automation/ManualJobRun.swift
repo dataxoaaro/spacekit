@@ -36,11 +36,15 @@ public struct ManualJobRun: Sendable {
         case dismissed
         /// Narrowed to the rows still left to clean, with the problems the run hit.
         case kept(Suggestion)
+        /// It was dismissed, or replaced by a newer run of its job, while this approval ran, so there was nothing to
+        /// settle and it wasn't brought back.
+        case gone
     }
 
     public struct Outcome: Sendable {
         public let report: CleanupReport
-        /// `nil` for a job run by hand.
+        /// `nil` for a job run by hand, a run refused as reviewed with another executor, and a suggestion that
+        /// couldn't be saved (`saveErrors` says why).
         public let suggestion: SuggestionFate?
         /// The job's state or the suggestion that couldn't be saved. The removals happened regardless.
         public let saveErrors: [String]
@@ -119,21 +123,26 @@ public struct ManualJobRun: Sendable {
             errors.append("Couldn't save the job's state: \(error.localizedDescription)")
         }
         guard let suggestion else { return Outcome(report: report, suggestion: nil, saveErrors: errors) }
-        let fate = settle(suggestion, after: report, executor: executor)
+        // Settled against the suggestion as stored now, under the store's lock: another approval may have settled
+        // some of it meanwhile.
+        let left = left(after: report, executor: executor)
+        let fate: SuggestionFate
         do {
-            switch fate {
-            case .dismissed: try runner.context.suggestions.remove(suggestion.id)
-            case .kept(let kept): try runner.context.suggestions.update(kept)
+            switch try runner.context.suggestions.narrow(suggestion.id, to: left, problems: report.problemDetails) {
+            case .gone: fate = .gone
+            case .removed: fate = .dismissed
+            case .kept(let kept): fate = .kept(kept)
             }
         } catch {
             errors.append("Couldn't save the suggestion: \(error.localizedDescription)")
+            return Outcome(report: report, suggestion: nil, saveErrors: errors)
         }
         return Outcome(report: report, suggestion: fate, saveErrors: errors)
     }
 
-    /// The suggestion's still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows
-    /// the person unticked.
-    private func settle(_ suggestion: Suggestion, after report: CleanupReport, executor: CleanupExecutor) -> SuggestionFate {
+    /// The still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows the person
+    /// unticked.
+    private func left(after report: CleanupReport, executor: CleanupExecutor) -> CleanupPlan {
         let removedItems = Set(report.items.filter(\.outcome.isRemoved).map(\.item.id))
         let ranCommands = Set(report.commands.filter(\.outcome.isRemoved).map(\.command.id))
         var left = candidate
@@ -143,11 +152,7 @@ public struct ManualJobRun: Sendable {
         left.commands = candidate.commands.filter {
             !ranCommands.contains($0.id) && !executor.verdict(for: $0, context: .manual).isBlocked
         }
-        guard !left.isEmpty else { return .dismissed }
-        var kept = suggestion
-        kept.plan = left
-        kept.problems = report.problemDetails
-        return .kept(kept)
+        return left
     }
 
     private static func exists(_ path: String) -> Bool {

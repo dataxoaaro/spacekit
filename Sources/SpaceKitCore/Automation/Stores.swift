@@ -112,20 +112,45 @@ public struct SuggestionStore: Sendable {
         try modify { list in list.removeAll { $0.id == id } }
     }
 
-    /// Replaces the suggestion with the same id while it's still there. One dismissed meanwhile, or replaced by a newer
-    /// run of its job, stays as it is.
-    func update(_ suggestion: Suggestion) throws {
+    /// What `narrow` did to a stored suggestion.
+    enum Narrowed: Equatable {
+        /// It wasn't there: dismissed, or replaced by a newer run of its job, meanwhile. It stays as it is.
+        case gone
+        /// Nothing of it is left, so it was removed.
+        case removed
+        /// Narrowed to what's left, as stored now.
+        case kept(Suggestion)
+    }
+
+    /// Narrows the suggestion `id` to the rows of `left` it still holds when the store is read, under the store's lock,
+    /// and attaches `problems`; removes it when nothing is left. A row another approval settled meanwhile isn't in the
+    /// stored suggestion, so it stays settled: two approvals of one suggestion never bring back what either ran.
+    func narrow(_ id: String, to left: CleanupPlan, problems: [String]) throws -> Narrowed {
         try modify { list in
-            guard let index = list.firstIndex(where: { $0.id == suggestion.id }) else { return }
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return .gone }
+            var suggestion = list[index]
+            let items = Set(suggestion.plan.items.map(\.id))
+            let commands = Set(suggestion.plan.commands.map(\.id))
+            var plan = left
+            plan.items = left.items.filter { items.contains($0.id) }
+            plan.commands = left.commands.filter { commands.contains($0.id) }
+            guard !plan.isEmpty else {
+                list.remove(at: index)
+                return .removed
+            }
+            suggestion.plan = plan
+            suggestion.problems = problems
             list[index] = suggestion
+            return .kept(suggestion)
         }
     }
 
-    private func modify(_ change: (inout [Suggestion]) -> Void) throws {
+    private func modify<Result>(_ change: (inout [Suggestion]) -> Result) throws -> Result {
         try FileLock.withLock(for: file) {
             var list = all()
-            change(&list)
+            let result = change(&list)
             try LockedFile.write(try JSONEncoder.spaceKit.encode(list), to: file)
+            return result
         }
     }
 }

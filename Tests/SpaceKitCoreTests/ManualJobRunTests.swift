@@ -184,6 +184,45 @@ struct ManualJobRunTests {
         #expect(fixture.context.suggestions.all().isEmpty)
     }
 
+    @Test("An approval settles against the suggestion as stored now: what another approval settled stays settled")
+    func approvalSettlesAgainstStored() throws {
+        var fixture = try buildFixture(["a", "b"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let executor = fixture.runner.executor
+        let plan = try reviewed(run, executor, untick: ["b"])
+        // Meanwhile another approval settled `b` and kept only `a`.
+        var narrowed = suggestion
+        narrowed.plan.items = suggestion.plan.items.filter { PathUtil.lastComponent($0.path) == "a" }
+        try fixture.context.suggestions.add(narrowed)
+
+        let outcome = run.complete(plan, executor: executor)
+
+        #expect(outcome.report.removedAnything)
+        #expect(outcome.suggestion == .dismissed, "b, unticked here, was already settled by the other approval")
+        #expect(fixture.context.suggestions.all().isEmpty)
+    }
+
+    @Test("An approval of a suggestion dismissed meanwhile says so and doesn't bring it back")
+    func approvalOfDismissed() throws {
+        var fixture = try buildFixture(["a", "b"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let executor = fixture.runner.executor
+        let plan = try reviewed(run, executor, untick: ["b"])
+        try fixture.context.suggestions.remove(suggestion.id)
+
+        let outcome = run.complete(plan, executor: executor)
+
+        #expect(outcome.report.removedAnything)
+        #expect(outcome.suggestion == .gone)
+        #expect(fixture.context.suggestions.all().isEmpty)
+    }
+
     @Test("Approving drops items that no longer meet the job's conditions, and isn't held back by its threshold")
     func approvalNarrows() throws {
         var fixture = try buildFixture(["a", "b"])

@@ -469,6 +469,9 @@ struct SuggestionsCommand: ParsableCommand {
                 let count = kept.plan.items.count + kept.plan.commands.count
                 Output.emit(
                     ["Kept the suggestion with \(count) left to clean, so you can try again or dismiss it."], toStandardError: json)
+            case .gone:
+                Output.emit(
+                    ["The suggestion was dismissed or replaced while this ran, so it's left as it is now."], toStandardError: json)
             case .dismissed, nil:
                 break
             }

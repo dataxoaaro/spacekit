@@ -82,7 +82,7 @@ struct AnalysisResultTests {
         var report = CleanupReport(dryRun: false)
         report.commands = [
             (PlannedCommand(ruleID: "ran", arguments: ["x"], estimatedBytes: 1), .removed(bytes: 1, trashedTo: nil), ""),
-            (PlannedCommand(ruleID: "skipped", arguments: ["y"], estimatedBytes: 1), .skipped(reason: "no"), ""),
+            (PlannedCommand(ruleID: "skipped", arguments: ["y"], estimatedBytes: 1), .skipped(reason: "no", kind: .refused), ""),
         ]
         #expect(report.rulesToReevaluate == ["ran"])
     }

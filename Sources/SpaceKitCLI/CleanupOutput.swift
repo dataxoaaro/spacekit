@@ -98,7 +98,7 @@ enum CleanupOutput {
             case .failed(let reason):
                 lines.append("  ✗ ".fg(ANSI.protected) + Output.safe(entry.command.displayString) + ": " + Output.safe(reason))
                 lines += entry.output.split(separator: "\n").suffix(5).map { "    " + Output.safe(String($0)).dim }
-            case .skipped(let reason):
+            case .skipped(let reason, _):
                 lines.append("  skipped ".dim + Output.safe(entry.command.displayString) + ": " + Output.safe(reason).dim)
             case .removed, .wouldRemove:
                 break
@@ -249,7 +249,7 @@ struct OutcomeJSON: Encodable {
         switch outcome {
         case .removed(let bytes, let trashedTo): (status, self.bytes, self.trashedTo) = ("removed", bytes, trashedTo)
         case .wouldRemove(let bytes): (status, self.bytes) = ("wouldRemove", bytes)
-        case .skipped(let reason): (status, self.reason) = ("skipped", reason)
+        case .skipped(let reason, _): (status, self.reason) = ("skipped", reason)
         case .failed(let reason): (status, self.reason) = ("failed", reason)
         }
     }

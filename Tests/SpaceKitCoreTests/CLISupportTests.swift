@@ -77,7 +77,7 @@ struct CleanupReportStatusTests {
     @Test("Outcomes answer what happened without a pattern match")
     func outcomePredicates() {
         let outcomes: [CleanupOutcome] = [
-            .removed(bytes: 1, trashedTo: nil), .wouldRemove(bytes: 1), .skipped(reason: "x"), .failed(reason: "y"),
+            .removed(bytes: 1, trashedTo: nil), .wouldRemove(bytes: 1), .skipped(reason: "x", kind: .refused), .failed(reason: "y"),
         ]
         #expect(outcomes.map(\.isRemoved) == [true, false, false, false])
         #expect(outcomes.map(\.isWouldRemove) == [false, true, false, false])
@@ -88,7 +88,7 @@ struct CleanupReportStatusTests {
     @Test("Skipped items alone are not a problem")
     func skippedItems() {
         var report = CleanupReport(dryRun: false)
-        report.items = [(item, .skipped(reason: "Blocked: x"))]
+        report.items = [(item, .skipped(reason: "Blocked: x", kind: .refused))]
         #expect(!report.hasProblems)
         #expect(!report.removedAnything)
     }
@@ -100,7 +100,7 @@ struct CleanupReportStatusTests {
         #expect(failed.hasProblems)
 
         var skippedCommand = CleanupReport(dryRun: false)
-        skippedCommand.commands = [(command, .skipped(reason: "'brew' is not installed"), "")]
+        skippedCommand.commands = [(command, .skipped(reason: "'brew' is not installed", kind: .refused), "")]
         #expect(skippedCommand.hasProblems)
         #expect(skippedCommand.unfinishedCommands.map(\.reason) == ["'brew' is not installed"])
 
@@ -115,8 +115,29 @@ struct CleanupReportStatusTests {
         #expect(warned.removedAnything)
 
         var changed = CleanupReport(dryRun: false)
-        changed.items = [(item, .skipped(reason: CleanupExecutor.changedSinceReview + "This folder is a git repository (source code)"))]
+        changed.items = [(item, .changedSinceReview("This folder is a git repository (source code)"))]
         #expect(changed.hasProblems)
+
+        var notAccepted = CleanupReport(dryRun: false)
+        notAccepted.items = [(item, .notAccepted("No SpaceKit rule recognises this; make sure you don't need it"))]
+        #expect(notAccepted.hasProblems)
+    }
+
+    @Test("Whether a skipped item is a problem comes from its kind, never from its wording")
+    func skipKindDecides() {
+        var lookalike = CleanupReport(dryRun: false)
+        lookalike.items = [(item, .skipped(reason: CleanupExecutor.changedSinceReview + "x", kind: .refused))]
+        #expect(!lookalike.hasProblems)
+        #expect(SkipKind.allCases.filter(\.isProblem) == [.changedSinceReview, .notAccepted])
+    }
+
+    @Test("Skip reasons read as before: the kind's words, then why")
+    func skipWording() {
+        #expect(CleanupOutcome.changedSinceReview("x") == .skipped(reason: "Changed since you reviewed it: x", kind: .changedSinceReview))
+        #expect(CleanupOutcome.notAccepted("y") == .skipped(reason: "Warnings not accepted: y", kind: .notAccepted))
+        #expect(
+            CleanupExecutor.outdatedReview
+                == "Changed since you reviewed it: SpaceKit's settings changed after the review. Review it again.")
     }
 
     @Test("A command that ran counts as removing something even if it freed nothing")

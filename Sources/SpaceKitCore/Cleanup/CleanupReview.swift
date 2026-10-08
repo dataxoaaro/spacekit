@@ -51,7 +51,7 @@ public struct CleanupReview: Sendable {
     /// Decides where items go, for the wording.
     private let remover: Remover
     /// The executor the verdicts came from; only it runs the reviewed plan.
-    private let settingsID: UUID
+    private let executorID: UUID
     private var unticked: Set<Key> = []
 
     public init(_ plan: CleanupPlan, executor: CleanupExecutor) {
@@ -75,7 +75,7 @@ public struct CleanupReview: Sendable {
         trashed = Set(targets.filter { remover.isInsideTrash($1) }.map { $0.0.id })
         locations = Dictionary(targets.map { ($0.id, $1.location) }, uniquingKeysWith: { first, _ in first })
         self.remover = remover
-        settingsID = executor.settingsID
+        executorID = executor.executorID
     }
 
     // MARK: Selection
@@ -181,7 +181,7 @@ public struct CleanupReview: Sendable {
         // The plan says what the removal module will do: with `safety.trash: always`, the Trash whatever `useTrash` says.
         let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
         let review = ReviewRecord(
-            settingsID: settingsID, items: record(items, location: { locations[$0.id] }),
+            executorID: executorID, items: record(items, location: { locations[$0.id] }),
             commands: record(commands, executable: { executables[$0.id] }))
         return ReviewedPlan(plan: plan, review: review)
     }
@@ -249,8 +249,8 @@ struct ReviewRecord: Sendable {
         }
     }
 
-    /// `CleanupExecutor.settingsID` of the executor whose verdicts the review showed.
-    let settingsID: UUID
+    /// `CleanupExecutor.executorID` of the executor whose verdicts the review showed.
+    let executorID: UUID
     let items: [String: Row]
     let commands: [String: Row]
 

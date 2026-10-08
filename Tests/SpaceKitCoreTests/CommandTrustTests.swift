@@ -78,7 +78,7 @@ struct CommandTrustTests {
     }
 
     func skipReason(_ outcome: CleanupOutcome?) -> String? {
-        if case .skipped(let reason) = outcome { return reason }
+        if case .skipped(let reason, _) = outcome { return reason }
         return nil
     }
 

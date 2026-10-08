@@ -44,7 +44,7 @@ struct ContextUpdateTests {
         let changed = try context.applying { $0.safety.protectedPaths = ["~/Work"] }
         let refused = changed.executor.execute(reviewed, dryRun: true)
         #expect(refused.reviewOutdated)
-        #expect(refused.items.map(\.outcome) == [.skipped(reason: CleanupExecutor.settingsChanged)])
+        #expect(refused.items.map(\.outcome) == [.skipped(reason: CleanupExecutor.outdatedReview, kind: .changedSinceReview)])
     }
 
     @Test("Changing jobs keeps the loaded rule library")

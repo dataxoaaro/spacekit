@@ -1,11 +1,43 @@
 import Foundation
 
+/// Why a row was left alone, as a value: reports decide what counts as a problem from it, never from the wording.
+public enum SkipKind: Sendable, Equatable, CaseIterable {
+    /// The check at removal time raised a reason the review didn't show, or the row isn't where the review judged it,
+    /// or the review was made with another executor. The person never saw that, so it's a problem.
+    case changedSinceReview
+    /// The review showed warnings the person didn't accept: a selected row left undone, so it's a problem.
+    case notAccepted
+    /// Refused for a reason a preview shows too: the guard's verdict in an automatic run, which nobody acknowledges, a
+    /// Docker endpoint, a tool that isn't installed.
+    case refused
+    /// Nothing is left to remove: the item is gone, or none of the loose files the scan saw are.
+    case gone
+    /// Not covered by the scan it came from: saved without what its scan saw, or changed since that scan.
+    case notScanned
+    /// Past an automatic run's byte budget.
+    case overBudget
+
+    /// The run didn't do something the person reviewed and said go to.
+    public var isProblem: Bool { self == .changedSinceReview || self == .notAccepted }
+}
+
 public enum CleanupOutcome: Sendable, Equatable {
     case removed(bytes: UInt64, trashedTo: String?)
     /// Dry run: what would have happened.
     case wouldRemove(bytes: UInt64)
-    case skipped(reason: String)
+    /// Left alone. `reason` is what front ends show; `kind` is what they and the report decide by.
+    case skipped(reason: String, kind: SkipKind)
     case failed(reason: String)
+
+    /// A reviewed row skipped because of `detail`, which the review didn't show.
+    static func changedSinceReview(_ detail: String) -> CleanupOutcome {
+        .skipped(reason: CleanupExecutor.changedSinceReview + detail, kind: .changedSinceReview)
+    }
+
+    /// A reviewed row skipped because the person didn't accept the warnings `reasons` the review showed.
+    static func notAccepted(_ reasons: String) -> CleanupOutcome {
+        .skipped(reason: CleanupExecutor.notAccepted + reasons, kind: .notAccepted)
+    }
 
     /// Bytes taken off their original location (deleted, or moved to the Trash).
     public var freedBytes: UInt64 {
@@ -56,7 +88,7 @@ public struct CleanupReport: Sendable {
     /// item's outcome is `.removed` with the bytes that went; its folder stays, holding the volume.
     public var leftOnOtherVolumes: [String: [String]] = [:]
     /// The plan was reviewed with another executor (the settings changed since), so nothing ran: every row is skipped
-    /// with `CleanupExecutor.settingsChanged`. Review the plan again to run it.
+    /// with `CleanupExecutor.outdatedReview`. Review the plan again to run it.
     public var reviewOutdated = false
 
     /// Everything taken off its original location, including what went to the Trash.
@@ -86,7 +118,7 @@ public struct CleanupReport: Sendable {
 
     public var skipped: [(item: CleanupItem, reason: String)] {
         items.compactMap { entry in
-            if case .skipped(let reason) = entry.outcome { return (entry.item, reason) }
+            if case .skipped(let reason, _) = entry.outcome { return (entry.item, reason) }
             return nil
         }
     }
@@ -120,7 +152,7 @@ public struct CleanupExecutor: Sendable {
     public internal(set) var alwaysTrash: Bool
     /// Made once per built executor; copies share it. A review records it, so a plan reviewed under other settings
     /// (protected paths added, the Trash made mandatory, the config broken since) never runs under these.
-    let settingsID = UUID()
+    let executorID = UUID()
     /// Moves a path to the Trash and returns where it went.
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
     /// Resolves the folder an item is removed from. Tests replace it to swap symlinks at the worst moment.
@@ -179,17 +211,18 @@ public struct CleanupExecutor: Sendable {
     /// the review didn't show for that row skips it.
     ///
     /// A plan reviewed with another executor runs none of its rows: the person judged it under settings that are no
-    /// longer the ones in force. Every row is skipped with `settingsChanged` and the report is `reviewOutdated`, so
+    /// longer the ones in force. Every row is skipped with `outdatedReview` and the report is `reviewOutdated`, so
     /// the front end can review the plan again with this executor.
     public func execute(_ reviewed: ReviewedPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
-        guard reviewed.review.settingsID == settingsID else { return CleanupExecutor.outdated(reviewed.plan, dryRun: dryRun) }
+        guard reviewed.review.executorID == executorID else { return CleanupExecutor.outdated(reviewed.plan, dryRun: dryRun) }
         return execute(reviewed.plan, context: .manual, review: reviewed.review, dryRun: dryRun, onProgress: onProgress)
     }
 
     private static func outdated(_ plan: CleanupPlan, dryRun: Bool) -> CleanupReport {
         var report = CleanupReport(dryRun: dryRun)
-        report.items = plan.items.map { ($0, .skipped(reason: settingsChanged)) }
-        report.commands = plan.commands.map { ($0, .skipped(reason: settingsChanged), "") }
+        let skipped = CleanupOutcome.skipped(reason: outdatedReview, kind: .changedSinceReview)
+        report.items = plan.items.map { ($0, skipped) }
+        report.commands = plan.commands.map { ($0, skipped, "") }
         report.reviewOutdated = true
         return report
     }
@@ -280,12 +313,13 @@ public struct CleanupExecutor: Sendable {
             return nil
         case .block:
             // A review never passes a blocked row on, so a block in a reviewed run is new.
-            return .skipped(reason: (reviewed == nil ? "" : changedSinceReview) + "Blocked: " + reasons)
+            guard reviewed != nil else { return .skipped(reason: "Blocked: " + reasons, kind: .refused) }
+            return .changedSinceReview("Blocked: " + reasons)
         case .confirm:
-            guard let reviewed else { return .skipped(reason: "Needs confirmation: " + reasons) }
+            guard let reviewed else { return .skipped(reason: "Needs confirmation: " + reasons, kind: .refused) }
             let unseen = verdict.reasons.filter { !reviewed.showed($0) }
-            if !unseen.isEmpty { return .skipped(reason: changedSinceReview + unseen.joined(separator: "; ")) }
-            return reviewed.accepted ? nil : .skipped(reason: notAccepted + reasons)
+            if !unseen.isEmpty { return .changedSinceReview(unseen.joined(separator: "; ")) }
+            return reviewed.accepted ? nil : .notAccepted(reasons)
         }
     }
 
@@ -298,10 +332,11 @@ public struct CleanupExecutor: Sendable {
     public static let notAccepted = "Warnings not accepted: "
 
     /// Why every row of a plan reviewed with another executor is skipped.
-    public static let settingsChanged = changedSinceReview + "SpaceKit's settings changed after the review. Review it again."
+    public static let outdatedReview = changedSinceReview + "SpaceKit's settings changed after the review. Review it again."
 
     func overBudget() -> CleanupOutcome {
-        .skipped(reason: "Over this run's budget of \(ByteCount.format(maxBytesPerAutomaticRun)) (safety.maxBytesPerRun)")
+        let budget = ByteCount.format(maxBytesPerAutomaticRun)
+        return .skipped(reason: "Over this run's budget of \(budget) (safety.maxBytesPerRun)", kind: .overBudget)
     }
 
     static func moveToTrash(_ path: String) throws -> String? {

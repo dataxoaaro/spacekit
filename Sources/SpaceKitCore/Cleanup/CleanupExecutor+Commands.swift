@@ -80,16 +80,16 @@ extension CleanupExecutor {
         let name = command.arguments.first ?? ""
         let found = runner.locate(name)
         if let reviewed, reviewed.executable != found {
-            return (.skipped(reason: CleanupExecutor.changedSinceReview + CleanupExecutor.foundElsewhere(name, now: found)), "")
+            return (.changedSinceReview(CleanupExecutor.foundElsewhere(name, now: found)), "")
         }
         let verdict = verdict(for: command, context: context, executable: found)
         if let refused = CleanupExecutor.refusal(verdict, reviewed: reviewed) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
-        guard let executable = found else { return (.skipped(reason: "'\(name)' is not installed"), "") }
+        guard let executable = found else { return (.skipped(reason: "'\(name)' is not installed", kind: .refused), "") }
         let kind: Shell.RunKind = context.isAutomatic ? .automatic : .manual
         let docker = DockerCLI(path: executable, runner: runner, kind: kind)
         if name == "docker", let refusal = commandTrust.dockerRefusal(command.arguments, docker: docker) {
-            return (.skipped(reason: refusal), "")
+            return (.skipped(reason: refusal, kind: .refused), "")
         }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }
 

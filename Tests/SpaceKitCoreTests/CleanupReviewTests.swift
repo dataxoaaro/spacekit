@@ -12,7 +12,9 @@ func manualRun(
 ) -> CleanupReport {
     let review = CleanupReview(plan, executor: executor)
     var report = executor.execute(review.acknowledge(acceptingWarnings: acceptingWarnings), dryRun: dryRun, onProgress: onProgress)
-    func refusal(_ verdict: SafetyVerdict) -> CleanupOutcome { .skipped(reason: "Blocked: " + verdict.reasons.joined(separator: "; ")) }
+    func refusal(_ verdict: SafetyVerdict) -> CleanupOutcome {
+        .skipped(reason: "Blocked: " + verdict.reasons.joined(separator: "; "), kind: .refused)
+    }
     report.items += review.items.filter(\.verdict.isBlocked).map { ($0.subject, refusal($0.verdict)) }
     report.commands += review.commands.filter(\.verdict.isBlocked).map { ($0.subject, refusal($0.verdict), "") }
     return report
@@ -62,9 +64,9 @@ struct CleanupReviewTests {
         let item = try #require(report.items.first { $0.item.path.hasSuffix("old") })
         let command = try #require(report.commands.first)
         let unknown = "No SpaceKit rule recognises this; make sure you don't need it"
-        #expect(item.outcome == .skipped(reason: CleanupExecutor.notAccepted + unknown))
+        #expect(item.outcome == .notAccepted(unknown))
         #expect(command.outcome.isSkipped)
-        if case .skipped(let reason) = command.outcome { #expect(reason.hasPrefix(CleanupExecutor.notAccepted)) }
+        if case .skipped(let reason, _) = command.outcome { #expect(reason.hasPrefix(CleanupExecutor.notAccepted)) }
         #expect(report.items.contains { $0.item.ruleID == "cache" && $0.outcome.isWouldRemove })
         #expect(report.hasProblems)
 
@@ -296,7 +298,7 @@ struct CleanupReviewTests {
         let refused = current.execute(reviewed, dryRun: false)
 
         #expect(refused.reviewOutdated)
-        #expect(refused.skipped.first?.reason == CleanupExecutor.settingsChanged)
+        #expect(refused.skipped.first?.reason == CleanupExecutor.outdatedReview)
         #expect(refused.hasProblems)
         #expect(!refused.removedAnything)
         #expect(onDisk(tree.path("home/Projects/a/x")))

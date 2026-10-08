@@ -10,7 +10,7 @@ extension CleanupReport {
     public var unfinishedCommands: [(command: PlannedCommand, reason: String)] {
         commands.compactMap { entry in
             switch entry.outcome {
-            case .skipped(let reason), .failed(let reason): return (entry.command, reason)
+            case .skipped(let reason, _), .failed(let reason): return (entry.command, reason)
             case .removed, .wouldRemove: return nil
             }
         }
@@ -22,8 +22,9 @@ extension CleanupReport {
     /// showed, items already gone or not covered by their scan (a stale plan, files that arrived later), and items
     /// past an automatic run's budget. Front ends report this as an error (the CLI exits nonzero).
     public var hasProblems: Bool {
-        let leftUndone = skipped.contains {
-            $0.reason.hasPrefix(CleanupExecutor.changedSinceReview) || $0.reason.hasPrefix(CleanupExecutor.notAccepted)
+        let leftUndone = items.contains { entry in
+            if case .skipped(_, let kind) = entry.outcome { return kind.isProblem }
+            return false
         }
         return !failures.isEmpty || leftUndone || !unfinishedCommands.isEmpty || !warnings.isEmpty
     }

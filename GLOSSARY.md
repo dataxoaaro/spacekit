@@ -78,6 +78,8 @@
 
 **Changed since review**: a reviewed row skipped because its check at removal time raised a reason the review didn't show (a new warning, a larger share of the disk, a block) or the item isn't at its reviewed location; it counts as a problem. _Avoid_: stale row, unreviewed warning.
 
+**Skip kind**: why a row was left alone, as a value on its skipped outcome (`SkipKind`); reports decide by it, never by the reason's wording: changed since review and not accepted are problems, while refused, gone, not scanned and over budget are not. _Avoid_: skip prefix, skip reason (that's the text shown).
+
 **Disposal**: where a review's selected items end up: moved to the Trash, deleted, or deleted from the Trash because they are already there (`CleanupReview.disposal`); the removal module decides it and every front end shows the review's wording for it (`disposalSummary`). _Avoid_: removal method (that's one item's, `Remover.Method`), trash mode.
 
 **Automatic plan**: the plan `JobRunner` hands the executor for an automatic run (`AutomaticPlan`); it acknowledges nothing. _Avoid_: scheduled plan.

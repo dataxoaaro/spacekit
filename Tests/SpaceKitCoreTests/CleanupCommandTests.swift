@@ -22,7 +22,7 @@ struct CleanupCommandTests {
     func outcome(_ report: CleanupReport) -> CleanupOutcome? { report.commands.first?.outcome }
 
     func isSkipped(_ outcome: CleanupOutcome?, mentioning text: String? = nil) -> Bool {
-        guard case .skipped(let reason) = outcome else { return false }
+        guard case .skipped(let reason, _) = outcome else { return false }
         return text.map { reason.localizedCaseInsensitiveContains($0) } ?? true
     }
 

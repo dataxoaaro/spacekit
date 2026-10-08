@@ -1,7 +1,7 @@
 import Foundation
 
 extension CleanupExecutor {
-    static let stalePlan = "This item was saved without what its scan saw; refresh the plan"
+    static let savedWithoutScan = "This item was saved without what its scan saw; refresh the plan"
     static let notWhereReviewed = "what is at this path now isn't what you reviewed (its folder leads elsewhere, or it was replaced)"
 
     /// `reviewed`: what the person's review showed for this item; `nil` in an automatic run.
@@ -11,16 +11,19 @@ extension CleanupExecutor {
         let remover = self.remover
         // Built once: the guard, the Trash-or-delete decision and the removal all see this location and these facts.
         let target = remover.target(of: item, probingRepositories: true)
-        guard item.kind == .looseFiles ? target.directory != nil : target.exists else { return .skipped(reason: "Already gone") }
+        guard item.kind == .looseFiles ? target.directory != nil : target.exists else {
+            return .skipped(reason: "Already gone", kind: .gone)
+        }
         // The person's go-ahead covers what the review judged where it judged it: a parent that leads elsewhere now,
         // or another item in its place, could take an accepted warning to something they never saw.
         if let reviewed, reviewed.location != target.location {
-            return .skipped(reason: CleanupExecutor.changedSinceReview + CleanupExecutor.notWhereReviewed)
+            return .changedSinceReview(CleanupExecutor.notWhereReviewed)
         }
         let rule = item.ruleID.flatMap { rules[$0] }
         let inTrash = remover.isInsideTrash(target)
         guard let method = remover.method(inTrash: inTrash, useTrash: plan.useTrash, rule: rule, context: context) else {
-            return .skipped(reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them")
+            return .skipped(
+                reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them", kind: .refused)
         }
         let context = Remover.context(context, removingBy: method)
 
@@ -29,11 +32,11 @@ extension CleanupExecutor {
         var scanStarted: Date?
         if item.kind == .looseFiles || inTrash {
             guard let started = item.scanStarted, item.kind != .looseFiles || item.looseFileNames != nil else {
-                return .skipped(reason: CleanupExecutor.stalePlan)
+                return .skipped(reason: CleanupExecutor.savedWithoutScan, kind: .notScanned)
             }
             scanStarted = started
             if inTrash && item.kind != .looseFiles && target.changed(after: started) {
-                return .skipped(reason: "Moved to the Trash after it was scanned")
+                return .skipped(reason: "Moved to the Trash after it was scanned", kind: .notScanned)
             }
         }
 
@@ -167,7 +170,8 @@ extension CleanupExecutor {
             if let first = failures.first {
                 return .failed(reason: first + (failures.count > 1 ? " (and \(failures.count - 1) more)" : ""))
             }
-            return .skipped(reason: budgetNote ?? "None of the files from the reviewed plan are left")
+            if let budgetNote { return .skipped(reason: budgetNote, kind: .overBudget) }
+            return .skipped(reason: "None of the files from the reviewed plan are left", kind: .gone)
         }
         run.report.warnings += failures
         if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }

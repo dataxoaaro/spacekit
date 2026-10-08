@@ -111,7 +111,7 @@ extension TUIApp {
             switch outcome {
             case .removed(let bytes, _): text = "freed \(ByteCount.format(bytes))"
             case .wouldRemove(let bytes): text = "would free \(ByteCount.format(bytes))"
-            case .skipped(let reason): text = "skipped: \(clean(reason))".fg(ANSI.review)
+            case .skipped(let reason, _): text = "skipped: \(clean(reason))".fg(ANSI.review)
             case .failed(let reason): text = "failed: \(clean(reason))".fg(ANSI.protected)
             }
             lines.append("$ \(clean(command.displayString)): " + text)

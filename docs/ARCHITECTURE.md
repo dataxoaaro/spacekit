@@ -27,16 +27,16 @@ SpaceKit is one Swift package with a shared core and three front ends.
 
 | Folder | Contents |
 |---|---|
-| `Scanner/` | `Scanner` (parallel `getattrlistbulk` traversal), `DirNode` tree, `VolumeTable` (mounts, APFS containers, firmlinks). |
+| `Scanner/` | `Scanner` (parallel `getattrlistbulk` traversal), `DirNode` tree, `ScanTree` in-place updates (`TreeMutations`, with hard links indexed by folder so an update touches only the files linked from where it changes the tree), `VolumeTable` (mounts, APFS containers, firmlinks). |
 | `Layout/` | Squarified treemap and sunburst layouts, with hit testing. Pure geometry, shared by the app's Canvas and the TUI. |
 | `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
-| `Safety/` | `SafetyGuard`, the single gate for removals. See [SAFETY.md](SAFETY.md). |
+| `Safety/` | `SafetyGuard`, the single gate for removals, and `RuleScope` (where a rule applies, shared by the guard, `RuleIndex` and `RuleEngine` so they agree). See [SAFETY.md](SAFETY.md). |
 | `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal), `SafeRemoval` (deletion through directory handles under a checked folder, never by path), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
-| `Support/` | Shared plumbing: `PathUtil` (expansion, comparison keys), `Shell` (bare-name lookup, no-shell runs with timeouts), `SpaceKitPaths`, ages and byte counts, JSON Lines. Also the terminal helpers both terminal front ends use, kept free of terminal I/O so they can be tested: `TerminalText` (the sanitizer), `TerminalWidth` (column widths), `KeyParser` (raw key bytes to keys), `ScrollWindow` and `Spinner`. |
+| `Support/` | Shared plumbing: `PathUtil` (expansion, comparison keys), `FileTrust` (whether a config or rule file is safe to read, given who can change it), `Shell` (bare-name lookup, no-shell runs with timeouts), `SpaceKitPaths`, ages and byte counts, JSON Lines. Also the terminal helpers both terminal front ends use, kept free of terminal I/O so they can be tested: `TerminalText` (the sanitizer), `TerminalWidth` (column widths), `KeyParser` (raw key bytes to keys), `ScrollWindow` and `Spinner`. |
 
 ## The scanner
 
@@ -101,7 +101,7 @@ Render-time work is cached too. Each folder's sorted item list and each path's r
 
 ### Proving it
 
-`ScanTree.inconsistencies()` checks every folder's invariants (its files add up to its direct total, and its total equals direct files plus children). [`TreeConsistencyTests`](../Tests/SpaceKitCoreTests/TreeConsistencyTests.swift) runs randomized sequences of deletions, loose-file removals and moves to a Trash folder, with large and small files and hard links across folders. After every step it compares every folder's size in the incrementally updated tree with a full rescan of the disk.
+`ScanTree.inconsistencies()` checks every folder's invariants (its files add up to its direct total, and its total equals direct files plus children). [`TreeConsistencyTests`](../Tests/SpaceKitCoreTests/TreeConsistencyTests.swift) runs randomized sequences of deletions, loose-file removals and moves to a Trash folder, with large and small files and hard links across folders. After every step it compares every folder's size in the incrementally updated tree with a full rescan of the disk. [`TreeHardLinkIndexTests`](../Tests/SpaceKitCoreTests/TreeHardLinkIndexTests.swift) moves hard links, adds them back with arriving loose files or a splice, and then removes them, and checks that an update's cost doesn't grow with the number of hard-linked files elsewhere in the tree.
 
 ## Free space
 

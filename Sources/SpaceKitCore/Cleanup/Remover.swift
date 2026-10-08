@@ -62,7 +62,7 @@ struct Remover: Sendable {
             probingRepositories
             ? .probed(recordedRepository: item.isRepository, recordedContains: item.containsRepository)
             : .recorded(isRepository: item.isRepository, containsRepository: item.containsRepository)
-        return RemovalTarget.resolving(path, home: home, size: item.size, repositories: repositories, resolve: resolve)
+        return RemovalTarget.at(path, home: home, size: item.size, repositories: repositories, resolve: resolve)
     }
 
     // MARK: Trash or delete

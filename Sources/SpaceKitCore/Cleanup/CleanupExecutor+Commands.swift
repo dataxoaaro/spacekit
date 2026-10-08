@@ -19,7 +19,7 @@ extension CleanupExecutor {
         for reason in commandTrust.refusals(command, rule: rule, context: context) { verdict.raise(.block, reason) }
 
         if let itemPath = command.itemPath {
-            let target = RemovalTarget.resolving(
+            let target = RemovalTarget.at(
                 itemPath, home: safety.home, size: command.estimatedBytes,
                 repositories: .probed(recordedRepository: false, recordedContains: false), resolve: resolve)
             verdict = verdict.merging(safety.evaluate(target, rule: rule, context: context))

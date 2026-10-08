@@ -81,15 +81,12 @@ public struct RemovalTarget: Sendable, Equatable {
 }
 
 extension RemovalTarget {
-    /// Builds the target for `path` from the disk as it is now. The one place a removal's location is resolved.
-    static func at(_ path: String, home: String, size: UInt64, repositories: Repositories) -> RemovalTarget {
-        resolving(path, home: home, size: size, repositories: repositories, resolve: PathUtil.realpath)
-    }
-
+    /// Builds the target for `rawPath` from the disk as it is now. The one place a removal's location is resolved.
+    ///
     /// `resolve` turns the parent folder into its real location. The executor passes its own, which tests replace to
     /// swap symlinks at the worst moment.
-    static func resolving(
-        _ rawPath: String, home: String, size: UInt64, repositories: Repositories, resolve: (String) -> String?
+    static func at(
+        _ rawPath: String, home: String, size: UInt64, repositories: Repositories, resolve: (String) -> String? = PathUtil.realpath
     ) -> RemovalTarget {
         // `~name` would otherwise expand relative to the working directory.
         let isAbsolute = rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/")

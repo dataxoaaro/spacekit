@@ -113,7 +113,7 @@ public struct SafetyGuard: Sendable {
 
     public init(
         home: String = PathUtil.home, userProtectedPaths: [String] = [], protectedRules: [Rule] = [],
-        volumes: VolumeTable = .current(), isRunningAsRoot: Bool = geteuid() == 0, patternRoots: [String] = ["~"],
+        volumes: VolumeTable = .current(), isRunningAsRoot: Bool = geteuid() == 0, patternRoots: [String] = ScanSettings.defaultDevRoots,
         volumeCapacity: @escaping @Sendable (String) -> VolumeCapacity? = { VolumeCapacity.of(path: $0) }
     ) {
         self.home = home

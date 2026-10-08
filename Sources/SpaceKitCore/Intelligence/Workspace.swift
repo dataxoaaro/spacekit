@@ -163,10 +163,14 @@ public final class Workspace: Sendable {
         enqueue(.removals(Removal.from(report), reevaluate: report.rulesToReevaluate, context: context))
     }
 
-    /// Replaces the folder at `path` in the trees that hold it with `fresh`, a scan of it taken now (the Trash, emptied
-    /// in Finder), then re-evaluates `ruleIDs`, whose findings live there. Delivers `.changed` if a tree changed.
-    public func resync(_ fresh: ScanTree, at path: String, context: SpaceKitContext, reevaluating ruleIDs: Set<String> = []) {
-        let (explore, analysed) = state.withLock { ($0.tree, $0.result?.analysis.tree) }
+    /// Replaces the folder at `path` in the trees that hold it with `fresh`, a scan of it (the Trash, emptied in
+    /// Finder), then re-evaluates `ruleIDs`, whose findings live there. `shown` is the snapshot from when that scan
+    /// began: only its trees are changed, since a tree shown or analysed since is newer than `fresh`. Delivers
+    /// `.changed` if a tree changed.
+    public func resync(
+        _ fresh: ScanTree, at path: String, over shown: Snapshot, context: SpaceKitContext, reevaluating ruleIDs: Set<String> = []
+    ) {
+        let (explore, analysed) = (shown.tree, shown.result?.analysis.tree)
         let separate = analysed.flatMap { $0 !== explore && $0.covers(path) ? $0 : nil }
         guard let separate else {
             enqueue(.resync(Resync(path: path, fresh: fresh, explore: explore, reevaluate: ruleIDs, context: context)))

@@ -366,8 +366,8 @@ struct WorkspaceTests {
         for name in ["a", "b"] {
             try FileManager.default.removeItem(atPath: fixture.tree.path("home/.Trash/\(name)"))
             workspace.resync(
-                try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, context: fixture.context,
-                reevaluating: [fixture.rule.id])
+                try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.snapshot,
+                context: fixture.context, reevaluating: [fixture.rule.id])
             held.started.wait()
             if name == "a" { try between() }
         }
@@ -422,13 +422,38 @@ struct WorkspaceTests {
         try FileManager.default.removeItem(atPath: fixture.tree.path("home/.Trash/old"))
 
         let trash = fixture.tree.path("home/.Trash")
-        workspace.resync(try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, context: fixture.context)
+        workspace.resync(
+            try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.snapshot, context: fixture.context)
 
         #expect(recorder.wait { !$0.changes.isEmpty })
         #expect(recorder.changes.first?.rescanned == [trash])
         workspace.read { tree in
             #expect(tree?.inconsistencies() == [])
             #expect(tree?.node(at: fixture.tree.path("home/.Trash/old")) == nil)
+        }
+    }
+
+    @Test("A folder scanned before a newer tree was shown isn't spliced into it")
+    func resyncOfAnOlderTree() throws {
+        let fixture = try Fixture()
+        try fixture.tree.file("home/.Trash/old/blob", bytes: 80_000)
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        let trash = fixture.tree.path("home/.Trash")
+        // The Trash scan starts while the first tree is shown; it is older than anything scanned after it.
+        let shown = workspace.snapshot
+        let older = try Scanner(options: fixture.context.scanOptions).scan(trash)
+        try fixture.tree.file("home/.Trash/new/blob", bytes: 80_000)
+        let newer = try fixture.scanHome()
+        workspace.show(newer)
+
+        workspace.resync(older, at: trash, over: shown, context: fixture.context)
+
+        #expect(recorder.changes.isEmpty)
+        workspace.read { tree in
+            #expect(tree === newer)
+            #expect(tree?.node(at: fixture.tree.path("home/.Trash/new")) != nil)
         }
     }
 }

@@ -16,6 +16,8 @@ extension AppModel {
         let path = trashPath
         let context = self.context
         let trashRules = Set(Trash.rules(in: library.rules).map(\.id))
+        // What's shown as the scan starts: a tree shown or analysed while it runs is newer than this scan.
+        let shown = workspace.snapshot
         Task {
             let fresh = await Task.detached(priority: .utility) { try? Scanner(options: options).scan(path) }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {
@@ -25,7 +27,7 @@ extension AppModel {
             trashMeasured(fresh.root.size)
             guard resync else { return }
             // The Trash rules' findings live in the Trash, so they are re-evaluated once it's spliced in.
-            workspace.resync(fresh, at: path, context: context, reevaluating: trashRules)
+            workspace.resync(fresh, at: path, over: shown, context: context, reevaluating: trashRules)
         }
     }
 

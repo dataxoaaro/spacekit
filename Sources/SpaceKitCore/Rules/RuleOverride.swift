@@ -101,12 +101,12 @@ extension RuleLibrary {
         return "lowers its policy \(name) below \(original)"
     }
 
-    /// True when every location `path` describes lies in one `builtin` describes. Both are compared as the guard
-    /// compares paths (`~` and `$HOME` expanded, `.`, `..` and extra slashes collapsed, case-folded), and `path` may be
-    /// the same location, one inside it, or a glob whose names are a subset: a built-in segment `X*` covers `X<more>*`.
+    /// True when every location `path` describes lies in one `builtin` describes. Both are compared where the engine
+    /// looks for them (`enginePath`), and `path` may be the same location, one inside it, or a glob whose names are a
+    /// subset: a built-in segment `X*` covers `X<more>*`.
     static func covers(_ builtin: String, _ path: String) -> Bool {
-        let outer = PathUtil.components(comparable(builtin))
-        let inner = PathUtil.components(comparable(path))
+        let outer = PathUtil.components(enginePath(builtin))
+        let inner = PathUtil.components(enginePath(path))
         guard inner.count >= outer.count else { return false }
         for (pattern, segment) in zip(outer, inner) {
             if pattern == "**" { return true }
@@ -115,8 +115,11 @@ extension RuleLibrary {
         return true
     }
 
-    private static func comparable(_ path: String) -> String {
-        PathUtil.comparisonKey(PathUtil.expand(path))
+    /// `path` as the engine looks for it: through `PathUtil.canonicalPattern`, the function `RuleEngine.canonical` runs
+    /// every rule path through, then expanded as `PathUtil.glob` expands it, and case-folded as the guard compares paths.
+    /// Comparing the text instead would let a symlinked folder inside a built-in path lead an override anywhere.
+    private static func enginePath(_ path: String) -> String {
+        PathUtil.comparisonKey(PathUtil.expand(PathUtil.canonicalPattern(path)))
     }
 
     /// True when every name `segment` matches, `pattern` matches too. `**` crosses folders and may match none, so a

@@ -239,6 +239,40 @@ struct RuleLoadingTests {
         }
     }
 
+    /// The errors loading a user rule with `override` paths gets, where the built-in rule with its id has `builtin` paths.
+    /// Both rules share `rest`, so the paths are all that differs.
+    func pathErrors(builtin: [String], override: [String], rest: String = "") throws -> [String] {
+        func yaml(_ paths: [String]) -> String {
+            let list = paths.map { "\"\($0)\"" }.joined(separator: ", ")
+            return "id: base.paths\nname: Paths\npath: [\(list)]\n\(rest)safety: safe\naction: remove\n"
+        }
+        let tree = try TempTree()
+        try tree.directory("user")
+        try yaml(override).write(toFile: tree.path("user/paths.yaml"), atomically: true, encoding: .utf8)
+        let builtin = BuiltinRules(files: [RuleFileText(source: "built-in rules/paths.yaml", yaml: yaml(builtin))])
+        return errors(RuleLibrary.load(builtin: builtin, directories: [tree.path("user")]), "base.paths").map(\.message)
+    }
+
+    @Test("An override path is judged where the engine looks for it: a symlinked folder leading out of the built-in path is refused")
+    func overridePathThroughSymlink() throws {
+        let tree = try TempTree()
+        try tree.directory("caches/app/data")
+        try tree.directory("documents/data")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("caches/link"), withDestinationPath: tree.path("documents"))
+        let builtin = [tree.path("caches/*/data")]
+
+        let throughLink = try pathErrors(builtin: builtin, override: [tree.path("caches/link/data")])
+        #expect(throughLink.contains { $0.contains("adds the path") }, "\(throughLink)")
+        #expect(try pathErrors(builtin: builtin, override: [tree.path("caches/app/data")]).isEmpty)
+
+        // The temporary folder sits behind /var -> /private/var: the same folders spelled through the link are the same path.
+        let resolved = tree.root
+        #expect(resolved.hasPrefix("/private/var/"))
+        let linked = String(resolved.dropFirst("/private".count))
+        #expect(try pathErrors(builtin: [linked + "/caches/*/data"], override: [resolved + "/caches/app/data"]).isEmpty)
+        #expect(try pathErrors(builtin: builtin, override: [linked + "/caches/app/data"]).isEmpty)
+    }
+
     @Test("rules validate <file> judges a file the way loading it would, overrides of built-in rules included")
     func checkFiles() throws {
         let folders = try Folders()

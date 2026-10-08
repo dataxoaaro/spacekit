@@ -112,31 +112,17 @@ public struct SuggestionStore: Sendable {
         try modify { list in list.removeAll { $0.id == id } }
     }
 
-    /// What `narrow` did to a stored suggestion.
-    enum Narrowed: Equatable {
-        /// It wasn't there: dismissed, or replaced by a newer run of its job, meanwhile. It stays as it is.
-        case gone
-        /// Nothing of it is left, so it was removed.
-        case removed
-        /// Narrowed to what's left, as stored now.
-        case kept(Suggestion)
-    }
-
     /// Narrows the suggestion `id` to the rows of `left` it still holds when the store is read, under the store's lock,
     /// and attaches `problems`; removes it when nothing is left. A row another approval settled meanwhile isn't in the
     /// stored suggestion, so it stays settled: two approvals of one suggestion never bring back what either ran.
-    func narrow(_ id: String, to left: CleanupPlan, problems: [String]) throws -> Narrowed {
+    func narrow(_ id: String, to left: CleanupPlan, problems: [String]) throws -> ManualJobRun.SuggestionFate {
         try modify { list in
             guard let index = list.firstIndex(where: { $0.id == id }) else { return .gone }
             var suggestion = list[index]
-            let items = Set(suggestion.plan.items.map(\.id))
-            let commands = Set(suggestion.plan.commands.map(\.id))
-            var plan = left
-            plan.items = left.items.filter { items.contains($0.id) }
-            plan.commands = left.commands.filter { commands.contains($0.id) }
+            let plan = left.narrowed(to: suggestion.plan)
             guard !plan.isEmpty else {
                 list.remove(at: index)
-                return .removed
+                return .dismissed
             }
             suggestion.plan = plan
             suggestion.problems = problems

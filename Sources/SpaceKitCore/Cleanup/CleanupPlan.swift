@@ -105,6 +105,17 @@ public struct CleanupPlan: Codable, Sendable, Equatable {
 
     public var isEmpty: Bool { items.isEmpty && commands.isEmpty }
 
+    /// This plan with only the items and commands `other` also has, by id. The rest (manual steps, the Trash setting)
+    /// is this plan's.
+    func narrowed(to other: CleanupPlan) -> CleanupPlan {
+        let items = Set(other.items.map(\.id))
+        let commands = Set(other.commands.map(\.id))
+        var narrowed = self
+        narrowed.items = self.items.filter { items.contains($0.id) }
+        narrowed.commands = self.commands.filter { commands.contains($0.id) }
+        return narrowed
+    }
+
     /// The order every preview lists items in.
     public var itemsLargestFirst: [CleanupItem] { items.sorted { $0.size > $1.size } }
 

@@ -162,11 +162,7 @@ public struct ManualJobRun: Sendable {
         guard let suggestion else { return Outcome(report: report, fate: nil, saveErrors: errors) }
         let fate: SuggestionFate
         do {
-            switch try runner.context.suggestions.narrow(suggestion.id, to: left(), problems: report.problemDetails) {
-            case .gone: fate = .gone
-            case .removed: fate = .dismissed
-            case .kept(let kept): fate = .kept(kept)
-            }
+            fate = try runner.context.suggestions.narrow(suggestion.id, to: left(), problems: report.problemDetails)
         } catch {
             errors.append("Couldn't save the suggestion: \(error.localizedDescription)")
             return Outcome(report: report, fate: nil, saveErrors: errors)

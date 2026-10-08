@@ -203,7 +203,7 @@ public struct CleanupReview: Sendable {
                 return (row.id, ReviewRecord.Row(shown: shown, accepted: accepted, location: location(row), executable: executable(row)))
             }
             // Two rows with one id (the same path listed twice) hold the run to what both of them showed.
-            return Dictionary(selected, uniquingKeysWith: { $0.both($1) })
+            return Dictionary(selected, uniquingKeysWith: { $0.intersecting($1) })
         }
         // The plan says what the removal module will do: with `safety.trash: always`, the Trash whatever `useTrash` says.
         let plan = CleanupPlan(items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: movesToTrash)
@@ -230,12 +230,7 @@ public struct ReviewedPlan: Sendable {
 extension ReviewedPlan {
     /// Only the rows that are also in `plan`, with what the review recorded for them.
     func limited(to plan: CleanupPlan) -> ReviewedPlan {
-        let items = Set(plan.items.map(\.id))
-        let commands = Set(plan.commands.map(\.id))
-        var limited = self.plan
-        limited.items = limited.items.filter { items.contains($0.id) }
-        limited.commands = limited.commands.filter { commands.contains($0.id) }
-        return ReviewedPlan(plan: limited, review: review)
+        ReviewedPlan(plan: self.plan.narrowed(to: plan), review: review)
     }
 }
 
@@ -255,7 +250,7 @@ struct ReviewRecord: Sendable {
         let executable: String?
 
         /// What two rows for the same thing both showed and the person accepted for both.
-        func both(_ other: Row) -> Row {
+        func intersecting(_ other: Row) -> Row {
             Row(shown: shown.intersection(other.shown), accepted: accepted && other.accepted, location: location, executable: executable)
         }
 
@@ -283,19 +278,7 @@ struct ReviewRecord: Sendable {
 
     /// `reason` without its digits, and the numbers it holds in order.
     static func numbers(in reason: String) -> (text: String, values: [UInt64]) {
-        var text = ""
-        var values: [UInt64] = []
-        var digits = ""
-        for character in reason {
-            if character.isASCII, character.isNumber {
-                digits.append(character)
-                continue
-            }
-            if let value = UInt64(digits) { values.append(value) }
-            digits = ""
-            text.append(character)
-        }
-        if let value = UInt64(digits) { values.append(value) }
-        return (text, values)
+        let digits = #/[0-9]+/#
+        return (reason.replacing(digits, with: ""), reason.matches(of: digits).compactMap { UInt64($0.output) })
     }
 }

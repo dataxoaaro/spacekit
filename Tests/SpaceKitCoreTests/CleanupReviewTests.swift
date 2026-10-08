@@ -192,6 +192,14 @@ struct CleanupReviewTests {
         #expect(!report.hasProblems)
     }
 
+    @Test("A reason's numbers are read apart from its words")
+    func reasonNumbers() {
+        let read = ReviewRecord.numbers(in: "This holds 12% of 3 disks, ٣ not counted")
+        #expect(read.text == "This holds % of  disks, ٣ not counted")
+        #expect(read.values == [12, 3])
+        #expect(ReviewRecord.numbers(in: "99999999999999999999 bytes").values.isEmpty, "too large for a count")
+    }
+
     @Test("An accepted volume share covers that share or less, not a larger one")
     func volumeShareBound() throws {
         let tree = try TempTree()

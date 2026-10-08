@@ -37,9 +37,13 @@ extension AppModel {
         CleanupPlan(items: items, useTrash: true, created: treeScanStarted)
     }
 
+    /// When the scan behind the Dev and AI findings began. It's the Explore scan's unless the analysis scanned
+    /// the rule locations itself.
+    var analysisScanStarted: Date { analysisResult?.scanStarted ?? treeScanStarted }
+
     func reviewFinding(_ finding: Finding, items: [FindingItem]? = nil) {
-        let plan = CleanupPlan.make(
-            findings: [finding], trashPreference: context.trashPreference(for: .rule), created: treeScanStarted) { items ?? $0.items }
+        let trash = context.trashPreference(for: .rule)
+        let plan = CleanupPlan.make(findings: [finding], trashPreference: trash, created: analysisScanStarted) { items ?? $0.items }
         review(plan, title: "Clean \(finding.rule.name)")
     }
 

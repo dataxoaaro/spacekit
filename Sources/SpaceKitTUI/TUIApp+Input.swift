@@ -228,7 +228,7 @@ extension TUIApp {
             let findings = rows.compactMap(\.finding).filter { marked.isEmpty ? $0.id == finding.id : marked.contains($0.id) }
             let plan = CleanupPlan.make(
                 findings: findings.filter(\.isCleanable), trashPreference: context.trashPreference(for: .rule),
-                created: state.scanStarted)
+                created: state.analysisScanStarted)
             let name = findings.count == 1 ? TerminalText.sanitize(findings[0].rule.name) : "\(findings.count) rules"
             confirmCleanup(plan, title: "Clean \(name)")
         case .character("n"):
@@ -270,7 +270,7 @@ extension TUIApp {
         case .pageDown: select(position + 10)
         case .character("d"), .character("x"):
             guard !refuseWhileBusy(), let model = rows[selectable[position]].model else { return }
-            guard let plan = CleanupPlan.removing(model, created: state.scanStarted) else {
+            guard let plan = CleanupPlan.removing(model, created: state.analysisScanStarted) else {
                 flash("\(TerminalText.sanitize(model.name)) can't be removed on its own; remove the models that use it")
                 return
             }
@@ -282,6 +282,10 @@ extension TUIApp {
 }
 
 extension TUIApp.State {
+    /// When the scan behind the Dev and AI findings began: the Explore scan's unless the analysis scanned the
+    /// rule locations itself.
+    var analysisScanStarted: Date { result?.scanStarted ?? scanStarted }
+
     /// Dev Intelligence rows: a heading per safety level, then its findings.
     var devRows: [(group: String, finding: Finding?)] {
         guard let analysis else { return [] }

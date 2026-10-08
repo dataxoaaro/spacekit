@@ -28,6 +28,7 @@ public struct Scanner: Sendable {
     /// Scans several directory trees into one tree. With more than one root, `ScanTree.root` is a virtual
     /// node with an empty name whose children are the roots (named by absolute path).
     public func scan(roots paths: [String], progress: ScanProgress = ScanProgress()) throws -> ScanTree {
+        let started = Date()
         let clock = ContinuousClock.now
         var resolved: [String] = []
         for path in paths {
@@ -76,7 +77,7 @@ public struct Scanner: Sendable {
             cancelled: progress.isCancelled
         )
         return ScanTree(
-            root: root, roots: resolved, stats: stats, options: options,
+            root: root, roots: resolved, stats: stats, started: started, options: options,
             capacity: VolumeCapacity.of(path: resolved[0]), hardLinks: hardLinks
         )
     }
@@ -321,10 +322,10 @@ private final class ScanJob: @unchecked Sendable {
         var groups: [HardLinkKey: HardLinkGroup] = [:]
         groups.reserveCapacity(table.count)
         for (key, entry) in table {
-            var holder: DirNode = entry.credited
             var group = HardLinkGroup(size: entry.size, modified: entry.modified, links: entry.links)
             guard let ownerIndex = group.ownerIndex else { continue }
             let owner: HardLink = group.links[ownerIndex]
+            var holder: DirNode = entry.credited
             var holderName: String = entry.creditedName
             let moves = owner.node !== holder || owner.name != holderName
             // The links themselves stay counted where they are; only the bytes (and the tracked leaf) move.

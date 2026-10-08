@@ -147,6 +147,9 @@ public final class ScanTree: @unchecked Sendable {
     /// The scanned paths. One element for a normal scan, several for a multi-root scan (where `root` is virtual).
     public let roots: [String]
     public let stats: ScanStats
+    /// When the scan began. Anything that changed on disk after this may not be reflected, so cleanup plans built
+    /// from the tree are dated by it.
+    public let started: Date
     public let options: ScanOptions
     /// Capacity of the volume containing the first root.
     public let capacity: VolumeCapacity?
@@ -155,12 +158,13 @@ public final class ScanTree: @unchecked Sendable {
     var hardLinks: HardLinkTable
 
     init(
-        root: DirNode, roots: [String], stats: ScanStats, options: ScanOptions, capacity: VolumeCapacity?,
+        root: DirNode, roots: [String], stats: ScanStats, started: Date, options: ScanOptions, capacity: VolumeCapacity?,
         hardLinks: [HardLinkKey: HardLinkGroup] = [:]
     ) {
         self.root = root
         self.roots = roots
         self.stats = stats
+        self.started = started
         self.options = options
         self.capacity = capacity
         self.hardLinks = HardLinkTable(hardLinks)

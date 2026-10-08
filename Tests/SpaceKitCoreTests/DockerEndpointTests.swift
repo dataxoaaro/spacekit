@@ -50,6 +50,11 @@ struct DockerEndpointTests {
 
     /// Runs `command` from a built-in rule in an automatic run against `docker`; returns the outcome and every call.
     func run(_ command: [String], _ docker: ScriptedDocker) -> (outcome: CleanupOutcome?, calls: [[String]]) {
+        let (outcome, runner) = runRecorded(command, docker)
+        return (outcome, runner.calls)
+    }
+
+    func runRecorded(_ command: [String], _ docker: ScriptedDocker) -> (outcome: CleanupOutcome?, runner: RecordingRunner) {
         var rule = Rule(
             id: "docker.cache", name: "Docker", paths: [], granularity: .children, safety: SafetySpec(level: .safe),
             action: ActionSpec(command: command))
@@ -59,7 +64,7 @@ struct DockerEndpointTests {
         executor.runner = runner
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: rule.id, arguments: command, estimatedBytes: 1)])
         let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
-        return (report.commands.first?.outcome, runner.calls)
+        return (report.commands.first?.outcome, runner)
     }
 
     func skipReason(_ outcome: CleanupOutcome?) -> String? {
@@ -127,6 +132,9 @@ struct DockerEndpointTests {
         }
         // Commands that act on the daemon itself never ask about builders.
         #expect(run(imagePrune, local[0]).calls == [ScriptedDocker.activeContext, imagePrune])
+        // Docker is asked in the environment the command gets, so it describes the Docker the command will use.
+        let recorded = runRecorded(builderPrune, local[0]).runner
+        #expect(recorded.kinds.count == recorded.calls.count && recorded.kinds.allSatisfy { $0 == .automatic })
     }
 
     @Test("A remote, cloud or unknown buildx builder, or one Docker can't describe, refuses docker builder commands")

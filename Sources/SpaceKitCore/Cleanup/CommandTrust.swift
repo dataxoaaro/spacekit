@@ -101,14 +101,16 @@ public struct CommandTrust: Sendable {
     /// Why the program a command found may not start, checked right before it would: the name may run, but the file
     /// may not be what the name says, or the tool would act on another machine. `arguments` is the command, its first
     /// the bare name; `executable` is where that was found.
-    func launchRefusal(_ arguments: [String], at executable: String, isBuiltin: Bool, runner: any ProcessRunner) -> String? {
+    func launchRefusal(_ arguments: [String], at executable: String, isBuiltin: Bool, runner: any ProcessRunner, kind: Shell.RunKind)
+        -> String?
+    {
         let name = arguments.first ?? ""
         if !(isBuiltin && CommandTrust.trustedCommands.contains(name)),
             let refusal = launcherIdentityRefusal(name, at: executable, runner: runner)
         {
             return refusal
         }
-        return name == "docker" ? dockerRefusal(arguments, docker: executable, runner: runner) : nil
+        return name == "docker" ? dockerRefusal(arguments, docker: DockerCLI(path: executable, runner: runner, kind: kind)) : nil
     }
 
     /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the

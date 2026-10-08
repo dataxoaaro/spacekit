@@ -5,7 +5,7 @@ import Foundation
 /// run only when what they reach is served through a unix socket on this Mac, which is how Docker Desktop, OrbStack,
 /// Colima and Podman's Docker socket serve a local VM.
 ///
-/// Every question goes to `docker` itself, through the runner, in the cleaned environment the command gets: without
+/// Every question goes to `docker` itself, through the runner, in the cleaned environment the command's run gets: without
 /// DOCKER_HOST, DOCKER_CONTEXT or BUILDX_BUILDER (see `Shell.toolEnvironment`). So the active context and the
 /// selected builder it reports are the ones the command uses, whatever SpaceKit's own environment says. Answers are
 /// read from standard output only; anything that can't be read as an answer refuses the command.
@@ -19,8 +19,8 @@ extension CommandTrust {
     static let localBuilderDrivers: Set<String> = ["docker", "docker-container"]
 
     /// Why `arguments`, a `docker` command, would act somewhere other than this Mac, or `nil`.
-    func dockerRefusal(_ arguments: [String], docker: String, runner: any ProcessRunner) -> String? {
-        let active = CommandTrust.dockerEndpoint(of: nil, docker: docker, runner: runner)
+    func dockerRefusal(_ arguments: [String], docker: DockerCLI) -> String? {
+        let active = CommandTrust.dockerEndpoint(of: nil, docker: docker)
         switch active {
         case .failure(let problem):
             return "Couldn't tell which Docker the active context uses (docker context inspect: \(problem))"
@@ -33,14 +33,13 @@ extension CommandTrust {
         // `docker builder` (an alias of `docker buildx` since Docker 23) acts on the selected buildx builder, which
         // can be remote even when the context is local.
         guard arguments.count > 1, ["builder", "buildx"].contains(arguments[1]) else { return nil }
-        return builderRefusal(docker: docker, runner: runner)
+        return builderRefusal(docker: docker)
     }
 
     /// Why the selected buildx builder isn't this Mac's Docker, or `nil` when it is: its driver builds in a Docker
     /// daemon, and every node's endpoint is a unix socket or a context whose endpoint is one.
-    private func builderRefusal(docker: String, runner: any ProcessRunner) -> String? {
-        let listed = runner.run(
-            docker, ["buildx", "ls", "--format", "json"], timeout: CommandTrust.dockerQueryTimeout, separateErrors: true)
+    private func builderRefusal(docker: DockerCLI) -> String? {
+        let listed = docker.ask(["buildx", "ls", "--format", "json"])
         guard listed.status == 0, !listed.timedOut else {
             return "Couldn't tell which buildx builder docker builder uses (docker buildx ls: \(CommandTrust.problem(listed)))"
         }
@@ -57,21 +56,21 @@ extension CommandTrust {
         }
         guard !builder.endpoints.isEmpty else { return "The selected buildx builder \(name) has no nodes to check" }
         for endpoint in builder.endpoints {
-            if let refusal = nodeRefusal(endpoint, builder: name, docker: docker, runner: runner) { return refusal }
+            if let refusal = nodeRefusal(endpoint, builder: name, docker: docker) { return refusal }
         }
         return nil
     }
 
     /// Why one node of a builder isn't on this Mac. A node names a socket (`unix://…`) or a Docker context, which is
     /// looked up the same way as the active one.
-    private func nodeRefusal(_ endpoint: String, builder: String, docker: String, runner: any ProcessRunner) -> String? {
+    private func nodeRefusal(_ endpoint: String, builder: String, docker: DockerCLI) -> String? {
         let shownEndpoint = CommandTrust.shown(endpoint)
         if endpoint.hasPrefix("unix://") { return nil }
         guard !endpoint.isEmpty, !endpoint.contains("://"), !endpoint.hasPrefix("-") else {
             return "The selected buildx builder \(builder) runs at \(shownEndpoint), not at a socket on this Mac; "
                 + "SpaceKit only prunes a builder in a Docker running on this Mac"
         }
-        switch CommandTrust.dockerEndpoint(of: endpoint, docker: docker, runner: runner) {
+        switch CommandTrust.dockerEndpoint(of: endpoint, docker: docker) {
         case .failure(let problem):
             return "Couldn't tell where the context \(shownEndpoint) of buildx builder \(builder) points (\(problem))"
         case .success(let host) where !host.hasPrefix("unix://"):
@@ -84,9 +83,9 @@ extension CommandTrust {
 
     /// The Docker endpoint of the context named `context`, or of the active one: the single line `docker context
     /// inspect` prints on standard output.
-    private static func dockerEndpoint(of context: String?, docker: String, runner: any ProcessRunner) -> Result<String, Unanswered> {
+    private static func dockerEndpoint(of context: String?, docker: DockerCLI) -> Result<String, Unanswered> {
         let arguments = ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"] + (context.map { [$0] } ?? [])
-        let result = runner.run(docker, arguments, timeout: dockerQueryTimeout, separateErrors: true)
+        let result = docker.ask(arguments)
         guard result.status == 0, !result.timedOut else { return .failure(Unanswered(problem(result))) }
         let lines = result.output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         let answer = lines.filter { !$0.isEmpty }
@@ -110,6 +109,18 @@ extension CommandTrust {
     private struct Unanswered: Error, CustomStringConvertible {
         let description: String
         init(_ description: String) { self.description = description }
+    }
+}
+
+/// The `docker` a command found, asked questions the way the command will run: through the runner, in the environment
+/// its run gets, with standard error kept apart from the answer.
+struct DockerCLI {
+    let path: String
+    let runner: any ProcessRunner
+    let kind: Shell.RunKind
+
+    func ask(_ arguments: [String]) -> Shell.Result {
+        runner.run(path, arguments, timeout: CommandTrust.dockerQueryTimeout, separateErrors: true, kind: kind)
     }
 }
 

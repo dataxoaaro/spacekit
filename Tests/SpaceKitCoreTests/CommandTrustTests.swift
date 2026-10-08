@@ -9,7 +9,7 @@ import Testing
 final class RecordingRunner: ProcessRunner {
     private let locator: @Sendable (String) -> String?
     private let respond: @Sendable (_ call: [String]) -> Shell.Result
-    private let recorded = Mutex<[[String]]>([])
+    private let recorded = Mutex<[(call: [String], kind: Shell.RunKind)]>([])
 
     /// Each tool in `installed` is found as a small stand-in file in `tree`, so the executor has a program file to check.
     convenience init(
@@ -38,14 +38,18 @@ final class RecordingRunner: ProcessRunner {
     func locate(_ name: String) -> String? { locator(name) }
 
     /// Scripted: the test puts standard output in `output`, and standard error in `errors` for a run that keeps it apart.
-    func run(_ executable: String, _ arguments: [String], timeout: TimeInterval, separateErrors: Bool) -> Shell.Result {
+    func run(_ executable: String, _ arguments: [String], timeout: TimeInterval, separateErrors: Bool, kind: Shell.RunKind)
+        -> Shell.Result
+    {
         let call = [PathUtil.lastComponent(executable)] + arguments
-        recorded.withLock { $0.append(call) }
+        recorded.withLock { $0.append((call, kind)) }
         return respond(call)
     }
 
     /// Every call so far, the tool by its bare name.
-    var calls: [[String]] { recorded.withLock { $0 } }
+    var calls: [[String]] { recorded.withLock { $0.map(\.call) } }
+    /// The environment each call so far was given.
+    var kinds: [Shell.RunKind] { recorded.withLock { $0.map(\.kind) } }
 }
 
 @Suite("Command trust")
@@ -137,6 +141,12 @@ struct CommandTrustTests {
         }
         let path = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
         #expect(path.first == "/usr/bin" && path.contains("/opt/homebrew/bin") && !path.contains("relative"))
+
+        // Nobody watches an automatic run, and any process of the person's can set the agent's variables (launchctl
+        // setenv): a tool home, an XDG folder or a Homebrew setting would steer what a tool deletes. Only who and where.
+        let automatic = Shell.toolEnvironment(from: parent, home: "/Users/tester", kind: .automatic)
+        #expect(Set(automatic.keys) == ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
+        #expect(automatic["PATH"] == environment["PATH"] && automatic["HOME"] == "/Users/tester")
     }
 
     @Test("The real runner hands a tool the cleaned environment, not SpaceKit's own")
@@ -177,6 +187,7 @@ struct CommandTrustTests {
         let manual = manualRun(plan, with: executor)
         #expect(manual.commands.filter { skipReason($0.outcome) == nil }.map(\.command.ruleID) == ["user"])
         #expect(runner.calls == [["du", "-s", "/Users/tester/.tool/cache"]])
+        #expect(runner.kinds == [.manual])
     }
 
     /// Writes an executable file to `relative` in `tree`: a script when `text` starts with `#!`, otherwise a stand-in
@@ -292,6 +303,7 @@ struct CommandTrustTests {
         #expect(report.commands.first?.outcome == .removed(bytes: freed, trashedTo: nil))
         #expect(skipReason(report.commands.last?.outcome)?.contains("budget") == true)
         #expect(runner.calls == [["brew", "cleanup"]])
+        #expect(runner.kinds == [.automatic], "an automatic run's tools get the automatic environment")
         #expect(journalEntries(tree).map(\.bytes) == [freed])
     }
 

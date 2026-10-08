@@ -54,8 +54,21 @@ public enum Shell {
     /// How long a tool gets to exit after SIGTERM before it (and its process group) gets SIGKILL.
     static let terminationGrace: TimeInterval = 1
 
-    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, and the
-    /// variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured. DEVELOPER_DIR isn't one:
+    /// Who started a tool, which decides the variables it keeps.
+    public enum RunKind: Sendable {
+        /// A person: their review showed the command, and the tool cleans the cache SpaceKit measured for them.
+        case manual
+        /// The background agent, with nobody watching. Any process of the person's can set the agent's variables
+        /// (`launchctl setenv`), so a tool keeps only who and where the person is: no tool home, `XDG_*` folder or
+        /// Homebrew setting that would steer what the tool deletes.
+        case automatic
+    }
+
+    /// Variables an automatic run's tool keeps: who and where the person is, and their locale (`LC_*` too).
+    static let automaticVariables: Set<String> = ["HOME", "USER", "LOGNAME", "LANG", "TMPDIR"]
+
+    /// Variables a manual run's tool keeps from SpaceKit's environment: who and where the person is, their locale, and
+    /// the variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured. DEVELOPER_DIR isn't one:
     /// it picks the folder `xcrun` starts developer tools from, so any process of the person's could set it (through
     /// `launchctl setenv`) to a folder of its own and have its program run with SpaceKit's Full Disk Access.
     static let keptVariables: Set<String> = [
@@ -69,14 +82,16 @@ public enum Shell {
     /// Parts of a name that mark a credential, which stays behind even under a kept prefix (HOMEBREW_GITHUB_API_TOKEN).
     static let credentialMarks = ["TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "AUTH", "CREDENTIAL"]
 
-    /// The environment a tool runs with: `keptVariables` and `keptPrefixes` from `environment`, minus credentials, and
-    /// PATH set to `searchPath`. Everything else stays behind. A variable can point a tool somewhere else entirely
+    /// The environment a tool runs with: for a manual run `keptVariables` and `keptPrefixes` from `environment`, minus
+    /// credentials, for an automatic run `automaticVariables` and `LC_*`; and PATH set to `searchPath`. Everything else
+    /// stays behind. A variable can point a tool somewhere else entirely
     /// (DOCKER_HOST at another machine's daemon, OLLAMA_HOST at another server), load code into it (DYLD_*,
     /// NODE_OPTIONS) or hand it credentials (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often
     /// from an agent nobody watches. Every tool SpaceKit starts gets it, its own helpers too (launchctl, tmutil,
     /// osascript, open), so no caller can forget it.
-    public static func toolEnvironment(from environment: [String: String], home: String) -> [String: String] {
+    public static func toolEnvironment(from environment: [String: String], home: String, kind: RunKind = .manual) -> [String: String] {
         var kept = environment.filter { name, _ in
+            if kind == .automatic { return automaticVariables.contains(name) || name.hasPrefix("LC_") }
             guard keptVariables.contains(name) || keptPrefixes.contains(where: { name.hasPrefix($0) }) else { return false }
             let upper = name.uppercased()
             return !credentialMarks.contains { upper.contains($0) }
@@ -87,17 +102,17 @@ public enum Shell {
 
     /// Runs a tool and waits until it has exited and closed its output, or until `timeout`. A tool that is still
     /// running then, or left a background child holding its output, is sent SIGTERM and then SIGKILL; its
-    /// process group goes with it. Timed-out runs report status -2. The tool gets `toolEnvironment(from:)` of
+    /// process group goes with it. Timed-out runs report status -2. The tool gets `toolEnvironment(from:kind:)` of
     /// `environment`, never SpaceKit's own environment as is. `separateErrors` keeps standard error out of `output`
     /// (in `errors`), for a tool whose output is read as an answer, where a warning must not pass for one.
     public static func run(
         _ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
-        environment: [String: String] = ProcessInfo.processInfo.environment, separateErrors: Bool = false
+        environment: [String: String] = ProcessInfo.processInfo.environment, separateErrors: Bool = false, kind: RunKind = .manual
     ) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        process.environment = toolEnvironment(from: environment, home: PathUtil.home)
+        process.environment = toolEnvironment(from: environment, home: PathUtil.home, kind: kind)
         process.standardInput = FileHandle.nullDevice
         let capture = Capture(process, separateErrors: separateErrors)
         let exited = DispatchSemaphore(value: 0)

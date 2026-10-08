@@ -61,14 +61,15 @@ extension CleanupExecutor {
         let name = command.arguments[0]
         guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
         let isBuiltin = rules[command.ruleID]?.isBuiltin == true
-        if let refusal = commandTrust.launchRefusal(command.arguments, at: executable, isBuiltin: isBuiltin, runner: runner) {
+        let kind: Shell.RunKind = context.isAutomatic ? .automatic : .manual
+        if let refusal = commandTrust.launchRefusal(command.arguments, at: executable, isBuiltin: isBuiltin, runner: runner, kind: kind) {
             return (.skipped(reason: refusal), "")
         }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }
 
         let before = measure(command.measurePaths) ?? 0
         let result = runner.run(
-            executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout, separateErrors: false)
+            executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout, separateErrors: false, kind: kind)
         if result.timedOut {
             return (.failed(reason: "Stopped after \(Int(CleanupExecutor.commandTimeout)) seconds"), result.output)
         }

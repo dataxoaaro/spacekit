@@ -24,16 +24,16 @@ private final class Recorder: Sendable {
         }
     }
 
-    var analysed: [Workspace.Snapshot] {
+    var analysed: [Workspace.State] {
         all.compactMap { event in
-            if case .analysed(let snapshot) = event { return snapshot }
+            if case .analysed(let state) = event { return state }
             return nil
         }
     }
 
-    var refreshed: [Workspace.Snapshot] {
+    var refreshed: [Workspace.State] {
         all.compactMap { event in
-            if case .refreshed(let snapshot) = event { return snapshot }
+            if case .refreshed(let state) = event { return state }
             return nil
         }
     }
@@ -149,7 +149,7 @@ struct WorkspaceTests {
             #expect(tree?.inconsistencies() == [])
             #expect(tree?.node(at: fixture.tree.path("home/cache/c0")) == nil)
         }
-        let result = try #require(workspace.snapshot.result)
+        let result = try #require(workspace.state.result)
         #expect(fixture.items(result.analysis.findings) == (try fixture.freshFindings()))
         #expect(recorder.analysed.last.map { fixture.items($0.result?.analysis.findings ?? []) } == (try fixture.freshFindings()))
     }
@@ -171,7 +171,7 @@ struct WorkspaceTests {
             #expect(tree?.inconsistencies() == [])
             #expect(tree?.node(at: fixture.tree.path("home/.Trash/c2")) != nil)
         }
-        #expect(fixture.items(workspace.snapshot.result?.analysis.findings ?? []) == (try fixture.freshFindings()))
+        #expect(fixture.items(workspace.state.result?.analysis.findings ?? []) == (try fixture.freshFindings()))
     }
 
     @Test("Readers never see a cleanup half applied")
@@ -185,20 +185,19 @@ struct WorkspaceTests {
         let done = Atomic<Bool>(false)
         let seen = Mutex<Set<UInt64>>([])
         let problems = Mutex<[String]>([])
+        // A write running alongside would show up as a total that moves during one read. Reads last a while, like an
+        // analysis's, so a write that doesn't wait for them overlaps one.
+        let check: @Sendable (ScanTree?) -> Void = { tree in
+            guard let tree else { return }
+            let first = tree.root.size
+            usleep(10_000)
+            let found = tree.inconsistencies(limit: .max)
+            let last = tree.root.size
+            if !found.isEmpty || first != last { problems.withLock { $0 += found + ["total \(first) → \(last)"] } }
+            _ = seen.withLock { $0.insert(last) }
+        }
         let reader = Thread {
-            while !done.load(ordering: .acquiring) {
-                workspace.read { tree in
-                    guard let tree else { return }
-                    // A write running alongside would show up as a total that moves during one read. Reads last a
-                    // while, like an analysis's, so a write that doesn't wait for them overlaps one.
-                    let first = tree.root.size
-                    usleep(10_000)
-                    let found = tree.inconsistencies(limit: .max)
-                    let last = tree.root.size
-                    if !found.isEmpty || first != last { problems.withLock { $0 += found + ["total \(first) → \(last)"] } }
-                    _ = seen.withLock { $0.insert(last) }
-                }
-            }
+            while !done.load(ordering: .acquiring) { workspace.read(check) }
         }
         reader.start()
         let report = fixture.clean(Array(fixture.caches.dropFirst(10)))
@@ -289,8 +288,8 @@ struct WorkspaceTests {
         usleep(50_000)
 
         #expect(recorder.analysed.isEmpty)
-        #expect(workspace.snapshot.result == nil)
-        #expect(workspace.snapshot.tree === newer)
+        #expect(workspace.state.result == nil)
+        #expect(workspace.state.tree === newer)
     }
 
     @Test("Only the latest analysis records a History snapshot")
@@ -366,12 +365,12 @@ struct WorkspaceTests {
         for name in ["a", "b"] {
             try FileManager.default.removeItem(atPath: fixture.tree.path("home/.Trash/\(name)"))
             workspace.resync(
-                try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.snapshot,
+                try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.state,
                 context: fixture.context, reevaluating: [fixture.rule.id])
             held.started.wait()
             if name == "a" { try between() }
         }
-        #expect(workspace.snapshot.refreshingRules == [fixture.rule.id])
+        #expect(workspace.state.refreshingRules == [fixture.rule.id])
         return workspace
     }
 
@@ -384,11 +383,11 @@ struct WorkspaceTests {
 
         held.releases[0].signal()
         #expect(recorder.wait { $0.refreshed.count == 1 })
-        #expect(workspace.snapshot.refreshingRules == [fixture.rule.id])
+        #expect(workspace.state.refreshingRules == [fixture.rule.id])
 
         held.releases[1].signal()
         #expect(recorder.wait { $0.refreshed.count == 2 })
-        #expect(workspace.snapshot.refreshingRules.isEmpty)
+        #expect(workspace.state.refreshingRules.isEmpty)
     }
 
     @Test("An older re-evaluation of a rule that ends last doesn't put back findings the newer one no longer has")
@@ -406,8 +405,8 @@ struct WorkspaceTests {
         held.releases[0].signal()
         #expect(recorder.wait { $0.refreshed.count == 2 })
 
-        #expect(workspace.snapshot.refreshingRules.isEmpty)
-        let findings = fixture.items(workspace.snapshot.result?.analysis.findings ?? [])
+        #expect(workspace.state.refreshingRules.isEmpty)
+        let findings = fixture.items(workspace.state.result?.analysis.findings ?? [])
         #expect(findings[fixture.tree.path("home/cache/c0")] == nil)
         #expect(findings[fixture.tree.path("home/cache/c1")] != nil)
     }
@@ -423,7 +422,7 @@ struct WorkspaceTests {
 
         let trash = fixture.tree.path("home/.Trash")
         workspace.resync(
-            try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.snapshot, context: fixture.context)
+            try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, over: workspace.state, context: fixture.context)
 
         #expect(recorder.wait { !$0.changes.isEmpty })
         #expect(recorder.changes.first?.rescanned == [trash])
@@ -442,7 +441,7 @@ struct WorkspaceTests {
         workspace.show(try fixture.scanHome())
         let trash = fixture.tree.path("home/.Trash")
         // The Trash scan starts while the first tree is shown; it is older than anything scanned after it.
-        let shown = workspace.snapshot
+        let shown = workspace.state
         let older = try Scanner(options: fixture.context.scanOptions).scan(trash)
         try fixture.tree.file("home/.Trash/new/blob", bytes: 80_000)
         let newer = try fixture.scanHome()

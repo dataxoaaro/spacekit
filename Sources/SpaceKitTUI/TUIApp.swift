@@ -266,19 +266,19 @@ public final class TUIApp {
 
     func handle(_ event: Workspace.Event) {
         switch event {
-        case .analysed(let snapshot):
+        case .analysed(let shown):
             state.analysisProgress = nil
-            state.result = snapshot.result
+            state.result = shown.result
         case .analysisFailed(let error):
             state.analysisProgress = nil
             state.error = TerminalText.sanitize(error.localizedDescription)
         case .changed(let change):
-            state.result = change.snapshot.result
+            state.result = change.state.result
             follow(change)
-        case .refreshed(let snapshot):
+        case .refreshed(let shown):
             // `r` cleared the findings for a new analysis, which brings its own.
             guard state.analysisProgress == nil else { return }
-            state.result = snapshot.result
+            state.result = shown.result
         }
     }
 

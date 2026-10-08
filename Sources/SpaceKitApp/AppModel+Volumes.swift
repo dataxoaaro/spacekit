@@ -17,7 +17,7 @@ extension AppModel {
         let context = self.context
         let trashRules = Set(Trash.rules(in: library.rules).map(\.id))
         // What's shown as the scan starts: a tree shown or analysed while it runs is newer than this scan.
-        let shown = workspace.snapshot
+        let shown = workspace.state
         Task {
             let fresh = await Task.detached(priority: .utility) { try? Scanner(options: options).scan(path) }.value
             guard let fresh, !fresh.root.flags.contains(.unreadable) else {

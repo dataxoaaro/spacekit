@@ -409,9 +409,9 @@ final class AppModel {
 
     private func handle(_ event: Workspace.Event) {
         switch event {
-        case .analysed(let snapshot):
+        case .analysed(let state):
             analysisProgress = nil
-            show(snapshot)
+            show(state)
             if let tree, tree.covers(PathUtil.home) {
                 categories = CategoryBreakdown.compute(tree: tree, findings: analysis?.findings ?? [])
             }
@@ -420,16 +420,16 @@ final class AppModel {
             analysisProgress = nil
             errorMessage = error.localizedDescription
         case .changed(let change):
-            show(change.snapshot)
+            show(change.state)
             follow(change)
-        case .refreshed(let snapshot):
-            show(snapshot)
+        case .refreshed(let state):
+            show(state)
         }
     }
 
-    private func show(_ snapshot: Workspace.Snapshot) {
-        analysisResult = snapshot.result
-        if refreshingRules != snapshot.refreshingRules { refreshingRules = snapshot.refreshingRules }
+    private func show(_ state: Workspace.State) {
+        analysisResult = state.result
+        if refreshingRules != state.refreshingRules { refreshingRules = state.refreshingRules }
     }
 
     /// After a cleanup or a re-synced Trash: category totals and map layouts follow the tree, the map stays on its folder

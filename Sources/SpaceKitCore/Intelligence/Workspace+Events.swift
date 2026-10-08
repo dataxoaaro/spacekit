@@ -3,7 +3,7 @@ import Synchronization
 
 extension Workspace {
     /// The tree and the analysis as of one moment, for a front end to show.
-    public struct Snapshot: Sendable {
+    public struct State: Sendable {
         public let tree: ScanTree?
         public let result: AnalysisResult?
         /// Rules being re-evaluated after their tool command ran (their cards show a spinner).
@@ -36,17 +36,17 @@ extension Workspace {
     /// What a step did, for the front end to show and to fix its selection by.
     public enum Event: Sendable {
         /// The latest analysis finished. Cleanups that finished while it ran are already applied to its result.
-        case analysed(Snapshot)
+        case analysed(State)
         case analysisFailed(any Error)
         /// The tree or the findings changed in place.
         case changed(Change)
         /// Rules re-evaluated after their tool command ran have new findings, or the re-evaluation ended.
-        case refreshed(Snapshot)
+        case refreshed(State)
     }
 
     /// One change made to the tree and the findings: a cleanup's removals, or a folder scanned again.
     public struct Change: Sendable {
-        public let snapshot: Snapshot
+        public let state: State
         /// What the cleanup removed (none when a folder was re-synced).
         public let removals: [Removal]
         /// Folders scanned again and spliced in: they keep their node, but everything inside them has new ones.
@@ -67,7 +67,7 @@ extension Workspace {
         /// The folder a front end that showed `node` should show now: `node` itself if the change left it where it
         /// was, otherwise the nearest folder still in the tree at or above where it was. `nil` without a tree.
         public func survivor(of node: DirNode) -> DirNode? {
-            guard let tree = snapshot.tree else { return nil }
+            guard let tree = state.tree else { return nil }
             let path = originalPath(of: node.path)
             return tree.node(at: path) === node ? node : tree.nearestNode(to: path)
         }

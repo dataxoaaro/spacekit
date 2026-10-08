@@ -69,12 +69,12 @@ struct AnalysisResultTests {
         let explore = try scan(tree.root)
         #expect(explore.scanStarted >= beforeScan && explore.scanStarted <= Date())
         let reused = AnalysisResult(try analyzer.analyzeSync(reusing: explore), rules: rules, activeModelWindow: .days(90))
-        #expect(reused.scanStarted == explore.scanStarted)
+        #expect(reused.analysis.scanStarted == explore.scanStarted)
 
         let partial = try scan(tree.path("models"))
         let beforeAnalysis = Date()
         let rescanned = AnalysisResult(try analyzer.analyzeSync(reusing: partial), rules: rules, activeModelWindow: .days(90))
-        #expect(rescanned.scanStarted >= beforeAnalysis)
+        #expect(rescanned.analysis.scanStarted >= beforeAnalysis)
     }
 
     @Test("Only rules whose command removed something are re-evaluated")

@@ -26,7 +26,7 @@ public final class Workspace: Sendable {
     /// Evaluates a few rules with a scan of only their locations (a seam for tests).
     typealias Reevaluate = @Sendable (SpaceKitContext, [Rule]) throws -> Analysis
 
-    private let state = Mutex(State())
+    private let gate = Mutex(Shared())
     private let deliver: Deliver
     private let analyzeTree: Analyze
     private let reevaluateRules: Reevaluate
@@ -48,7 +48,7 @@ public final class Workspace: Sendable {
     private static let reevaluateOnly: Reevaluate = { context, rules in try context.analyzer.analyzeSync(rules: rules) }
 
     /// The tree and the analysis as they are now.
-    public var snapshot: Snapshot { state.withLock { $0.snapshot } }
+    public var state: State { gate.withLock { $0.state } }
 
     // MARK: Reading
 
@@ -64,17 +64,17 @@ public final class Workspace: Sendable {
     /// hands nodes it holds to background work: a change could otherwise land on that thread before the work starts
     /// reading, and free the removed nodes (and the parents of the ones it holds) under it.
     public func beginRead() -> ReadLease {
-        let tree = state.withLock { state in
-            state.readers += 1
-            return state.tree
+        let tree = gate.withLock { shared in
+            shared.readers += 1
+            return shared.tree
         }
         return ReadLease(tree: tree) { [self] in endRead() }
     }
 
     private func endRead() {
-        let drainNow = state.withLock { state in
-            state.readers -= 1
-            return state.readers == 0 && !state.pending.isEmpty
+        let drainNow = gate.withLock { shared in
+            shared.readers -= 1
+            return shared.readers == 0 && !shared.pending.isEmpty
         }
         if drainNow { deliver { [self] in drain() } }
     }
@@ -86,16 +86,16 @@ public final class Workspace: Sendable {
     /// dropped too: they were worked out on it, and the new scan already shows the disk as it is (a removal of a folder
     /// it doesn't have would take bytes from the folder around it). Call it on the front end's own thread.
     @discardableResult
-    public func show(_ tree: ScanTree?) -> Snapshot {
-        state.withLock { state in
-            state.analysisProgress?.cancel()
-            state.analysisProgress = nil
-            state.analysisRun += 1
-            state.tree = tree
-            state.result = nil
-            state.refreshing = [:]
-            state.pending = []
-            return state.snapshot
+    public func show(_ tree: ScanTree?) -> State {
+        gate.withLock { shared in
+            shared.analysisProgress?.cancel()
+            shared.analysisProgress = nil
+            shared.analysisRun += 1
+            shared.tree = tree
+            shared.result = nil
+            shared.refreshing = [:]
+            shared.pending = []
+            return shared.state
         }
     }
 
@@ -104,19 +104,19 @@ public final class Workspace: Sendable {
     @discardableResult
     public func analyze(_ context: SpaceKitContext) -> ScanProgress {
         let progress = ScanProgress()
-        let (tree, run) = state.withLock { state in
-            state.analysisProgress?.cancel()
-            state.analysisProgress = progress
-            state.analysisRun += 1
-            state.readers += 1
-            return (state.tree, state.analysisRun)
+        let (tree, run) = gate.withLock { shared in
+            shared.analysisProgress?.cancel()
+            shared.analysisProgress = progress
+            shared.analysisRun += 1
+            shared.readers += 1
+            return (shared.tree, shared.analysisRun)
         }
         let analyze = analyzeTree
         Thread.detachNewThread { [self] in
             let outcome = Result { () throws -> AnalysisResult? in
                 let analysis = try analyze(context, tree, progress)
                 // A newer scan or analysis replaced this one, so its findings are never shown nor recorded.
-                guard state.withLock({ $0.analysisRun == run }) else { return nil }
+                guard gate.withLock({ $0.analysisRun == run }) else { return nil }
                 // History reads the tree too, so it's recorded while this analysis still counts as a reader.
                 try? context.history.recordSnapshot(analysis: analysis)
                 return context.result(of: analysis)
@@ -128,18 +128,18 @@ public final class Workspace: Sendable {
 
     /// `outcome` is nil for an analysis that was replaced before it finished.
     private func finishAnalysis(_ run: Int, _ outcome: Result<AnalysisResult?, any Error>) {
-        state.withLock { state in
-            state.readers -= 1
-            guard state.analysisRun == run else { return }
-            state.analysisProgress = nil
-            if case .success(let result?) = outcome { state.result = result }
+        gate.withLock { shared in
+            shared.readers -= 1
+            guard shared.analysisRun == run else { return }
+            shared.analysisProgress = nil
+            if case .success(let result?) = outcome { shared.result = result }
         }
         deliver { [self] in
             // Removals that waited for this analysis are applied to its result first.
             var events = drain()
-            guard state.withLock({ $0.analysisRun == run }) else { return events }
+            guard gate.withLock({ $0.analysisRun == run }) else { return events }
             switch outcome {
-            case .success: events.append(.analysed(snapshot))
+            case .success: events.append(.analysed(state))
             case .failure(let error): events.append(.analysisFailed(error))
             }
             return events
@@ -148,10 +148,10 @@ public final class Workspace: Sendable {
 
     /// Labels folders with a reloaded rule library.
     @discardableResult
-    public func reindex(rules: [Rule]) -> Snapshot {
-        state.withLock { state in
-            state.result?.reindex(rules: rules)
-            return state.snapshot
+    public func reindex(rules: [Rule]) -> State {
+        gate.withLock { shared in
+            shared.result?.reindex(rules: rules)
+            return shared.state
         }
     }
 
@@ -165,16 +165,16 @@ public final class Workspace: Sendable {
     }
 
     /// Replaces the folder at `path` in the trees that hold it with `fresh`, a scan of it (the Trash, emptied in
-    /// Finder), then re-evaluates `ruleIDs`, whose findings live there. `shown` is the snapshot from when that scan
+    /// Finder), then re-evaluates `ruleIDs`, whose findings live there. `shown` is the state from when that scan
     /// began: only its trees are changed, since a tree shown or analysed since is newer than `fresh`. Delivers
     /// `.changed` if a tree changed.
     public func resync(
-        _ fresh: ScanTree, at path: String, over shown: Snapshot, context: SpaceKitContext, reevaluating ruleIDs: Set<String> = []
+        _ fresh: ScanTree, at path: String, over shown: State, context: SpaceKitContext, reevaluating ruleIDs: Set<String> = []
     ) {
         let (explore, analysed) = (shown.tree, shown.result?.analysis.tree)
         let separate = analysed.flatMap { $0 !== explore && $0.covers(path) ? $0 : nil }
         guard let separate else {
-            enqueue(.resync(Resync(path: path, fresh: fresh, explore: explore, reevaluate: ruleIDs, context: context)))
+            enqueue(.resync(Resync(path: path, fresh: fresh, explore: explore, forAnalysis: nil, reevaluate: ruleIDs, context: context)))
             return
         }
         // Splicing hands the scanned nodes over to the tree, so the analysis tree needs a scan of its own.
@@ -187,24 +187,24 @@ public final class Workspace: Sendable {
         }
     }
 
-    private func enqueue(_ write: Write) {
-        let drainNow = state.withLock { state in
-            state.pending.append(write)
-            return state.readers == 0
+    private func enqueue(_ change: PendingChange) {
+        let drainNow = gate.withLock { shared in
+            shared.pending.append(change)
+            return shared.readers == 0
         }
         if drainNow { deliver { [self] in drain() } }
     }
 
     /// Applies every waiting change, unless something reads the tree (the last reader drains again when it ends).
     private func drain() -> [Event] {
-        let (changes, refreshes) = state.withLock { state -> ([Change], [Refresh]) in
-            guard state.readers == 0, !state.pending.isEmpty else { return ([], []) }
-            let writes = state.pending
-            state.pending = []
+        let (changes, refreshes) = gate.withLock { shared -> ([Change], [Refresh]) in
+            guard shared.readers == 0, !shared.pending.isEmpty else { return ([], []) }
+            let waiting = shared.pending
+            shared.pending = []
             var changes: [Change] = []
             var refreshes: [Refresh] = []
-            for write in writes {
-                let (change, refresh) = Workspace.perform(write, on: &state)
+            for pending in waiting {
+                let (change, refresh) = Workspace.perform(pending, on: &shared)
                 if let change { changes.append(change) }
                 if let refresh { refreshes.append(refresh) }
             }
@@ -215,22 +215,22 @@ public final class Workspace: Sendable {
     }
 
     /// One change, made while the gate is held and no reader is left.
-    private static func perform(_ write: Write, on state: inout State) -> (Change?, Refresh?) {
-        switch write {
+    private static func perform(_ pending: PendingChange, on shared: inout Shared) -> (Change?, Refresh?) {
+        switch pending {
         case .removals(let removals, let reevaluate, let context):
-            let tree = state.tree
+            let tree = shared.tree
             let retired = tree.map { tree in removals.filter { $0.kind != .looseFiles }.flatMap { retiring($0.path, in: tree) } } ?? []
             let treeChanged = tree.map { Removal.apply(removals, to: $0) } ?? false
-            state.result?.apply(removals, exploreTree: tree)
-            let refresh = state.markRefreshing(reevaluate, context: context)
+            shared.result?.apply(removals, exploreTree: tree)
+            let refresh = shared.markRefreshing(reevaluate, context: context)
             let change = Change(
-                snapshot: state.snapshot, removals: removals, rescanned: removals.filter(\.partial).map(\.path), treeChanged: treeChanged,
+                state: shared.state, removals: removals, rescanned: removals.filter(\.partial).map(\.path), treeChanged: treeChanged,
                 retired: retired)
             return (change, refresh)
         case .resync(let resync):
             var retired: [DirNode] = []
             var treeChanged = false
-            if let tree = state.tree, tree === resync.explore, tree.covers(resync.path),
+            if let tree = shared.tree, tree === resync.explore, tree.covers(resync.path),
                 tree.node(at: resync.path)?.size != resync.fresh.root.size
             {
                 retired = retiring(resync.path, in: tree)
@@ -238,14 +238,14 @@ public final class Workspace: Sendable {
                 treeChanged = true
             }
             var analysisChanged = false
-            if let (fresh, analysed) = resync.forAnalysis, state.result?.analysis.tree === analysed {
+            if let (fresh, analysed) = resync.forAnalysis, shared.result?.analysis.tree === analysed {
                 analysed.splice(fresh, at: resync.path)
                 analysisChanged = true
             }
             guard treeChanged || analysisChanged else { return (nil, nil) }
-            let refresh = state.markRefreshing(resync.reevaluate, context: resync.context)
+            let refresh = shared.markRefreshing(resync.reevaluate, context: resync.context)
             let change = Change(
-                snapshot: state.snapshot, removals: [], rescanned: [resync.path], treeChanged: treeChanged, retired: retired)
+                state: shared.state, removals: [], rescanned: [resync.path], treeChanged: treeChanged, retired: retired)
             return (change, refresh)
         }
     }
@@ -264,69 +264,70 @@ public final class Workspace: Sendable {
         let reevaluate = reevaluateRules
         Thread.detachNewThread { [self] in
             // Built before taking the gate: the AI report and the rule index take a while, and the front end's thread
-            // takes the gate for every snapshot.
+            // takes the gate for every state it shows.
             let fresh = (try? reevaluate(refresh.context, refresh.rules)).map(refresh.context.result(of:))
-            state.withLock { state in
+            gate.withLock { shared in
                 // A newer re-evaluation of a rule (after another of its commands) owns its spinner and has newer findings.
-                let owned = refresh.ruleIDs.filter { state.refreshing[$0] == refresh.token }
-                for id in owned { state.refreshing[id] = nil }
+                let owned = refresh.ruleIDs.filter { shared.refreshing[$0] == refresh.token }
+                for id in owned { shared.refreshing[id] = nil }
                 guard let fresh, !owned.isEmpty else { return }
-                state.result?.merge(fresh, for: owned)
+                shared.result?.merge(fresh, for: owned)
             }
-            deliver { [self] in [.refreshed(snapshot)] }
+            deliver { [self] in [.refreshed(state)] }
         }
     }
 
-    // MARK: State
+    // MARK: Shared state
 
-    private struct State {
+    private struct Shared {
         var tree: ScanTree?
         var result: AnalysisResult?
         /// Bumped by every analysis (and `show`): only the latest one's result is used.
         var analysisRun = 0
         var analysisProgress: ScanProgress?
         var readers = 0
-        var pending: [Write] = []
+        var pending: [PendingChange] = []
         /// Rules being re-evaluated, each with the re-evaluation that owns it (the latest started for it). `show`
         /// empties it, so re-evaluations started for an older tree own nothing.
         var refreshing: [String: Int] = [:]
         var refreshCount = 0
 
-        var snapshot: Snapshot { Snapshot(tree: tree, result: result, refreshingRules: Set(refreshing.keys)) }
+        var state: State { State(tree: tree, result: result, refreshingRules: Set(refreshing.keys)) }
 
         /// Marks the rules of `ruleIDs` that exist as being re-evaluated, if there are findings to merge them into.
         mutating func markRefreshing(_ ruleIDs: Set<String>, context: SpaceKitContext) -> Refresh? {
             let rules = ruleIDs.compactMap { context.library.rule(id: $0) }
             guard !rules.isEmpty, result != nil else { return nil }
-            let ids = Set(rules.map(\.id))
-            refreshCount += 1
-            for id in ids { refreshing[id] = refreshCount }
-            return Refresh(rules: rules, ruleIDs: ids, token: refreshCount, context: context)
+            let refresh = Refresh(rules: rules, token: refreshCount + 1, context: context)
+            refreshCount = refresh.token
+            for id in refresh.ruleIDs { refreshing[id] = refresh.token }
+            return refresh
         }
     }
 
-    /// A change waiting for the readers to finish.
-    private enum Write: Sendable {
+    /// A change waiting for the readers to finish; applied, it becomes a `Change`.
+    private enum PendingChange: Sendable {
         case removals([Removal], reevaluate: Set<String>, context: SpaceKitContext)
         case resync(Resync)
     }
 
     private struct Resync: Sendable {
-        var path: String
-        var fresh: ScanTree
+        let path: String
+        let fresh: ScanTree
         /// The Explore tree `fresh` was taken for; a newer scan already shows the folder as it is.
-        var explore: ScanTree?
+        let explore: ScanTree?
         /// A second scan of the folder for a separate analysis tree, and that tree.
-        var forAnalysis: (ScanTree, ScanTree)?
-        var reevaluate: Set<String>
-        var context: SpaceKitContext
+        let forAnalysis: (ScanTree, ScanTree)?
+        let reevaluate: Set<String>
+        let context: SpaceKitContext
     }
 
     private struct Refresh: Sendable {
-        var rules: [Rule]
-        var ruleIDs: Set<String>
-        /// Which re-evaluation this is (`State.refreshing`).
-        var token: Int
-        var context: SpaceKitContext
+        let rules: [Rule]
+        /// Which re-evaluation this is (`Shared.refreshing`).
+        let token: Int
+        let context: SpaceKitContext
+
+        var ruleIDs: Set<String> { Set(rules.map(\.id)) }
     }
 }

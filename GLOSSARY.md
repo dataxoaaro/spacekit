@@ -54,9 +54,11 @@
 
 **Read lease**: a read of the workspace's tree that the front end's thread begins and the background work it hands nodes to ends (`Workspace.beginRead`, `ReadLease`), so no change can land in between. _Avoid_: lock, token.
 
-**Workspace state**: the tree, the analysis and the rules being re-evaluated as of one moment, as a front end shows them (`Workspace.Snapshot`); a Trash re-sync changes only the trees of the state from when its scan began. _Avoid_: snapshot on its own (that's a History snapshot or a Time Machine snapshot).
+**Workspace state**: the tree, the analysis and the rules being re-evaluated as of one moment, as a front end shows them (`Workspace.State`); a Trash re-sync changes only the trees of the state from when its scan began. _Avoid_: snapshot on its own (that's a History snapshot or a Time Machine snapshot).
 
 **Change**: one in-place update of the workspace's tree and findings, a cleanup's removals or a re-synced folder, announced once to the front end (`Workspace.Change`). _Avoid_: refresh (that's the targeted re-evaluation of a few rules), update.
+
+**Pending change**: a change waiting in the workspace for its readers to finish (`Workspace.PendingChange`); applied, it becomes a change. _Avoid_: write, queued update.
 
 **Survivor**: the folder a front end shows in place of one a change took away: the nearest folder above where it was that's still in the tree (`Change.survivor(of:)`). _Avoid_: fallback, parent.
 

@@ -77,6 +77,20 @@ struct FileTrustTests {
         #expect(throws: Never.self) { try store.load() }
     }
 
+    @Test("Saving keeps a config the person made private private, and its backup too")
+    func savingNeverWidens() throws {
+        let tree = try TempTree()
+        let file = tree.path("config.yaml")
+        let store = ConfigStore(file: file)
+        try store.initialize()
+        #expect(chmod(file, 0o600) == 0)
+
+        try store.update { $0.ui.mapDepth = 3 }
+
+        #expect(FileTrustTests.mode(file) == 0o600)
+        #expect(FileTrustTests.mode(file + ".bak") == 0o600)
+    }
+
     @Test("Built-in rule files may belong to whoever owns the running program; other rule files may not")
     func builtinRulesOwnedByInstaller() throws {
         let tree = try TempTree()

@@ -58,6 +58,13 @@ enum LockedFile {
     static let fileMode: mode_t = 0o644
     static let folderMode: mode_t = 0o755
 
+    /// The mode a rewrite of `path` keeps: its own permissions within `fileMode`, plus owner read and write.
+    static func keptMode(of path: String) -> mode_t? {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return nil }
+        return (st.st_mode & fileMode) | 0o600
+    }
+
     static func append(_ text: String, to path: String) throws {
         try createDirectory(PathUtil.parent(path))
         let fd = openForWriting(path, flags: O_WRONLY | O_APPEND)
@@ -68,14 +75,17 @@ enum LockedFile {
         try writeAll(Array(text.utf8), to: fd, path: path)
     }
 
-    /// Writes atomically: a new file next to `path`, renamed over it.
-    static func write(_ data: Data, to path: String) throws {
+    /// Writes atomically: a new file next to `path`, renamed over it. A file that already exists keeps any
+    /// permission the person took away (a private 0600 config stays 0600); `like` gives a new file the mode of
+    /// another one, so a backup is no more open than its original. Neither ever grants group or other write.
+    static func write(_ data: Data, to path: String, like original: String? = nil) throws {
         let folder = PathUtil.parent(path)
         try createDirectory(folder)
+        let mode = original.flatMap(keptMode(of:)) ?? keptMode(of: path) ?? fileMode
         let temporary = PathUtil.join(folder, ".\(PathUtil.lastComponent(path)).\(UUID().uuidString)")
-        let fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, fileMode)
+        let fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode)
         guard fd >= 0 else { throw failure(temporary) }
-        fchmod(fd, fileMode)
+        fchmod(fd, mode)
         do {
             try writeAll(Array(data), to: fd, path: temporary)
         } catch {

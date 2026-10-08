@@ -81,7 +81,7 @@ public struct ConfigStore: Sendable {
         let text = ConfigStore.savedHeader + body
         // The previous contents, not a copy of a symlink, which would show the new config once it's saved.
         if let previous = FileManager.default.contents(atPath: file) {
-            try? LockedFile.write(previous, to: file + ".bak")
+            try? LockedFile.write(previous, to: file + ".bak", like: file)
         }
         // An atomic write replaces the path, so a symlinked config (dotfiles) is written where the link points.
         let destination = isSymlink ? (PathUtil.realpath(file) ?? file) : file

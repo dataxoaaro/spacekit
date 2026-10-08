@@ -16,7 +16,9 @@ public struct RuleIndex: Sendable {
     private let scope: RuleScope
 
     /// `patternRoots`: where pattern rules without their own `roots` look (the config's `scan.devRoots`).
-    public init(rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home, patternRoots: [String] = ScanSettings.defaultDevRoots) {
+    public init(
+        rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home, patternRoots: [String] = ScanSettings.defaultDevRoots
+    ) {
         scope = RuleScope(home: home, patternRoots: patternRoots)
         for rule in rules {
             for pattern in rule.paths {

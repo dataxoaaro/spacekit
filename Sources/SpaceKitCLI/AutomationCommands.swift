@@ -380,6 +380,9 @@ struct SuggestionsCommand: ParsableCommand {
 
     struct List: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "List pending suggestions.")
+        /// How many of a suggestion's largest items, and of its problems, the list shows before "… N more".
+        static let listedItems = 5
+        static let listedProblems = 3
         @OptionGroup var global: GlobalOptions
         @Flag(name: .long, help: "Machine-readable output.") var json = false
 
@@ -399,12 +402,12 @@ struct SuggestionsCommand: ParsableCommand {
                     Output.safe(suggestion.id).bold + "  " + Output.safe(suggestion.jobName) + "  "
                         + ByteCount.format(suggestion.plan.totalBytes).bold + "  "
                         + "prepared \(suggestion.created.relativeDescription())".dim)
-                for item in suggestion.plan.items.sorted(by: { $0.size > $1.size }).prefix(5) {
-                    print("    " + Output.size(item.size) + "  " + Output.path(item.path).dim)
-                }
-                if suggestion.plan.items.count > 5 { print("    … \(suggestion.plan.items.count - 5) more".dim) }
-                for problem in suggestion.problems.prefix(3) { print("    ! ".fg(ANSI.review) + Output.safe(problem).dim) }
-                if suggestion.problems.count > 3 { print("    … \(suggestion.problems.count - 3) more problems".dim) }
+                let items = Excerpt(suggestion.plan.items.sorted(by: { $0.size > $1.size }), first: Self.listedItems)
+                for item in items.shown { print("    " + Output.size(item.size) + "  " + Output.path(item.path).dim) }
+                if let more = items.moreText() { print("    … \(more)".dim) }
+                let problems = Excerpt(suggestion.problems, first: Self.listedProblems)
+                for problem in problems.shown { print("    ! ".fg(ANSI.review) + Output.safe(problem).dim) }
+                if let more = problems.moreText("problems") { print("    … \(more)".dim) }
             }
             print()
             print("Preview one with `spacekit suggestions approve <id>`, or dismiss it with `spacekit suggestions dismiss <id>`.".dim)

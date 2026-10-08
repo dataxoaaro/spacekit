@@ -39,6 +39,19 @@ struct FrontEndSupportTests {
         #expect(plan.items.allSatisfy { $0.ruleID == "system.trash" })
     }
 
+    @Test("A shortened list shows its first entries and says how many more there are")
+    func excerpt() {
+        let problems = ["a", "b", "c", "d"]
+        let three = Excerpt(problems, first: 3)
+        #expect(three.shown == ["a", "b", "c"])
+        #expect(three.more == 1)
+        #expect(three.moreText("problems") == "1 more problems")
+        #expect(Excerpt(problems, first: 1).moreText() == "3 more")
+        #expect(Excerpt(problems, first: 4).moreText() == nil)
+        #expect(Excerpt(problems, first: 9).shown == problems)
+        #expect(Excerpt([String](), first: 1).moreText() == nil)
+    }
+
     @Test("Spinner frames cycle, also for negative ticks")
     func spinner() {
         #expect(Spinner.frame(0) == Spinner.frames[0])

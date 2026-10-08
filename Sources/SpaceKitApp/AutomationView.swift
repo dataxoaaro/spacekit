@@ -116,8 +116,9 @@ private struct SuggestionsSection: View {
                         Text(suggestion.jobName).font(.callout.weight(.semibold))
                         Text("\(suggestion.plan.items.count) items · prepared \(suggestion.created.relativeDescription())").font(.caption)
                             .foregroundStyle(.secondary)
-                        if let problem = suggestion.problems.first {
-                            let more = suggestion.problems.count > 1 ? " (+\(suggestion.problems.count - 1) more)" : ""
+                        let problems = Excerpt(suggestion.problems, first: 1)
+                        if let problem = problems.shown.first {
+                            let more = problems.moreText().map { " (+\($0))" } ?? ""
                             Label("Left last time: \(problem)\(more)", systemImage: "exclamationmark.triangle").font(.caption)
                                 .foregroundStyle(Theme.warning).lineLimit(2)
                         }

@@ -106,17 +106,32 @@ struct ConfigValueTests {
     func codeLaunchersInAllowedCommands() throws {
         let launchers = [
             "sh", "bash", "zsh", "env", "python", "python3", "python3.12", "Python3", "perl5.30", "node", "osascript", "xargs", "find",
-            "swift", "open",
+            "swift", "open", "arch", "nohup", "nice", "time", "timeout", "gtimeout", "caffeinate", "sudo", "script", "expect", "xcrun",
+            "awk", "tclsh8.6", "sqlite3", "rsync", "lua5.4", "php", "R", "Rscript", "java", "jshell", "make", "git", "ssh",
+            // APFS folds case fully: /bin/baſh is /bin/bash, /usr/bin/oſaſcript is osascript.
+            "baſh", "zſh", "oſaſcript", "BAſH",
         ]
         for name in launchers {
-            let yaml = "safety:\n  allowedCommands: [rsync, \(name)]\n"
+            let yaml = "safety:\n  allowedCommands: [shasum, \(name)]\n"
             let error = #expect(throws: (any Error).self, "\(name)") { try ConfigStore.parse(yaml) }
             let message = error.map(DecodingErrorText.describe) ?? ""
             #expect(message.contains("safety.allowedCommands") && message.contains("'\(name)'"), "\(message)")
+            #expect(!message.contains("such as rsync"), "\(message)")
         }
-        #expect(try ConfigStore.parse("safety:\n  allowedCommands: [rsync, pip3, shasum]\n").safety.allowedCommands.count == 3)
+        #expect(try ConfigStore.parse("safety:\n  allowedCommands: [pip3, shasum, my-tool_2.0+x]\n").safety.allowedCommands.count == 3)
         #expect(CommandTrust.isCodeLauncher("pythonw"))
+        #expect(CommandTrust.isCodeLauncher("baſh") && CommandTrust.isCodeLauncher("oſaſcript") && CommandTrust.isCodeLauncher("ﬁnd"))
         #expect(!CommandTrust.isCodeLauncher("shasum"))
+    }
+
+    @Test("safety.allowedCommands takes plain ASCII tool names only")
+    func plainAllowedCommandNames() throws {
+        for name in ["café", "tool name", "tool;x", "ｓｈ", "t\u{200B}ool", "tool*"] {
+            let yaml = "safety:\n  allowedCommands: [\"\(name)\"]\n"
+            let error = #expect(throws: (any Error).self, "\(name)") { try ConfigStore.parse(yaml) }
+            let message = error.map(DecodingErrorText.describe) ?? ""
+            #expect(message.contains("safety.allowedCommands") && message.contains("plain"), "\(message)")
+        }
     }
 
     @Test("A config allowing a code launcher fails closed: removals are refused like any invalid config")

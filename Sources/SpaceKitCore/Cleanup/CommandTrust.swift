@@ -13,19 +13,47 @@ public struct CommandTrust: Sendable {
     ]
 
     /// Executables that run whatever code or program their arguments name. Allowing one would let any rule file,
-    /// and anything that can write one, run arbitrary code with SpaceKit's Full Disk Access.
+    /// and anything that can write one, run arbitrary code with SpaceKit's Full Disk Access. Names are lower case,
+    /// as `isCodeLauncher` compares them.
     static let codeLaunchers: Set<String> = [
-        "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "env", "python", "perl", "ruby", "node",
-        "osascript", "xargs", "find", "swift", "open",
+        // Shells.
+        "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "oksh", "csh", "tcsh", "pwsh", "nu",
+        // Interpreters and runtimes that run code given on the command line or in a file it names.
+        "python", "perl", "ruby", "irb", "node", "nodejs", "deno", "bun", "bunx", "npx", "php", "lua", "luajit", "tclsh", "wish",
+        "expect", "r", "rscript", "java", "jshell", "julia", "awk", "gawk", "nawk", "mawk", "sqlite3", "osascript", "swift",
+        // Tools that start another program, or run commands their arguments or configuration give them (git aliases and
+        // hooks, make recipes, rsync -e, ssh's ProxyCommand, xcrun's developer tools).
+        "env", "arch", "nohup", "nice", "time", "timeout", "gtimeout", "caffeinate", "sudo", "su", "doas", "script", "xargs",
+        "find", "open", "xcrun", "make", "gmake", "git", "ssh", "rsync", "launchctl", "sandbox-exec", "watch", "parallel",
+        "stdbuf", "unbuffer", "chroot",
     ]
 
-    /// True for shells, interpreters and launchers, including versioned names (`python3.12`, `perl5.30`). Names
-    /// are compared case-insensitively because APFS finds `/bin/sh` for `SH` too.
+    /// True for shells, interpreters and launchers, including versioned names (`python3.12`, `perl5.30`). Names are
+    /// compared with full Unicode case folding, the way APFS looks them up: `/bin/baſh` is `/bin/bash` and `SH` is `sh`.
     public static func isCodeLauncher(_ executable: String) -> Bool {
-        let name = executable.trimmingCharacters(in: .whitespaces).lowercased()
+        let name = executable.trimmingCharacters(in: .whitespaces).folding(options: [.caseInsensitive], locale: nil)
         if name.hasPrefix("python") { return true }
         let unversioned = String(name.reversed().drop { $0.isNumber || $0 == "." }.reversed())
         return codeLaunchers.contains(name) || codeLaunchers.contains(unversioned)
+    }
+
+    /// True for a name `safety.allowedCommands` may hold: ASCII letters, digits, `.`, `_`, `+` and `-`. Any other
+    /// character could reach a launcher through the file system's case and normalization folding, or pass for a
+    /// name it isn't.
+    public static func isPlainName(_ executable: String) -> Bool {
+        !executable.isEmpty && executable.unicodeScalars.allSatisfy { plainNameCharacters.contains($0) }
+    }
+
+    private static let plainNameCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789" + "._+-")
+
+    /// Why a `safety.allowedCommands` entry can't be allowed, or `nil`. Config validation and the executor say the same.
+    public static func allowedCommandProblem(_ executable: String) -> String? {
+        if isCodeLauncher(executable) { return "'\(executable)' runs whatever code its arguments name, so it can't be allowed" }
+        guard isPlainName(executable) else {
+            return "'\(executable)' isn't a plain tool name; list tools by names made of ASCII letters, digits, '.', '_', '+' and '-'"
+        }
+        return nil
     }
 
     /// `safety.allowedCommands`: executables allowed beyond the trusted list, and the only ones a person's own rules
@@ -69,13 +97,44 @@ public struct CommandTrust: Sendable {
         if !isBuiltin && context.isAutomatic {
             return "'\(executable)' comes from a rule outside SpaceKit's built-in library; automatic runs never run those, run it by hand"
         }
-        let isLauncher = CommandTrust.isCodeLauncher(executable)
         if isBuiltin && CommandTrust.trustedCommands.contains(executable) { return nil }
-        if allowedCommands.contains(executable) && !isLauncher { return nil }
-        if isLauncher { return "'\(executable)' runs whatever code its arguments name, so it can't be allowed" }
+        if let problem = CommandTrust.allowedCommandProblem(executable) { return problem }
+        if allowedCommands.contains(executable) { return nil }
         if isBuiltin { return "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it" }
         return CommandTrust.untrustedRuleCommand(executable)
     }
+
+    /// Why the program a command found may not start, checked right before it would: the name may run, but the file
+    /// may not be what the name says. `name` is the command's bare name, `executable` where it was found.
+    func launchRefusal(_ name: String, at executable: String, isBuiltin: Bool, runner: any ProcessRunner) -> String? {
+        if !(isBuiltin && CommandTrust.trustedCommands.contains(name)),
+            let refusal = launcherIdentityRefusal(name, at: executable, runner: runner)
+        {
+            return refusal
+        }
+        return endpointRefusal(name, runner: runner)
+    }
+
+    /// Why the program found for the allowed name `name` is a code launcher after all, or `nil`. A name check can't
+    /// see a symlink, a hard link or a copy of `sh` that a rule calls `cleanup-tool`, so the file is compared with
+    /// every copy of each launcher on the search path the command was found on: same real path, same (device, inode),
+    /// or same bytes.
+    func launcherIdentityRefusal(_ name: String, at executable: String, runner: any ProcessRunner) -> String? {
+        guard let program = ProgramFile(executable) else {
+            return "Couldn't read '\(name)' at \(executable) to check which program it is"
+        }
+        for launcher in CommandTrust.locatableLaunchers {
+            for path in runner.locateAll(launcher) {
+                guard let other = ProgramFile(path), program.isSameProgram(as: other) else { continue }
+                return "'\(name)' is the same program as '\(launcher)' (\(path)), which runs whatever code its arguments name, "
+                    + "so it can't be allowed"
+            }
+        }
+        return nil
+    }
+
+    /// Launcher names to look up for `launcherIdentityRefusal`, in a fixed order so the reason names the same one each time.
+    private static let locatableLaunchers = (codeLaunchers.union(["python3"])).sorted()
 
     /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
     /// executor's refusal say the same thing.
@@ -97,12 +156,8 @@ public struct CommandTrust: Sendable {
                 let message = "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"
                 issues.append((.warning, message))
             }
-        } else if isCodeLauncher(executable) {
-            issues.append(
-                (
-                    .warning,
-                    "command '\(executable)' never runs: it runs any code its arguments name, so safety.allowedCommands can't list it"
-                ))
+        } else if let problem = allowedCommandProblem(executable) {
+            issues.append((.warning, "command '\(executable)' never runs: safety.allowedCommands can't list it (\(problem))"))
         } else {
             issues.append((.warning, untrustedRuleCommand(executable)))
         }
@@ -146,5 +201,28 @@ public struct CommandTrust: Sendable {
     private static func shown(_ text: String) -> String {
         let line = text.split(separator: "\n").first.map(String.init) ?? ""
         return line.count > 120 ? String(line.prefix(120)) + "…" : line
+    }
+}
+
+/// The file a program name leads to, as far as telling two programs apart goes.
+private struct ProgramFile {
+    let realPath: String
+    let device: dev_t
+    let inode: ino_t
+    let size: off_t
+
+    /// `nil` when nothing readable is there.
+    init?(_ path: String) {
+        var st = stat()
+        guard stat(path, &st) == 0, let real = PathUtil.realpath(path) else { return nil }
+        realPath = real
+        device = st.st_dev
+        inode = st.st_ino
+        size = st.st_size
+    }
+
+    func isSameProgram(as other: ProgramFile) -> Bool {
+        if realPath == other.realPath || (device == other.device && inode == other.inode) { return true }
+        return size == other.size && FileManager.default.contentsEqual(atPath: realPath, andPath: other.realPath)
     }
 }

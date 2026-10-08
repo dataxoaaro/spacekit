@@ -7,6 +7,8 @@ protocol ProcessRunner: Sendable {
     var environment: [String: String] { get }
     /// Where the tool with this bare name is installed, or `nil` when it isn't.
     func locate(_ name: String) -> String?
+    /// Every place the tool with this bare name is installed, the one `locate` finds first.
+    func locateAll(_ name: String) -> [String]
     /// Runs a tool without a shell, with stdin from /dev/null and the cleaned environment, until it exits or
     /// `timeout` passes.
     func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result
@@ -17,6 +19,8 @@ struct SystemProcessRunner: ProcessRunner {
     var environment: [String: String] { ProcessInfo.processInfo.environment }
 
     func locate(_ name: String) -> String? { Shell.which(name) }
+
+    func locateAll(_ name: String) -> [String] { Shell.installed(name, in: Shell.searchPath) }
 
     func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result {
         Shell.run(executable, arguments, timeout: timeout, environment: environment)

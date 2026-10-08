@@ -31,15 +31,25 @@ public enum Shell {
     /// but the tool keeps its own name: multi-call tools (rustup proxies, mise shims, bunx) pick their behavior
     /// from the name they were started as.
     public static func which(_ name: String) -> String? {
-        guard isBareName(name) else { return nil }
-        for directory in searchPath {
-            guard let real = PathUtil.realpath(directory) else { continue }
+        which(name, in: searchPath)
+    }
+
+    /// `which(_:)` over the given directories, in order.
+    static func which(_ name: String, in directories: [String]) -> String? {
+        installed(name, in: directories).first
+    }
+
+    /// Every place in `directories` where a tool with this bare name is installed, in search order: the first is the
+    /// one `which` finds, the rest are other copies further down the path.
+    static func installed(_ name: String, in directories: [String]) -> [String] {
+        guard isBareName(name) else { return [] }
+        return directories.compactMap { directory in
+            guard let real = PathUtil.realpath(directory) else { return nil }
             let candidate = PathUtil.join(real, name)
             var st = stat()
-            guard stat(candidate, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { continue }
-            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+            guard stat(candidate, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
         }
-        return nil
     }
 
     public struct Result: Sendable {

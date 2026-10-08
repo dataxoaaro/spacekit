@@ -63,13 +63,10 @@ public struct ConfigStore: Sendable {
     /// Semantic checks beyond YAML syntax.
     public static func validate(_ config: SpaceKitConfig) throws {
         // An error, not a silent skip: the whole config fails closed, so the person sees why and nothing runs.
-        if let launcher = config.safety.allowedCommands.first(where: CommandTrust.isCodeLauncher) {
+        if let problem = config.safety.allowedCommands.lazy.compactMap(CommandTrust.allowedCommandProblem).first {
             let path: [CodingKey] = [SpaceKitConfig.CodingKeys.safety, SafetySettings.CodingKeys.allowedCommands]
             throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: path,
-                    debugDescription: "'\(launcher)' runs whatever code its arguments name, so it can't be allowed; "
-                        + "remove it (allow the tool itself, such as rsync, instead)"))
+                .init(codingPath: path, debugDescription: problem + "; remove it, and list the cleanup tool itself by its own name"))
         }
         var ids = Set<String>()
         for job in config.jobs {

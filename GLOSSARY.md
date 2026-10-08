@@ -20,7 +20,9 @@
 
 **Executable policy**: which executables may run: the built-in trusted list (built-in rules only), `safety.allowedCommands`, and the code launchers neither may grant. _Avoid_: whitelist.
 
-**Code launcher**: an executable that runs whatever code or program its arguments name (a shell, an interpreter, `env`, `xargs`, `find`, `open`); `safety.allowedCommands` can't list one. _Avoid_: interpreter (too narrow), dangerous command.
+**Code launcher**: an executable that runs whatever code or program its arguments or configuration name (a shell, an interpreter, `env`, `xargs`, `find`, `open`, `xcrun`, `git`, `rsync`); `safety.allowedCommands` can't list one in any spelling, and a tool whose program file is one under another name is refused when it would start. _Avoid_: interpreter (too narrow), dangerous command.
+
+**Plain tool name**: a `safety.allowedCommands` entry made only of ASCII letters, digits, `.`, `_`, `+` and `-`, so the file system's case and Unicode folding can't turn it into another program's name. _Avoid_: safe name, ASCII name.
 
 **Tool environment**: the cleaned environment a tool runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG and the variables that move a tool's own cache; nothing else. _Avoid_: sanitized env.
 

@@ -324,9 +324,11 @@ struct RuleLoadingTests {
         #expect(user.count == 1)
         #expect(user.first?.severity == .warning && user.first?.message.contains("safety.allowedCommands") == true)
         #expect(user.first?.message.contains("manual") == true)
-        let launcher = issues(["sh", "-c", "rm -rf ~/.c/cache"])
-        #expect(launcher.count == 1)
-        #expect(launcher.first?.severity == .warning && launcher.first?.message.contains("never runs") == true)
+        for name in ["sh", "baſh", "rsync"] {
+            let launcher = issues([name, "-c", "rm -rf ~/.c/cache"])
+            #expect(launcher.count == 1, "\(name)")
+            #expect(launcher.first?.severity == .warning && launcher.first?.message.contains("never runs") == true, "\(name)")
+        }
         #expect(Shell.isBareName("brew"))
         #expect(!Shell.isBareName("/opt/homebrew/bin/brew"))
     }

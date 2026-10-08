@@ -59,38 +59,48 @@ struct CleanupCommandTests {
     @Test("Built-in trust covers built-in rules only; other rules need safety.allowedCommands")
     func builtinTrust() throws {
         let tree = try TempTree()
-        let arguments = ["xcrun", "--version"]
-        let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
-        let user = rule(tree, origin: .user, command: arguments)
-        let builtin = rule(tree, origin: .builtin, command: arguments)
-        let refused = manualRun(plan, with: sandboxExecutor(tree, rules: [user]), dryRun: true)
+        func plan(_ arguments: [String]) -> CleanupPlan {
+            CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
+        }
+        let du = ["du", "-s", tree.path("home")]
+        let user = rule(tree, origin: .user, command: du)
+        let refused = manualRun(plan(du), with: sandboxExecutor(tree, rules: [user]), dryRun: true)
         #expect(isSkipped(outcome(refused), mentioning: "allowedCommands"))
         // Validation warns with the words the executor refuses with.
         let warning = RuleLibrary.issues(for: user).first { $0.severity == .warning }?.message ?? ""
         #expect(isSkipped(outcome(refused), mentioning: warning))
-        let trusted = manualRun(plan, with: sandboxExecutor(tree, rules: [builtin]), dryRun: true)
-        #expect(wouldRun(outcome(trusted)))
-        let allowed = manualRun(plan, with: sandboxExecutor(tree, rules: [user], allowed: ["xcrun"]), dryRun: true)
+        let allowed = manualRun(plan(du), with: sandboxExecutor(tree, rules: [user], allowed: ["du"]), dryRun: true)
         #expect(wouldRun(outcome(allowed)))
+
+        let xcrun = ["xcrun", "--version"]
+        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: xcrun)])
+        let trusted = manualRun(plan(xcrun), with: builtin, dryRun: true)
+        #expect(wouldRun(outcome(trusted)))
+        // xcrun starts whatever developer tool its arguments name, so only built-in rules may use it.
+        let mine = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: xcrun)], allowed: ["xcrun"])
+        #expect(isSkipped(outcome(manualRun(plan(xcrun), with: mine, dryRun: true)), mentioning: "can't be allowed"))
     }
 
     @Test("Automatic runs never run commands of rules outside the built-in library, even allowed ones")
     func userCommandsManualOnly() throws {
         let tree = try TempTree()
-        let arguments = ["xcrun", "--version"]
+        let arguments = ["du", "-s", tree.path("home")]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
         let automatic = AutomationContext(jobID: "j")
-        let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["xcrun"])
+        let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["du"])
         #expect(isSkipped(outcome(user.execute(AutomaticPlan(plan, automation: automatic), dryRun: true)), mentioning: "automatic"))
         #expect(wouldRun(outcome(manualRun(plan, with: user, dryRun: true))))
-        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)])
+        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)], allowed: ["du"])
         #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: automatic), dryRun: true))))
     }
 
     @Test("Code launchers stay refused even when the executor is told they're allowed")
     func codeLaunchersRefused() throws {
         let tree = try TempTree()
-        for arguments in [["sh", "-c", "true"], ["python3.12", "-c", "pass"], ["env", "true"]] {
+        let launchers = [
+            ["sh", "-c", "true"], ["python3.12", "-c", "pass"], ["env", "true"], ["baſh", "-c", "true"], ["rsync", "-e", "sh"],
+        ]
+        for arguments in launchers {
             let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 1)])
             let executor = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: [arguments[0]])
             let report = manualRun(plan, with: executor, dryRun: true)

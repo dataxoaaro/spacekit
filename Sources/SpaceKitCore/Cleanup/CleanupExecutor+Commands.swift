@@ -60,7 +60,10 @@ extension CleanupExecutor {
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
         let name = command.arguments[0]
         guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
-        if let refusal = commandTrust.endpointRefusal(name, runner: runner) { return (.skipped(reason: refusal), "") }
+        let isBuiltin = rules[command.ruleID]?.isBuiltin == true
+        if let refusal = commandTrust.launchRefusal(name, at: executable, isBuiltin: isBuiltin, runner: runner) {
+            return (.skipped(reason: refusal), "")
+        }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }
 
         let before = measure(command.measurePaths) ?? 0

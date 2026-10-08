@@ -8,20 +8,48 @@ import Testing
 /// tests never start a real program.
 final class RecordingRunner: ProcessRunner {
     let environment: [String: String]
-    private let installed: Set<String>
+    private let locator: @Sendable (String) -> [String]
     private let respond: @Sendable (_ call: [String]) -> Shell.Result
     private let recorded = Mutex<[[String]]>([])
+    private let standIns: String?
 
-    init(
+    /// Each tool in `installed` is found as a small stand-in file, so the executor has a program file to check.
+    convenience init(
         environment: [String: String] = [:], installed: Set<String>,
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("spacekit-runner-\(UUID().uuidString)").path
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        for name in installed { try? Data("stand-in for \(name)\n".utf8).write(to: URL(fileURLWithPath: folder + "/" + name)) }
+        let locate: @Sendable (String) -> [String] = { installed.contains($0) ? [folder + "/" + $0] : [] }
+        self.init(environment: environment, standIns: folder, locate: locate, respond: respond)
+    }
+
+    /// Tools are found the way `Shell.which` finds them, in `searchPath`; still none is started.
+    convenience init(
+        environment: [String: String] = [:], searchPath: [String],
+        respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
+    ) {
+        self.init(environment: environment, standIns: nil, locate: { Shell.installed($0, in: searchPath) }, respond: respond)
+    }
+
+    private init(
+        environment: [String: String], standIns: String?, locate: @escaping @Sendable (String) -> [String],
+        respond: @escaping @Sendable (_ call: [String]) -> Shell.Result
+    ) {
         self.environment = environment
-        self.installed = installed
+        self.standIns = standIns
+        self.locator = locate
         self.respond = respond
     }
 
-    func locate(_ name: String) -> String? { installed.contains(name) ? "/recorded/bin/" + name : nil }
+    deinit {
+        if let standIns { try? FileManager.default.removeItem(atPath: standIns) }
+    }
+
+    func locate(_ name: String) -> String? { locator(name).first }
+
+    func locateAll(_ name: String) -> [String] { locator(name) }
 
     func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result {
         let call = [PathUtil.lastComponent(executable)] + arguments
@@ -71,24 +99,27 @@ struct CommandTrustTests {
 
     @Test("Who may run what: built-in rules use the trusted list, user rules allowedCommands and only by hand, launchers never")
     func decisionTable() {
-        let trust = CommandTrust(allowedCommands: ["rsync", "sh"])
+        let trust = CommandTrust(allowedCommands: ["mytool", "sh", "baſh", "oſaſcript", "xcrun"])
         func refused(_ executable: String, builtin: Bool, _ context: CleanupContext) -> Bool {
             let command = PlannedCommand(ruleID: "tool", arguments: [executable, "x"], estimatedBytes: 1)
             return !trust.refusals(command, rule: rule(builtin: builtin, command: [executable, "x"]), context: context).isEmpty
         }
         // Built-in rule: trusted tools in every run, allowedCommands too, anything else never.
         #expect(!refused("brew", builtin: true, .manual) && !refused("brew", builtin: true, automatic))
-        #expect(!refused("rsync", builtin: true, automatic))
+        #expect(!refused("mytool", builtin: true, automatic))
         #expect(refused("make", builtin: true, .manual))
         // User rule: only allowedCommands, only by hand; the trusted list is no help.
-        #expect(!refused("rsync", builtin: false, .manual))
-        #expect(refused("rsync", builtin: false, automatic))
+        #expect(!refused("mytool", builtin: false, .manual))
+        #expect(refused("mytool", builtin: false, automatic))
         #expect(refused("brew", builtin: false, .manual))
-        // A code launcher in allowedCommands still never runs.
+        // A code launcher in allowedCommands still never runs, in any spelling APFS finds it by.
         #expect(refused("sh", builtin: false, .manual) && refused("sh", builtin: true, .manual))
+        #expect(refused("baſh", builtin: false, .manual) && refused("oſaſcript", builtin: true, .manual))
+        // xcrun is trusted for built-in rules only; allowing it doesn't let a rule of yours start any developer tool.
+        #expect(!refused("xcrun", builtin: true, automatic) && refused("xcrun", builtin: false, .manual))
         // swift is a launcher, but on the trusted list for built-in rules.
         #expect(!refused("swift", builtin: true, automatic))
-        #expect(refused("/usr/bin/rsync", builtin: false, .manual))
+        #expect(refused("/usr/local/bin/mytool", builtin: false, .manual))
     }
 
     @Test("Tools get a cleaned environment: PATH, HOME, locale and tool homes stay; Docker, tokens and the rest go")
@@ -130,15 +161,15 @@ struct CommandTrustTests {
     @Test("Refused commands never reach the runner")
     func refusalsDontRun() throws {
         let tree = try TempTree()
-        let runner = RecordingRunner(installed: ["xcrun", "sh", "brew"])
-        let user = rule("user", builtin: false, command: ["xcrun", "simctl", "delete", "unavailable"])
+        let runner = RecordingRunner(installed: ["du", "sh", "brew"])
+        let user = rule("user", builtin: false, command: ["du", "-s", "/Users/tester/.tool/cache"])
         let launcher = rule("launcher", builtin: false, command: ["sh", "-c", "true"])
         let untrusted = rule("untrusted", builtin: true, command: ["make", "clean"])
         let plan = CleanupPlan(
             commands: [user, launcher, untrusted].map { rule in
                 PlannedCommand(ruleID: rule.id, arguments: rule.action.command ?? [], estimatedBytes: 1)
             })
-        let executor = executor(tree, rules: [user, launcher, untrusted], runner: runner, allowed: ["xcrun", "sh"])
+        let executor = executor(tree, rules: [user, launcher, untrusted], runner: runner, allowed: ["du", "sh"])
         let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(report.commands.count == 3)
         #expect(report.commands.allSatisfy { skipReason($0.outcome) != nil })
@@ -146,7 +177,41 @@ struct CommandTrustTests {
         // By hand, the allowed user command runs; the launcher and the untrusted built-in one still don't.
         let manual = manualRun(plan, with: executor)
         #expect(manual.commands.filter { skipReason($0.outcome) == nil }.map(\.command.ruleID) == ["user"])
-        #expect(runner.calls == [["xcrun", "simctl", "delete", "unavailable"]])
+        #expect(runner.calls == [["du", "-s", "/Users/tester/.tool/cache"]])
+    }
+
+    @Test("An allowed name whose program is a launcher's (a symlink, a copy or a hard link) is refused and never started")
+    func launcherUnderAnotherName() throws {
+        let tree = try TempTree()
+        let files = FileManager.default
+        try tree.directory("renamed")
+        try files.createSymbolicLink(atPath: tree.path("renamed/cleanup-tool"), withDestinationPath: "/bin/sh")
+        try files.copyItem(atPath: "/bin/zsh", toPath: tree.path("renamed/cache-tool"))
+        try "#!/bin/sh\necho tidy\n".write(toFile: tree.path("renamed/fine-tool"), atomically: true, encoding: .utf8)
+        #expect(chmod(tree.path("renamed/fine-tool"), 0o755) == 0)
+        // /bin is on the system volume, so a hard link needs a launcher of its own: an `sh` found before /bin's.
+        try tree.directory("linked")
+        try "#!/bin/sh\nexit 0\n".write(toFile: tree.path("linked/sh"), atomically: true, encoding: .utf8)
+        #expect(chmod(tree.path("linked/sh"), 0o755) == 0)
+        #expect(link(tree.path("linked/sh"), tree.path("linked/tidy-tool")) == 0)
+
+        func run(_ name: String, in folder: String) -> (outcome: CleanupOutcome?, calls: [[String]]) {
+            let runner = RecordingRunner(searchPath: [tree.path(folder)] + Shell.searchPath)
+            let tool = rule("tool", builtin: false, command: [name, "--all"])
+            let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: [name, "--all"], estimatedBytes: 1)])
+            let report = manualRun(plan, with: executor(tree, rules: [tool], runner: runner, allowed: [name]))
+            return (report.commands.first?.outcome, runner.calls)
+        }
+        let renamed = [("cleanup-tool", "renamed", "'sh'"), ("cache-tool", "renamed", "'zsh'"), ("tidy-tool", "linked", "'sh'")]
+        for (name, folder, launcher) in renamed {
+            let result = run(name, in: folder)
+            let reason = skipReason(result.outcome)
+            #expect(reason?.contains("same program as \(launcher)") == true, "\(name): \(String(describing: result.outcome))")
+            #expect(result.calls.isEmpty, "\(name)")
+        }
+        let fine = run("fine-tool", in: "renamed")
+        #expect(skipReason(fine.outcome) == nil)
+        #expect(fine.calls == [["fine-tool", "--all"]])
     }
 
     @Test("What a command frees is charged to the run's budget; the next command that doesn't fit isn't started")

@@ -46,7 +46,11 @@
 
 **Workspace**: the Explore tree a person looks at in the app or the TUI, with its analysis (`Workspace`); the only place that changes the tree after the scan, waiting for every reader first. _Avoid_: session, model, tree store.
 
-**Reader**: background work that reads the workspace's tree inside `Workspace.read`, such as an analysis or the map layout; changes wait until none is left. _Avoid_: lock holder.
+**Reader**: work on a thread other than the front end's that reads the workspace's tree, inside `Workspace.read` or during a read lease, such as an analysis or the map layout; changes wait until none is left. The front end's own thread reads the tree directly, since changes run only there. _Avoid_: lock holder.
+
+**Read lease**: a read of the workspace's tree that the front end's thread begins and the background work it hands nodes to ends (`Workspace.beginRead`, `ReadLease`), so no change can land in between. _Avoid_: lock, token.
+
+**Workspace state**: the tree, the analysis and the rules being re-evaluated as of one moment, as a front end shows them (`Workspace.Snapshot`); a Trash re-sync changes only the trees of the state from when its scan began. _Avoid_: snapshot on its own (that's a History snapshot or a Time Machine snapshot).
 
 **Change**: one in-place update of the workspace's tree and findings, a cleanup's removals or a re-synced folder, announced once to the front end (`Workspace.Change`). _Avoid_: refresh (that's the targeted re-evaluation of a few rules), update.
 
@@ -69,6 +73,8 @@
 **Not accepted**: a reviewed row skipped because the person didn't accept the warnings the review showed for it (`--yes` without `--accept-warnings`); like a changed row, it counts as a problem. _Avoid_: needs confirmation (that's an automatic run's skip, where nobody was asked).
 
 **Changed since review**: a reviewed row skipped because its check at removal time raised a reason the review didn't show (a new warning, a larger share of the disk, a block) or the item isn't at its reviewed location; it counts as a problem. _Avoid_: stale row, unreviewed warning.
+
+**Disposal**: where a review's selected items end up: moved to the Trash, deleted, or deleted from the Trash because they are already there (`CleanupReview.disposal`); the removal module decides it and every front end shows the review's wording for it (`disposalSummary`). _Avoid_: removal method (that's one item's, `Remover.Method`), trash mode.
 
 **Automatic plan**: the plan `JobRunner` hands the executor for an automatic run (`AutomaticPlan`); it acknowledges nothing. _Avoid_: scheduled plan.
 

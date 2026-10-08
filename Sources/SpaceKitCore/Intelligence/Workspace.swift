@@ -5,7 +5,8 @@ import Synchronization
 ///
 /// A `DirNode` can't be read while it changes, and background work reads the tree for seconds at a time: an analysis
 /// that reuses it, the app's map layout. The workspace is the one place that decides when the tree changes:
-/// - Background work reads the tree only inside `read`, which counts it as a reader.
+/// - Background work reads the tree only inside `read`, or during a lease begun with `beginRead` on the front end's
+///   thread before nodes are handed over; either counts it as a reader.
 /// - Changes (a cleanup's removals, a re-synced folder) wait until no reader is left, then run in a step the front end
 ///   runs on its own thread (`Deliver`: the app's main actor, the TUI's loop), holding the gate so no reader starts
 ///   meanwhile. That thread may therefore read the tree directly, without `read`.

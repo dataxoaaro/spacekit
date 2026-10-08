@@ -36,7 +36,7 @@ public struct RemovalTarget: Sendable, Equatable {
     public let isRepository: Bool
     public let containsRepository: Bool
     /// Bytes the removal would free, as the plan recorded them or as measured just before removal.
-    public let size: UInt64
+    public private(set) var size: UInt64
 
     /// The item with its folder resolved: the location that changes.
     public var resolvedPath: String { directory.map { PathUtil.join($0, name) } ?? path }
@@ -61,9 +61,9 @@ public struct RemovalTarget: Sendable, Equatable {
 
     /// This target with the size measured just before removal.
     func measured(_ size: UInt64) -> RemovalTarget {
-        RemovalTarget(
-            path: path, directory: directory, name: name, onDiskPath: onDiskPath, identity: identity, directoryIdentity: directoryIdentity,
-            isFolder: isFolder, lastChange: lastChange, isRepository: isRepository, containsRepository: containsRepository, size: size)
+        var target = self
+        target.size = size
+        return target
     }
 
     /// Modified or had its status changed (created, renamed into place) after `date`.

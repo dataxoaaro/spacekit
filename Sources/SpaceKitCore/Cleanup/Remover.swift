@@ -151,24 +151,44 @@ struct Remover: Sendable {
                     + "Trash only on your home volume. Clean it by hand; nothing was removed")
         }
         for attempt in 1...Remover.trashNameAttempts {
-            let name = attempt == 1 ? target.name : "\(target.name) \(attempt)"
+            let name = Remover.trashName(target.name, attempt: attempt)
             if renameatx_np(fd, target.name, trashFolder, name, UInt32(RENAME_EXCL)) == 0 { return PathUtil.join(trashDirectory, name) }
-            guard errno == EEXIST else { break }
+            let code = errno
+            guard code == EEXIST else { throw SafeRemoval.posixError(target.resolvedPath, code: code) }
         }
-        throw SafeRemoval.posixError(target.resolvedPath)
+        throw SafeRemoval.Refused(
+            errorDescription: "Your Trash already holds \(Remover.trashNameAttempts) items named like \(target.name), so "
+                + "\(target.resolvedPath) wasn't moved there; nothing was removed. Empty the Trash and run it again")
     }
 
     /// How many names (`item`, `item 2`, …) a move by handle tries in the Trash before it gives up.
     static let trashNameAttempts = 1_000
+    /// The longest name a folder entry can have, in bytes (APFS and HFS+).
+    static let longestName = Int(NAME_MAX)
+
+    /// The name the `attempt`th try moves `name` to the Trash as: `name`, then `name 2`, `name 3`, …, with as much of
+    /// `name` as fits beside the number in `longestName` bytes, cut between characters.
+    static func trashName(_ name: String, attempt: Int) -> String {
+        let suffix = attempt == 1 ? "" : " \(attempt)"
+        var base = Substring(name)
+        while base.utf8.count + suffix.utf8.count > longestName, !base.isEmpty { base = base.dropLast() }
+        return base + suffix
+    }
 
     /// The home Trash as a handle: a real folder, no symlink, the person's own. Created like Finder does when missing.
-    private func openTrash() throws -> Int32 {
-        let path = trashDirectory
-        if mkdir(path, 0o700) != 0 && errno != EEXIST { throw SafeRemoval.posixError(path) }
+    private func openTrash() throws -> Int32 { try Remover.openTrash(at: trashDirectory) }
+
+    /// `path` opened as a Trash folder for `user`: created (0700) when missing, never through a symlink, and refused
+    /// unless `user` owns it.
+    static func openTrash(at path: String, user: uid_t = getuid()) throws -> Int32 {
+        if mkdir(path, 0o700) != 0 {
+            let code = errno
+            if code != EEXIST { throw SafeRemoval.posixError(path, code: code) }
+        }
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { throw SafeRemoval.posixError(path) }
+        guard fd >= 0 else { throw SafeRemoval.posixError(path, code: errno) }
         var st = stat()
-        guard fstat(fd, &st) == 0, st.st_uid == getuid() else {
+        guard fstat(fd, &st) == 0, st.st_uid == user else {
             close(fd)
             throw SafeRemoval.Refused(errorDescription: "\(path) isn't your own folder, so nothing is moved there; nothing was removed")
         }

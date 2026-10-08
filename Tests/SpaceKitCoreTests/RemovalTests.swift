@@ -313,6 +313,49 @@ struct RemovalTests {
         #expect(onDisk(tree.path("home/Projects/other/y")))
     }
 
+    @Test("A move by handle fits a long name beside its number, and stops with a clear message once every name is taken")
+    func automaticTrashNameLimits() throws {
+        let tree = try TempTree()
+        let long = String(repeating: "é", count: 127)  // 254 bytes: room for the name, not for " 2" beside it
+        try tree.file("home/.Trash/\(long)/earlier", bytes: 10)
+        try tree.file("home/Projects/\(long)/x", bytes: 100)
+        let executor = handleOnlyExecutor(tree)
+        let removed = try executor.remover.remove(target(tree, "home/Projects/\(long)"), by: .trash, context: automatic)
+        let fitted = String(repeating: "é", count: 126) + " 2"
+        #expect(Remover.trashName(long, attempt: 2) == fitted && fitted.utf8.count <= Remover.longestName)
+        #expect(removed.trashedTo == tree.path("home/.Trash/\(fitted)"))
+        #expect(onDisk(tree.path("home/.Trash/\(fitted)/x")))
+
+        try tree.file("home/Projects/full/x", bytes: 100)
+        for attempt in 1...Remover.trashNameAttempts { try tree.directory("home/.Trash/" + Remover.trashName("full", attempt: attempt)) }
+        do {
+            _ = try executor.remover.remove(target(tree, "home/Projects/full"), by: .trash, context: automatic)
+            Issue.record("moved although every name was taken")
+        } catch let refused as SafeRemoval.Refused {
+            #expect(refused.localizedDescription.contains("already holds \(Remover.trashNameAttempts) items named like full"))
+        }
+        #expect(onDisk(tree.path("home/Projects/full/x")))
+    }
+
+    /// The home Trash is opened only as the person's own real folder; the tests use a sandbox home's Trash.
+    @Test("The Trash is created when missing, and refused when it is a symlink or someone else's")
+    func openingTheTrash() throws {
+        let tree = try TempTree()
+        try tree.directory("home")
+        let trash = tree.path("home/.Trash")
+        let created = try Remover.openTrash(at: trash)
+        close(created)
+        var st = stat()
+        #expect(lstat(trash, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR && st.st_mode & 0o777 == 0o700)
+        #expect(throws: SafeRemoval.Refused.self) { try Remover.openTrash(at: trash, user: getuid() &+ 1) }
+
+        try tree.directory("elsewhere")
+        let linked = tree.path("linked/.Trash")
+        try tree.directory("linked")
+        try FileManager.default.createSymbolicLink(atPath: linked, withDestinationPath: tree.path("elsewhere"))
+        #expect(throws: (any Error).self) { try Remover.openTrash(at: linked) }
+    }
+
     @Test("A move to the Trash that took something other than the checked item is reported, not called removed")
     func trashVerifiedAfterwards() throws {
         let tree = try TempTree()

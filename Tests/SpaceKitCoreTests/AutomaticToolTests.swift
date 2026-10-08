@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SpaceKitCore
@@ -46,6 +47,54 @@ extension CommandTrustTests {
             #expect(CommandTrust.changeablePart(of: tool) { part, _ in part == tree.path("real/bin/tool") } == tree.path("real/bin/tool"))
             #expect(CommandTrust.changeablePart(of: tool) { _, _ in false } == nil)
         }
+    }
+
+    @Test("The walk follows a symlink whose target climbs with .., and gives up past the system's symlink limit")
+    func changeableWalkEdges() throws {
+        let tree = try TempTree()
+        // The test's own folder, without the /var link above it, so every symlink the walk follows is the test's.
+        let root = try #require(PathUtil.realpath(tree.root))
+        try FileManager.default.createDirectory(atPath: root + "/a/b", withIntermediateDirectories: true)
+        try program(tree, "real/bin/tool")
+        try FileManager.default.createSymbolicLink(atPath: root + "/up", withDestinationPath: "a/b/../../real")
+        let visited = Mutex<[String]>([])
+        let result = CommandTrust.changeablePart(of: root + "/up/bin/tool") { part, _ in
+            visited.withLock { $0.append(part) }
+            return false
+        }
+        #expect(result == nil)
+        let parts = visited.withLock { $0 }
+        for part in ["/up", "/a", "/a/b", "/real", "/real/bin", "/real/bin/tool"] {
+            #expect(parts.contains(root + part), "\(part): \(parts)")
+        }
+        #expect(CommandTrust.changeablePart(of: root + "/up/bin/tool") { part, _ in part == root + "/real" } == root + "/real")
+
+        // A chain of links as long as the limit is followed; one more and the walk stops there, refusing the tool.
+        func chain(_ name: String, links: Int) throws -> String {
+            var next = root + "/real"
+            for index in (0..<links).reversed() {
+                let link = root + "/\(name)\(index)"
+                try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: next)
+                next = link
+            }
+            return next + "/bin/tool"
+        }
+        #expect(CommandTrust.changeablePart(of: try chain("ok", links: CommandTrust.symlinkLimit)) { _, _ in false } == nil)
+        let tooLong = try chain("long", links: CommandTrust.symlinkLimit + 1)
+        #expect(CommandTrust.changeablePart(of: tooLong) { _, _ in false } != nil)
+    }
+
+    @Test("A script started by an env other than /usr/bin/env is refused: its options aren't known")
+    func otherEnv() throws {
+        let tree = try TempTree()
+        try program(tree, "bin/env")
+        let script = try program(tree, "bin/tool", "#!\(tree.path("bin/env")) node\n")
+        let refusal = CommandTrust.programWalkRefusal("tool", at: script, locate: { _ in nil }, judge: { _ in nil })
+        #expect(refusal?.contains("for an env other than /usr/bin/env") == true, "\(refusal ?? "")")
+        // The system's own env is followed to the program it starts.
+        let system = try program(tree, "bin/system", "#!/usr/bin/env node\n")
+        let node = try program(tree, "bin/node")
+        #expect(CommandTrust.programWalkRefusal("system", at: system, locate: { $0 == "node" ? node : nil }, judge: { _ in nil }) == nil)
     }
 
     /// A tool that starts a helper by name, or a script `/usr/bin/env` starts, searches the PATH it is given. In an

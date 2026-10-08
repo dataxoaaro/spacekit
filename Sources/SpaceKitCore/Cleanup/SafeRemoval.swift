@@ -174,8 +174,9 @@ enum SafeRemoval {
     static let currentFolder: [CChar] = Array(".".utf8CString)
     static let parentFolder: [CChar] = Array("..".utf8CString)
 
-    /// The error `errno` describes, for `path`.
-    static func posixError(_ path: String) -> Error {
-        CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path, NSLocalizedDescriptionKey: String(cString: strerror(errno))])
+    /// The error `code` describes, for `path`: by default `errno`. A caller that runs anything between the failing call
+    /// and this reads `errno` right after the call and passes it.
+    static func posixError(_ path: String, code: Int32 = errno) -> Error {
+        CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path, NSLocalizedDescriptionKey: String(cString: strerror(code))])
     }
 }

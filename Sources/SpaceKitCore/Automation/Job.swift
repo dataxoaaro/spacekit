@@ -145,16 +145,27 @@ public struct Job: Codable, Sendable, Identifiable, Hashable {
     /// How long a project counts as active for a rule's `active_projects` exclusion when its policy sets no `keepRecent`.
     public static let defaultActiveProjectsWindow = Age.days(14)
 
-    /// A job pre-filled from a rule's suggested policy.
+    /// A job pre-filled from a rule's suggested policy. A rule whose action runs a tool command is suggested as `suggest`
+    /// at most: an automatic run starts a tool only from folders the person can't change, which a typical install isn't
+    /// (Homebrew under a prefix they own, apps in `/Applications`, `~/.cargo/bin`), so the job would skip every time.
+    /// Suggested instead, the person approves it and it runs by hand.
     public static func suggested(for rule: Rule) -> Job {
         let policy = rule.policy
-        let mode = policy?.mode ?? (rule.safety.level == .safe ? .automatic : .suggest)
+        let runsCommand = rule.action.command != nil || rule.action.itemCommand != nil
+        let mode = runsCommand ? min(policyMode(of: rule), .suggest) : policyMode(of: rule)
         var keep = policy?.keepRecent
         if keep == nil && rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) { keep = Job.defaultActiveProjectsWindow }
         return Job(
             id: rule.id, name: rule.name, rules: [rule.id], mode: mode, schedule: policy?.schedule ?? .weekly,
             when: Conditions(sizeAbove: policy?.threshold, olderThan: policy?.olderThan, keepRecent: keep),
             action: .trash, includeReview: false)
+    }
+}
+
+extension Job {
+    /// The mode a rule's policy asks for: its own, or automatic for a regenerable rule and suggest otherwise.
+    static func policyMode(of rule: Rule) -> Mode {
+        rule.policy?.mode ?? (rule.safety.level == .safe ? .automatic : .suggest)
     }
 }
 

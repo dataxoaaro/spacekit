@@ -83,8 +83,10 @@ extension RuleLibrary {
         ].compactMap { $0 }
         let job = Job.suggested(for: override)
         let originalJob = Job.suggested(for: builtin)
-        if job.mode > originalJob.mode {
-            problems.append("makes jobs from it start in \(job.mode.rawValue) mode instead of \(originalJob.mode.rawValue)")
+        // The policies are compared, not the jobs: a command rule's jobs start as suggestions whatever its policy says.
+        let (mode, originalMode) = (Job.policyMode(of: override), Job.policyMode(of: builtin))
+        if mode > originalMode {
+            problems.append("makes jobs from it start in \(mode.rawValue) mode instead of \(originalMode.rawValue)")
         }
         if job.schedule.every < originalJob.schedule.every {
             problems.append("makes jobs from it run \(job.schedule.every.rawValue) instead of \(originalJob.schedule.every.rawValue)")

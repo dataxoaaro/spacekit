@@ -102,6 +102,25 @@ struct ConfigValueTests {
         #expect(Job.suggested(for: rule).when.keepRecent == Job.defaultActiveProjectsWindow)
     }
 
+    /// An automatic run starts a tool only from folders the person can't change, which typical installs aren't, so a job
+    /// that runs a command would skip every time: it is suggested, approved and run by hand.
+    @Test("A job suggested for a rule that runs a command starts as a suggestion, whatever the rule's policy asks")
+    func commandRulesSuggested() throws {
+        func rule(_ action: String, policy: String = "") throws -> Rule {
+            try #require(try RuleLibrary.parse(yaml: "name: x\npath: ~/.cache/x\nsafety: safe\naction:\n\(action)\n\(policy)").first)
+        }
+        let automatic = "policy:\n  mode: automatic\n"
+        #expect(Job.suggested(for: try rule("  command: [go, clean, -cache]", policy: automatic)).mode == .suggest)
+        #expect(Job.suggested(for: try rule("  command: [go, clean, -cache]")).mode == .suggest)
+        #expect(Job.suggested(for: try rule("  itemCommand: [rustup, toolchain, uninstall, \"{name}\"]")).mode == .suggest)
+        #expect(Job.suggested(for: try rule("  command: [go, clean, -cache]", policy: "policy:\n  mode: observe\n")).mode == .observe)
+        #expect(Job.suggested(for: try rule("  remove: true", policy: automatic)).mode == .automatic)
+        // Every built-in rule that runs a command.
+        for builtin in RuleLibrary.load(builtin: .embedded).rules where builtin.action.command != nil || builtin.action.itemCommand != nil {
+            #expect(Job.suggested(for: builtin).mode != .automatic, "\(builtin.id)")
+        }
+    }
+
     @Test("safety.allowedCommands can't list shells, interpreters or other code launchers")
     func codeLaunchersInAllowedCommands() throws {
         let launchers = [

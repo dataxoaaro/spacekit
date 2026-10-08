@@ -175,3 +175,27 @@ extension RuleLibrary {
         return !PathUtil.isGlob(String(prefix)) && segment.hasPrefix(prefix) && !dotNameUnderWildcard
     }
 }
+
+extension Rule {
+    /// This rule's paths where they lead now (`PathUtil.canonicalPattern` with `home`), as the engine and the guard use
+    /// them; for an override, without those that now lead outside the built-in rule it narrows (`leftOut`: each as
+    /// written, and where it leads). The library checked the override when the rules loaded, but a folder on the way can
+    /// change since: a symlink pointed elsewhere moves a literal path out of the built-in glob. So `RuleEngine` and
+    /// `RuleScope` (the guard, the rule index) check again here, with the paths they are about to use.
+    func checkedPaths(home: String = PathUtil.home) -> (kept: [String], leftOut: [(written: String, resolved: String)]) {
+        let resolved = paths.map { PathUtil.canonicalPattern($0, home: home) }
+        guard let narrowing else { return (resolved, []) }
+        let builtinPaths = narrowing.builtinPaths.map { PathUtil.canonicalPattern($0, home: home) }
+        let exclusions = narrowing.builtinExclusions.map { PathUtil.canonicalPattern($0, home: home) }
+        var kept: [String] = []
+        var leftOut: [(written: String, resolved: String)] = []
+        for (written, path) in zip(paths, resolved) {
+            if RuleLibrary.staysWithin(canonical: path, builtinPaths: builtinPaths, exclusions: exclusions) {
+                kept.append(path)
+            } else {
+                leftOut.append((written, path))
+            }
+        }
+        return (kept, leftOut)
+    }
+}

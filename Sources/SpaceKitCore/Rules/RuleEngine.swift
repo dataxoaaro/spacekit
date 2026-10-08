@@ -120,23 +120,17 @@ public struct RuleEngine: Sendable {
         self.devRoots = devRoots.map { PathUtil.canonicalPattern($0) }
     }
 
-    /// `canonical(rule)`; for an override, without the paths that no longer stay within the built-in rule it narrows,
-    /// each with an issue. The library checked the override when the rules loaded, but a folder on the way can change
-    /// before an analysis resolves it again: a symlink pointed elsewhere would move a literal path out of the built-in
-    /// glob. So the check is repeated here with the resolved paths the engine then uses.
+    /// `canonical(rule)`; for an override, without the paths that no longer stay within the built-in rule it narrows
+    /// (`Rule.checkedPaths`), each with an issue.
     static func checkedOverride(_ rule: Rule) -> (rule: Rule, issues: [RuleIssue]) {
         var resolved = canonical(rule)
-        guard let narrowing = rule.narrowing else { return (resolved, []) }
-        let builtinPaths = narrowing.builtinPaths.map { PathUtil.canonicalPattern($0) }
-        let exclusions = narrowing.builtinExclusions.map { PathUtil.canonicalPattern($0) }
-        var issues: [RuleIssue] = []
-        resolved.paths = zip(rule.paths, resolved.paths).compactMap { written, path in
-            if RuleLibrary.staysWithin(canonical: path, builtinPaths: builtinPaths, exclusions: exclusions) { return path }
+        let checked = rule.checkedPaths()
+        resolved.paths = checked.kept
+        let issues = checked.leftOut.map { written, path in
             let message =
                 "leaves out the path '\(written)': it leads to \(path) now, outside the built-in rule it narrows (a folder on the "
                 + "way changed since the rules were loaded)"
-            issues.append(RuleIssue(severity: .error, source: rule.source ?? RuleLibrary.inlineSource, ruleID: rule.id, message: message))
-            return nil
+            return RuleIssue(severity: .error, source: rule.source ?? RuleLibrary.inlineSource, ruleID: rule.id, message: message)
         }
         return (resolved, issues)
     }

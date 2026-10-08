@@ -40,4 +40,32 @@ extension RuleLoadingTests {
         #expect(analysis.findings.isEmpty)
         #expect(analysis.ruleIssues.map(\.message) == after.issues.map(\.message))
     }
+
+    /// The guard (`spacekit clean <path>`) and the rule index ask whether a rule covers a path through `RuleScope`, which
+    /// must check the override again the same way the engine does.
+    @Test("The guard checks an override's paths again: through a retargeted symlink, the override doesn't vouch for the item")
+    func overridePathRecheckedByGuard() throws {
+        let tree = try TempTree()
+        try tree.file("caches/app/data/blob", bytes: 4_096)
+        try tree.file("documents/data/thesis", bytes: 4_096)
+        let link = tree.path("caches/link")
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("caches/app"))
+        try tree.directory("user")
+        func yaml(_ path: String) -> String { "id: base.paths\nname: Paths\npath: [\"\(path)\"]\nsafety: safe\naction: remove\n" }
+        try yaml(tree.path("caches/link/data")).write(toFile: tree.path("user/paths.yaml"), atomically: true, encoding: .utf8)
+        let builtin = BuiltinRules(files: [RuleFileText(source: "built-in rules/paths.yaml", yaml: yaml(tree.path("caches/*/data")))])
+        let library = RuleLibrary.load(builtin: builtin, directories: [tree.path("user")])
+        let override = try #require(library.rule(id: "base.paths"))
+        let guardian = testGuard(home: tree.path("home"))
+        let unknown = "No SpaceKit rule recognises this"
+        let item = tree.path("caches/link/data")
+        #expect(!guardian.check(item, rule: override, context: .manual).reasons.contains { $0.contains(unknown) })
+
+        try FileManager.default.removeItem(atPath: link)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("documents"))
+        let verdict = guardian.check(item, rule: override, context: .manual)
+        #expect(verdict.reasons.contains { $0.contains(unknown) }, "\(verdict.reasons)")
+        let automatic = guardian.check(item, rule: override, context: .automatic(AutomationContext(jobID: "j")))
+        #expect(automatic.reasons.contains { $0.contains("outside the locations rule base.paths covers") }, "\(automatic.reasons)")
+    }
 }

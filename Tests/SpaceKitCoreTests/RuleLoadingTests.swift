@@ -343,6 +343,14 @@ struct RuleLoadingTests {
         #expect(asBuiltin.issues.isEmpty)
         let missing = RuleLibrary.check(files: [folders.tree.path("user/missing.yaml")], builtin: Folders.builtin)
         #expect(missing.issues.contains { $0.severity == .error })
+
+        // A file other users can change isn't loaded, so it doesn't pass validation either.
+        let open = folders.tree.path("user/mine.yaml")
+        #expect(chmod(open, 0o666) == 0)
+        let shared = RuleLibrary.check(files: [open], builtin: Folders.builtin)
+        #expect(shared.rules.isEmpty)
+        #expect(shared.issues.contains { $0.severity == .error && $0.message.hasPrefix("not loaded: it can be changed by other users") })
+        #expect(RuleLibrary.load(builtin: Folders.builtin, directories: [folders.tree.path("user")]).rule(id: "mine.cache") == nil)
     }
 
     @Test("rules.disabled never disables a protected rule")

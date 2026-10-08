@@ -121,9 +121,11 @@ public struct RuleLibrary: Sendable {
         return (kept, issues)
     }
 
-    /// Checks rule files on disk the way loading them would: each rule on its own, and a rule with a built-in id
-    /// against the built-in rule it would replace. `asBuiltin` judges them as built-in rules instead, for
-    /// contributors checking a file in the repository's `rules/` folder before they build.
+    /// Checks rule files on disk the way loading them would: a file other users could change isn't loaded
+    /// (`FileTrust`), each rule on its own, and a rule with a built-in id against the built-in rule it would replace.
+    /// `asBuiltin` judges them as built-in rules instead, for contributors checking a file in the repository's `rules/`
+    /// folder before they build: built-in rules are compiled in, never read from a file, so who could change it doesn't
+    /// matter there.
     public static func check(files: [String], asBuiltin: Bool = false, builtin: BuiltinRules = .standard) -> (
         rules: [Rule], issues: [RuleIssue]
     ) {
@@ -131,6 +133,10 @@ public struct RuleLibrary: Sendable {
         var rules: [Rule] = []
         var issues: [RuleIssue] = []
         for file in files {
+            if !asBuiltin, let problem = FileTrust.problem(with: file) {
+                issues.append(RuleIssue(severity: .error, source: file, message: RuleLibrary.notLoaded(problem)))
+                continue
+            }
             do {
                 rules += try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file).map { rule in
                     var rule = rule
@@ -151,13 +157,16 @@ public struct RuleLibrary: Sendable {
         return (rules, issues)
     }
 
+    /// The issue of a rule file other users could have changed (`FileTrust.problem`), which loading skips.
+    static func notLoaded(_ problem: String) -> String { "not loaded: it \(problem)" }
+
     /// The text of every rule file in `directory`, except files other users could have changed (`FileTrust`).
     static func read(directory: String) -> (files: [RuleFileText], issues: [RuleIssue]) {
         var files: [RuleFileText] = []
         var issues: [RuleIssue] = []
         for file in yamlFiles(in: directory) {
             if let problem = FileTrust.problem(with: file) {
-                issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
+                issues.append(RuleIssue(severity: .error, source: file, message: notLoaded(problem)))
                 continue
             }
             do {

@@ -31,22 +31,12 @@ struct TreeConsistencyTests {
         }
     }
 
-    /// Where "Move to Trash" puts `name`: the Trash renames on collision, like Finder does.
-    func trashDestination(for name: String, in tree: TempTree) -> String {
-        var destination = tree.path(".Trash/" + name)
-        var counter = 2
-        while FileManager.default.fileExists(atPath: destination) {
-            destination = tree.path(".Trash/\(name) \(counter)")
-            counter += 1
-        }
-        return destination
-    }
-
     @Test("Random deletes and moves to the Trash always match a full rescan", arguments: [UInt64(0), 50_000])
     func randomOperations(minFileSize: UInt64) throws {
         var rng = SeededRandom(seed: 42 &+ minFileSize)
         let tree = try TempTree()
         try tree.directory(".Trash")
+        let trash = sandboxTrash(home: tree.root)
         // A random project-like hierarchy with large and small files.
         var folders = [""]
         for index in 0..<30 {
@@ -86,7 +76,6 @@ struct TreeConsistencyTests {
 
             let removal: Removal
             if operation == 0 && isDirectory.boolValue {
-                // Remove only the loose files of a folder, deleting them or moving them to the Trash.
                 let toTrash = rng.next() % 2 == 0
                 var bytes: UInt64 = 0
                 var trashed: [String] = []
@@ -96,18 +85,15 @@ struct TreeConsistencyTests {
                     guard (child.st_mode & S_IFMT) != S_IFDIR else { continue }
                     bytes += UInt64(child.st_blocks) * 512
                     if toTrash {
-                        let destination = trashDestination(for: name, in: tree)
-                        try fm.moveItem(atPath: path + "/" + name, toPath: destination)
-                        trashed.append(destination)
+                        trashed.append(try #require(try trash(path + "/" + name)))
                     } else {
                         try fm.removeItem(atPath: path + "/" + name)
                     }
                 }
                 removal = Removal(path: path, kind: .looseFiles, bytes: bytes, trashedFiles: trashed)
             } else if operation == 1 {
-                let destination = trashDestination(for: PathUtil.lastComponent(relative), in: tree)
                 let bytes = isDirectory.boolValue ? (scanned.node(at: path)?.size ?? 0) : fileBytes
-                try fm.moveItem(atPath: path, toPath: destination)
+                let destination = try #require(try trash(path))
                 removal = Removal(path: path, kind: isDirectory.boolValue ? .directory : .file, bytes: bytes, trashedTo: destination)
             } else {
                 let bytes = isDirectory.boolValue ? (scanned.node(at: path)?.size ?? 0) : fileBytes

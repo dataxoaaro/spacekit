@@ -134,7 +134,9 @@ public final class TUIApp {
         var mapMode = false
         var marked: [String: CleanupItem] = [:]
 
-        var result: AnalysisResult?
+        var result: AnalysisResult? {
+            didSet { settleSelections() }
+        }
         var analysis: Analysis? { result?.analysis }
         var aiReport: AIReport? { result?.aiReport }
         var analysisProgress: ScanProgress?

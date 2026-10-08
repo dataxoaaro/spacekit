@@ -190,18 +190,6 @@ extension TUIApp {
         selectable.first { $0 >= selection } ?? selectable.last ?? 0
     }
 
-    func devRows() -> [(group: String, finding: Finding?)] {
-        guard let analysis = state.analysis else { return [] }
-        var rows: [(String, Finding?)] = []
-        for level in SafetyLevel.allCases {
-            let findings = analysis.findings(level)
-            guard !findings.isEmpty else { continue }
-            rows.append(("\(level.emoji) \(level.title) · \(ByteCount.format(analysis.total(level)))", nil))
-            for finding in findings { rows.append((finding.rule.group, finding)) }
-        }
-        return rows
-    }
-
     func handleDev(_ key: TerminalKey) {
         if key == .character("r") {
             guard !refuseWhileBusy() else { return }
@@ -213,10 +201,9 @@ extension TUIApp {
             startAnalysis()
             return
         }
-        let rows = devRows()
+        let rows = state.devRows
         let selectable = rows.indices.filter { rows[$0].finding != nil }
         guard !selectable.isEmpty else { return }
-        state.dev.selection = TUIApp.settle(state.dev.selection, on: selectable)
         let position = selectable.firstIndex(of: state.dev.selection) ?? 0
         func select(_ p: Int) { state.dev.selection = selectable[min(max(p, 0), selectable.count - 1)] }
         guard let finding = rows[selectable[position]].finding else { return }
@@ -270,21 +257,10 @@ extension TUIApp {
 
     // MARK: AI
 
-    func aiRows() -> [(tool: String, model: AIModel?)] {
-        guard let report = state.aiReport else { return [] }
-        var rows: [(String, AIModel?)] = []
-        for tool in report.tools {
-            rows.append((tool.name, nil))
-            for model in tool.models { rows.append((tool.name, model)) }
-        }
-        return rows
-    }
-
     func handleAI(_ key: TerminalKey) {
-        let rows = aiRows()
+        let rows = state.aiRows
         let selectable = rows.indices.filter { rows[$0].model != nil }
         guard !selectable.isEmpty else { return }
-        state.ai.selection = TUIApp.settle(state.ai.selection, on: selectable)
         let position = selectable.firstIndex(of: state.ai.selection) ?? 0
         func select(_ p: Int) { state.ai.selection = selectable[min(max(p, 0), selectable.count - 1)] }
         switch key {
@@ -302,5 +278,40 @@ extension TUIApp {
         default:
             break
         }
+    }
+}
+
+extension TUIApp.State {
+    /// Dev Intelligence rows: a heading per safety level, then its findings.
+    var devRows: [(group: String, finding: Finding?)] {
+        guard let analysis else { return [] }
+        var rows: [(String, Finding?)] = []
+        for level in SafetyLevel.allCases {
+            let findings = analysis.findings(level)
+            guard !findings.isEmpty else { continue }
+            rows.append(("\(level.emoji) \(level.title) · \(ByteCount.format(analysis.total(level)))", nil))
+            for finding in findings { rows.append((finding.rule.group, finding)) }
+        }
+        return rows
+    }
+
+    /// AI rows: a heading per tool, then its models.
+    var aiRows: [(tool: String, model: AIModel?)] {
+        guard let aiReport else { return [] }
+        var rows: [(String, AIModel?)] = []
+        for tool in aiReport.tools {
+            rows.append((tool.name, nil))
+            for model in tool.models { rows.append((tool.name, model)) }
+        }
+        return rows
+    }
+
+    /// Puts each list's selection on a row keys act on. Runs whenever the rows change, so drawing and key
+    /// handling can trust the stored selection.
+    mutating func settleSelections() {
+        let findings = devRows
+        dev.selection = TUIApp.settle(dev.selection, on: findings.indices.filter { findings[$0].finding != nil })
+        let models = aiRows
+        ai.selection = TUIApp.settle(ai.selection, on: models.indices.filter { models[$0].model != nil })
     }
 }

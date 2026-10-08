@@ -158,14 +158,7 @@ private struct HardLinkEntry {
     let modified: Int64
     let credited: DirNode
     let creditedName: String
-    var owner: DirNode
-    var ownerFolder: String
-    var ownerName: String
     var links: [HardLink]
-
-    func sortsBeforeOwner(folder: String, name: String) -> Bool {
-        HardLinkGroup.precedes(folder: folder, name: name, folder: ownerFolder, name: ownerName)
-    }
 }
 
 private final class ScanJob: @unchecked Sendable {
@@ -304,21 +297,14 @@ private final class ScanJob: @unchecked Sendable {
 
     /// Records one link of a multiply-linked file. Returns true if this is the first link seen, which gets
     /// the bytes for now.
-    private func recordHardLink(_ key: HardLinkKey, node: DirNode, folder: String, name: String, size: UInt64, modified: Int64) -> Bool {
+    private func recordHardLink(_ key: HardLinkKey, node: DirNode, name: String, size: UInt64, modified: Int64) -> Bool {
         let link = HardLink(node: node, name: name, hasBytes: false)
         return hardLinks.withLock { table in
             guard let index = table.index(forKey: key) else {
-                table[key] = HardLinkEntry(
-                    size: size, modified: modified, credited: node, creditedName: name, owner: node, ownerFolder: folder, ownerName: name,
-                    links: [link])
+                table[key] = HardLinkEntry(size: size, modified: modified, credited: node, creditedName: name, links: [link])
                 return true
             }
             table.values[index].links.append(link)
-            if table.values[index].sortsBeforeOwner(folder: folder, name: name) {
-                table.values[index].owner = node
-                table.values[index].ownerFolder = folder
-                table.values[index].ownerName = name
-            }
             return false
         }
     }
@@ -336,19 +322,21 @@ private final class ScanJob: @unchecked Sendable {
         groups.reserveCapacity(table.count)
         for (key, entry) in table {
             var holder: DirNode = entry.credited
+            var group = HardLinkGroup(size: entry.size, modified: entry.modified, links: entry.links)
+            guard let ownerIndex = group.ownerIndex else { continue }
+            let owner: HardLink = group.links[ownerIndex]
             var holderName: String = entry.creditedName
-            let moves = entry.owner !== entry.credited || entry.ownerName != entry.creditedName
+            let moves = owner.node !== holder || owner.name != holderName
             // The links themselves stay counted where they are; only the bytes (and the tracked leaf) move.
-            if moves && entry.credited.dropLinkBytes(named: entry.creditedName, size: entry.size, minFileSize: minFileSize) {
-                entry.owner.addLinkBytes(named: entry.ownerName, size: entry.size, modified: entry.modified, minFileSize: minFileSize)
-                holder = entry.owner
-                holderName = entry.ownerName
+            if moves && holder.dropLinkBytes(named: holderName, size: entry.size, minFileSize: minFileSize) {
+                owner.node.addLinkBytes(named: owner.name, size: entry.size, modified: entry.modified, minFileSize: minFileSize)
+                holder = owner.node
+                holderName = owner.name
             }
-            var links: [HardLink] = entry.links
-            for index in links.indices {
-                links[index].hasBytes = links[index].node === holder && links[index].name == holderName
+            for index in group.links.indices {
+                group.links[index].hasBytes = group.links[index].node === holder && group.links[index].name == holderName
             }
-            groups[key] = HardLinkGroup(size: entry.size, modified: entry.modified, links: links)
+            groups[key] = group
         }
         return groups
     }
@@ -527,7 +515,7 @@ private final class ScanJob: @unchecked Sendable {
                     if linkCount > 1, objectType == UInt32(VREG.rawValue) {
                         let fileName = String(decoding: UnsafeBufferPointer(start: name, count: nameLength), as: UTF8.self)
                         let isFirst = recordHardLink(
-                            HardLinkKey(device: device, inode: inode), node: node, folder: item.path, name: fileName,
+                            HardLinkKey(device: device, inode: inode), node: node, name: fileName,
                             size: allocated, modified: modified)
                         if !isFirst { allocated = 0 }
                     }

@@ -15,18 +15,16 @@ extension TUIApp {
         // Every reason the guard gave is listed with its own decision, because the first one raised isn't always the
         // one that decided: a git repository (confirm) can also sit in a protected folder (block).
         func add(_ verdict: SafetyVerdict, _ text: String) -> Bool {
-            let color = verdict.decision.color
+            var line: String = verdict.decision.mark + " " + text
             switch verdict.decision {
-            case .allow:
-                lines.append(verdict.decision.mark + " " + text)
-                return true
-            case .confirm:
-                needConfirmation += 1
-                lines.append(verdict.decision.mark + " " + text)
+            case .allow: break
+            case .confirm: needConfirmation += 1
             case .block:
                 blocked += 1
-                lines.append(verdict.decision.mark + " " + text + "  " + "blocked".fg(color))
+                line += "  " + "blocked".fg(verdict.decision.color)
             }
+            lines.append(line)
+            guard verdict.decision != .allow else { return true }
             for entry in verdict.entries {
                 let reason: String = clean(entry.reason).fg(entry.decision.color)
                 lines.append("    " + entry.decision.mark + " " + reason)

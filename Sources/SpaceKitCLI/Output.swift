@@ -124,7 +124,9 @@ enum Parse {
     }
 
     static func size(_ text: String) throws -> ByteCount {
-        guard let size = ByteCount.parse(text) else { throw ValidationError("Invalid size '\(Output.safe(text))'. Use values like 500MB, 30GB.") }
+        guard let size = ByteCount.parse(text) else {
+            throw ValidationError("Invalid size '\(Output.safe(text))'. Use values like 500MB, 30GB.")
+        }
         return size
     }
 

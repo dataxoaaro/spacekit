@@ -154,7 +154,9 @@ struct JobsCommand: ParsableCommand {
             var rules: [Rule] = []
             for id in rule {
                 guard let found = context.library.rule(id: id) else { throw ValidationError("Unknown rule '\(Output.safe(id))'") }
-                guard found.safety.level != .protected else { throw ValidationError("\(Output.safe(found.name)) is protected and can't be cleaned") }
+                guard found.safety.level != .protected else {
+                    throw ValidationError("\(Output.safe(found.name)) is protected and can't be cleaned")
+                }
                 rules.append(found)
             }
             var job = rules.first.map(Job.suggested(for:)) ?? Job(id: "custom", name: name ?? "Custom cleanup")

@@ -108,6 +108,7 @@ enum CleanupOutput {
                 break
             }
         }
+        lines += report.notes.map { "  skipped ".dim + Output.safe($0).dim }
         lines += report.warnings.map { "  ! ".fg(ANSI.review) + Output.safe($0) }
         return lines
     }
@@ -274,6 +275,8 @@ struct ReportJSON: Encodable {
     var items: [Item]
     var commands: [Command]
     var warnings: [String]
+    /// Files left on purpose inside items that were removed (`CleanupReport.notes`); not problems.
+    var notes: [String]
 
     init(_ report: CleanupReport) {
         ok = !report.hasProblems
@@ -284,6 +287,7 @@ struct ReportJSON: Encodable {
         items = report.items.map { Item(path: $0.item.path, kind: $0.item.kind.rawValue, outcome: OutcomeJSON($0.outcome)) }
         commands = report.commands.map { Command(arguments: $0.command.arguments, outcome: OutcomeJSON($0.outcome), output: $0.output) }
         warnings = report.warnings
+        notes = report.notes
     }
 }
 

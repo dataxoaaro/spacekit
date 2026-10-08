@@ -79,6 +79,10 @@ public struct CleanupReport: Sendable {
     /// Problems that didn't stop an item but must not go unnoticed: journal writes that failed, and loose
     /// files that couldn't be removed while the rest of their folder was.
     public var warnings: [String] = []
+    /// What a run left on purpose inside a loose-files item it otherwise removed: files the check at removal time
+    /// refused, and files past an automatic run's budget. Shown like a refused item, and like one not a problem: the
+    /// review judges the folder's files as a whole, so it couldn't have shown a reason that belongs to one file.
+    public var notes: [String] = []
     /// Trash destinations of loose files moved to the Trash, keyed by the folder (the loose-files item's `path`).
     public var trashedLooseFiles: [String: [String]] = [:]
     /// Bytes deleted from items that failed part way, keyed by the item's `path`. Their outcome is `.failed`; these
@@ -195,12 +199,22 @@ public struct CleanupExecutor: Sendable {
         verdict(for: remover.target(of: item, probingRepositories: false), ruleID: item.ruleID, context: context)
     }
 
-    /// The guard's verdict on a removal target, refused outright while the config is invalid.
+    /// The guard's verdict on a removal target, refused outright while the config is invalid, and for something in the
+    /// Trash that the removal module wouldn't let this run take (`Remover.method`), so a preview's verdicts and totals
+    /// match what the run does.
     func verdict(for target: RemovalTarget, ruleID: String?, context: CleanupContext) -> SafetyVerdict {
-        var verdict = safety.evaluate(target, rule: ruleID.flatMap { rules[$0] }, context: context)
+        let rule = ruleID.flatMap { rules[$0] }
+        var verdict = safety.evaluate(target, rule: rule, context: context)
         refuseIfConfigInvalid(&verdict)
+        let remover = self.remover
+        if remover.method(inTrash: remover.isInsideTrash(target), useTrash: true, rule: rule, context: context) == nil {
+            verdict.raise(.block, CleanupExecutor.trashedNotRegenerable)
+        }
         return verdict
     }
+
+    /// Why an automatic run leaves something in the Trash (`Remover.method`).
+    static let trashedNotRegenerable = "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them"
 
     func refuseIfConfigInvalid(_ verdict: inout SafetyVerdict) {
         if let configError {
@@ -320,7 +334,11 @@ public struct CleanupExecutor: Sendable {
     /// block such as a volume mounted since) skips the row as changed since the review, which counts as a problem. So
     /// does a row whose shown warnings the person didn't accept (`--yes` without `--accept-warnings`): it was selected
     /// and left undone.
-    static func refusal(_ verdict: SafetyVerdict, reviewed: ReviewRecord.Row?) -> CleanupOutcome? {
+    ///
+    /// `unseen` makes the outcome of a reason the review couldn't show; by default the row changed since the review.
+    static func refusal(
+        _ verdict: SafetyVerdict, reviewed: ReviewRecord.Row?, unseen: (String) -> CleanupOutcome = CleanupOutcome.changedSinceReview
+    ) -> CleanupOutcome? {
         let reasons = verdict.reasons.joined(separator: "; ")
         switch verdict.decision {
         case .allow:
@@ -328,11 +346,11 @@ public struct CleanupExecutor: Sendable {
         case .block:
             // A review never passes a blocked row on, so a block in a reviewed run is new.
             guard reviewed != nil else { return .skipped(reason: "Blocked: " + reasons, kind: .refused) }
-            return .changedSinceReview("Blocked: " + reasons)
+            return unseen("Blocked: " + reasons)
         case .confirm:
             guard let reviewed else { return .skipped(reason: "Needs confirmation: " + reasons, kind: .refused) }
-            let unseen = verdict.reasons.filter { !reviewed.showed($0) }
-            if !unseen.isEmpty { return .changedSinceReview(unseen.joined(separator: "; ")) }
+            let notShown = verdict.reasons.filter { !reviewed.showed($0) }
+            if !notShown.isEmpty { return unseen(notShown.joined(separator: "; ")) }
             return reviewed.accepted ? nil : .notAccepted(reasons)
         }
     }

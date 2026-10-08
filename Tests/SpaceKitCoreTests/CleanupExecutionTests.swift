@@ -39,6 +39,28 @@ func cacheRule(_ tree: TempTree, id: String = "cache", level: SafetyLevel, paths
 
 @Suite("Cleanup execution: automatic runs")
 struct AutomaticCleanupTests {
+    /// `jobs preview --json` totals what the verdicts allow, so the verdict must refuse what the run would skip.
+    @Test("An automatic preview blocks Trash entries no regenerable rule covers, as the run skips them")
+    func trashEntriesNeedRegenerableRule() throws {
+        let tree = try TempTree()
+        try tree.file("home/.Trash/old/x", bytes: 4_000)
+        waitForClockTick()
+        let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
+        for level in [SafetyLevel.review, .safe] {
+            let rule = cacheRule(tree, level: level, paths: ["home/.Trash"])
+            let item = CleanupItem(path: tree.path("home/.Trash/old"), size: 4_000, ruleID: rule.id, scanStarted: Date())
+            let executor = sandboxExecutor(tree, rules: [rule])
+            let verdict = executor.verdict(for: item, context: automatic)
+            let refused = verdict.reasons.contains(CleanupExecutor.trashedNotRegenerable)
+            #expect(refused == (level != .safe), "\(level): \(verdict.reasons)")
+            let report = executor.execute(
+                AutomaticPlan(CleanupPlan(items: [item], useTrash: false), automation: AutomationContext(jobID: "j")), dryRun: true)
+            #expect((report.skipped.first?.reason == CleanupExecutor.trashedNotRegenerable) == refused)
+            // A person may always delete from the Trash by hand.
+            #expect(!executor.verdict(for: item, context: .manual).reasons.contains(CleanupExecutor.trashedNotRegenerable))
+        }
+    }
+
     @Test("Non-safe rule items in an automatic delete plan go to the Trash instead of being skipped")
     func reviewItemsAreTrashed() throws {
         let tree = try TempTree()
@@ -495,13 +517,15 @@ struct CheckedLocationTests {
         #expect(confirmed.items.first?.outcome.isRemoved == true)
     }
 
-    @Test("A loose file refused at removal time is reported as changed since the review, never dropped quietly")
+    /// The review judges the folder's files as a whole, so it can't show a reason that belongs to one file: a file
+    /// refused at removal time is left like a refused item, reported and never dropped quietly, and isn't a problem,
+    /// or every run of that folder would fail for good.
+    @Test("A loose file refused at removal time is reported and left like a refused item, not as changed since the review")
     func refusedLooseFileReported() throws {
         let tree = try TempTree()
         try tree.file("home/stuff/a.log", bytes: 1_000)
         let secret = try tree.file("home/stuff/secret.log", bytes: 1_000)
         waitForClockTick()
-        // The review judges the folder's files as a whole; only the run checks each file, and this one is protected.
         let executor = sandboxExecutor(tree, protectedPaths: [secret])
         func plan(_ names: [String]) -> CleanupPlan {
             CleanupPlan(
@@ -512,17 +536,54 @@ struct CheckedLocationTests {
         }
 
         let alone = manualRun(plan(["secret.log"]), with: executor)
-        let skipped = try #require(alone.skipped.first)
-        #expect(skipped.reason.hasPrefix(CleanupExecutor.changedSinceReview))
-        #expect(skipped.reason.contains("secret.log"))
-        #expect(alone.hasProblems)
+        guard case .skipped(let reason, let kind)? = alone.items.first?.outcome else {
+            Issue.record("\(String(describing: alone.items.first?.outcome))")
+            return
+        }
+        #expect(kind == .refused && !reason.hasPrefix(CleanupExecutor.changedSinceReview))
+        #expect(reason.contains("secret.log") && reason.contains("Protected in your configuration"))
+        #expect(!alone.hasProblems)
 
         let both = manualRun(plan(["a.log", "secret.log"]), with: executor)
         #expect(both.items.first?.outcome.isRemoved == true)
-        #expect(both.warnings.contains { $0.contains("secret.log") && $0.contains(CleanupExecutor.changedSinceReview) })
-        #expect(both.hasProblems)
+        #expect(both.notes.contains { $0.contains("secret.log") && !$0.contains(CleanupExecutor.changedSinceReview) })
+        #expect(both.warnings.isEmpty && !both.hasProblems)
         #expect(!onDisk(tree.path("home/stuff/a.log")))
         #expect(onDisk(secret))
+    }
+
+    @Test("In an automatic run too, a protected loose file is left and reported without failing the run")
+    func refusedLooseFileAutomatic() throws {
+        let tree = try TempTree()
+        try tree.file("home/stuff/a.log", bytes: 1_000)
+        let secret = try tree.file("home/stuff/secret.log", bytes: 1_000)
+        try tree.file("home/stuff/big.log", bytes: 64_000)
+        waitForClockTick()
+        let rule = cacheRule(tree, level: .safe, paths: ["home/stuff"])
+        func plan(_ names: [String]) -> AutomaticPlan {
+            let item = CleanupItem(
+                path: tree.path("home/stuff"), kind: .looseFiles, size: 66_000, ruleID: rule.id, looseFileNames: names,
+                scanStarted: Date())
+            return AutomaticPlan(CleanupPlan(items: [item], useTrash: false), automation: AutomationContext(jobID: "j"))
+        }
+        let executor = sandboxExecutor(tree, rules: [rule], protectedPaths: [secret])
+        let report = executor.execute(plan(["a.log", "secret.log"]), dryRun: false)
+        #expect(report.items.first?.outcome.isRemoved == true)
+        #expect(report.notes.contains { $0.contains("secret.log") }, "\(report.notes)")
+        #expect(!report.hasProblems)
+        #expect(!onDisk(tree.path("home/stuff/a.log")) && onDisk(secret))
+
+        // Nothing removed: one file refused, another over the budget. The outcome names both, each path once.
+        let small = sandboxExecutor(tree, rules: [rule], budget: ByteCount(8_000), protectedPaths: [secret])
+        let left = small.execute(plan(["secret.log", "big.log"]), dryRun: false)
+        guard case .skipped(let reason, let kind)? = left.items.first?.outcome else {
+            Issue.record("\(String(describing: left.items.first?.outcome))")
+            return
+        }
+        #expect(kind == .refused && !left.hasProblems)
+        #expect(reason.contains("Protected in your configuration") && reason.contains("1 loose files over this run's budget"), "\(reason)")
+        #expect(reason.components(separatedBy: "secret.log").count == 2, "\(reason)")
+        #expect(onDisk(secret) && onDisk(tree.path("home/stuff/big.log")))
     }
 }
 

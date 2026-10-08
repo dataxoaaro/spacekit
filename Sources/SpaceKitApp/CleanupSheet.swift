@@ -209,6 +209,10 @@ struct CleanupSheet: View {
                 Label(warning, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            ForEach(report.notes, id: \.self) { note in
+                Label(note, systemImage: "minus.circle").foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Spacer()
             HStack {
                 Spacer()

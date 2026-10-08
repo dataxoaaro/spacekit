@@ -22,8 +22,7 @@ extension CleanupExecutor {
         let rule = item.ruleID.flatMap { rules[$0] }
         let inTrash = remover.isInsideTrash(target)
         guard let method = remover.method(inTrash: inTrash, useTrash: plan.useTrash, rule: rule, context: context) else {
-            return .skipped(
-                reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them", kind: .refused)
+            return .skipped(reason: CleanupExecutor.trashedNotRegenerable, kind: .refused)
         }
         let context = Remover.context(context, removingBy: method)
         if let notScanned = notCoveredByScan(item, target: target, inTrash: inTrash) { return notScanned }
@@ -146,7 +145,10 @@ extension CleanupExecutor {
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             let file = target.entry(name, stat: st, namedIn: item.path)
             guard !file.changed(after: scanStarted) else { continue }
-            if let refused = refusal(of: file, item: item, context: context, reviewed: reviewed) {
+            // The review judged the folder's files as a whole, so it couldn't show a reason that belongs to one file: a
+            // file refused now is left like a refused item, not as a change since the review.
+            let verdict = verdict(for: file, ruleID: item.ruleID, context: context)
+            if let refused = CleanupExecutor.refusal(verdict, reviewed: reviewed, unseen: { .skipped(reason: $0, kind: .refused) }) {
                 tally.refusals.append((file.path, refused))
                 continue
             }
@@ -181,35 +183,40 @@ extension CleanupExecutor {
         var removed = 0
         var overBudget = 0
         var failures: [String] = []
-        /// Files the check at removal time refused: the review judged the folder's files as a whole, so a refusal of
-        /// one file is news to the person and is reported, never dropped.
+        /// Files the check at removal time refused, each reported, never dropped: a refusal of one file is news to the
+        /// person. Like a refused item, it isn't a problem (`.refused`) unless the person left the warnings unaccepted.
         var refusals: [(path: String, outcome: CleanupOutcome)] = []
     }
 
-    /// The item's outcome from what happened to its files; what didn't go as planned goes to the report's warnings
-    /// when something was removed, else it is the outcome.
+    /// The item's outcome from what happened to its files. Failures are problems: they go to the report's warnings when
+    /// something was removed. Files left on purpose (refused, over the budget) go to its notes then. When nothing was
+    /// removed, the outcome itself says all of it.
     private func outcome(of tally: LooseFiles, for item: CleanupItem, method: Remover.Method, run: inout Run) -> CleanupOutcome {
         let budgetNote = tally.overBudget > 0 ? "\(tally.overBudget) loose files over this run's budget were left" : nil
-        let refused = tally.refusals.compactMap { path, outcome -> String? in
-            guard case .skipped(let reason, _) = outcome else { return nil }
-            return "Left \(PathUtil.abbreviate(path, home: safety.home)): \(reason)"
+        let refused = tally.refusals.compactMap { path, outcome -> (line: String, kind: SkipKind)? in
+            guard case .skipped(let reason, let kind) = outcome else { return nil }
+            let shown = PathUtil.abbreviate(path, home: safety.home)
+            return (reason.contains(shown) ? "Left: \(reason)" : "Left \(shown): \(reason)", kind)
         }
+        // Only a file whose warnings the person saw and didn't accept is a problem.
+        let unaccepted = refused.filter(\.kind.isProblem).map(\.line)
+        let leftOnPurpose = refused.filter { !$0.kind.isProblem }.map(\.line)
         let failures = tally.failures
         guard tally.removed > 0 else {
             if let first = failures.first {
-                run.report.warnings += refused
+                run.report.warnings += unaccepted
+                run.report.notes += leftOnPurpose + (budgetNote.map { [$0] } ?? [])
                 return .failed(reason: first + (failures.count > 1 ? " (and \(failures.count - 1) more)" : ""))
             }
-            if let first = tally.refusals.first, case .skipped(let reason, let kind) = first.outcome {
-                let more = tally.refusals.count > 1 ? " and \(tally.refusals.count - 1) more" : ""
-                return .skipped(reason: "\(reason) (\(PathUtil.abbreviate(first.path, home: safety.home))\(more))", kind: kind)
-            }
-            if let budgetNote { return .skipped(reason: budgetNote, kind: .overBudget) }
-            return .skipped(reason: "None of the files from the reviewed plan are left", kind: .gone)
+            let left = refused.map(\.line) + (budgetNote.map { [$0] } ?? [])
+            guard !left.isEmpty else { return .skipped(reason: "None of the files from the reviewed plan are left", kind: .gone) }
+            let kind = refused.first(where: \.kind.isProblem)?.kind ?? (refused.isEmpty ? .overBudget : .refused)
+            return .skipped(reason: left.joined(separator: "; "), kind: kind)
         }
-        run.report.warnings += failures + refused
+        run.report.warnings += failures + unaccepted
+        run.report.notes += leftOnPurpose
         if !tally.trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = tally.trashLocations }
-        if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
+        if let budgetNote { run.report.notes.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
         return .removed(bytes: tally.freed, trashedTo: method == .trash ? tally.trashLocations.first.map(PathUtil.parent) : nil)
     }
 

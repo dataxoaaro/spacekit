@@ -106,6 +106,7 @@ extension TUIApp {
         for (item, reason) in report.skipped {
             lines.append("• ".dim + "\(clean(PathUtil.abbreviate(item.path))): \(clean(reason))".dim)
         }
+        for note in report.notes { lines.append("• ".dim + clean(note).dim) }
         for (command, outcome, _) in report.commands {
             let text: String
             switch outcome {

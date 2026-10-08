@@ -100,4 +100,50 @@ struct FileTrustTests {
         #expect(chmod(file, 0o664) == 0)
         #expect(FileTrust.problem(with: file, owners: FileTrust.builtinOwners(user: user, executable: program)) != nil)
     }
+
+    /// Runs `chmod` with `arguments` (ACL edits have no Foundation API).
+    static func chmodACL(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0, "chmod \(arguments.joined(separator: " "))")
+    }
+
+    @Test("A file whose ACL lets others write it isn't trusted")
+    func fileACL() throws {
+        let tree = try TempTree()
+        let file = tree.path("rules/mine.yaml")
+        try tree.file("rules/mine.yaml", bytes: 10)
+        #expect(chmod(file, 0o644) == 0)
+        defer { try? FileTrustTests.chmodACL(["-N", file]) }
+
+        try FileTrustTests.chmodACL(["+a", "everyone deny delete", file])
+        #expect(FileTrust.problem(with: file) == nil)
+        try FileTrustTests.chmodACL(["+a", "user:\(NSUserName()) allow write", file])
+        #expect(FileTrust.problem(with: file) == nil)
+        try FileTrustTests.chmodACL(["+a", "everyone allow write", file])
+        #expect(FileTrust.problem(with: file) != nil)
+    }
+
+    @Test("A file in a folder whose ACL lets others add or delete entries isn't trusted")
+    func folderACL() throws {
+        let tree = try TempTree()
+        let folder = tree.path("rules")
+        let file = tree.path("rules/mine.yaml")
+        try tree.file("rules/mine.yaml", bytes: 10)
+        #expect(chmod(file, 0o644) == 0)
+        defer { try? FileTrustTests.chmodACL(["-N", folder]) }
+
+        try FileTrustTests.chmodACL(["+a", "everyone deny delete", folder])
+        #expect(FileTrust.problem(with: file) == nil)
+        try FileTrustTests.chmodACL(["+a", "everyone allow add_file,delete_child", folder])
+        #expect(FileTrust.problem(with: file) != nil)
+        #expect(throws: ConfigError.self) {
+            try "version: 1\n".write(toFile: tree.path("rules/config.yaml"), atomically: false, encoding: .utf8)
+            chmod(tree.path("rules/config.yaml"), 0o644)
+            _ = try ConfigStore(file: tree.path("rules/config.yaml")).load()
+        }
+    }
 }

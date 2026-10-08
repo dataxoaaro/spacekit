@@ -10,8 +10,12 @@ enum FileTrust {
         guard stat(path, &st) == 0 else { return nil }
         if !owners.contains(st.st_uid) { return "is owned by another user" }
         if st.st_mode & (S_IWGRP | S_IWOTH) != 0 { return "can be changed by other users (group or world writable)" }
+        let real = PathUtil.realpath(path) ?? path
+        if aclAllowsOthers(real, fileWrites, owner: st.st_uid) {
+            return "can be changed by other users (its access control list allows it)"
+        }
         // The folder of the path and, for a symlink, of its target: others could replace the file there.
-        let folders = Set([PathUtil.parent(path), PathUtil.parent(PathUtil.realpath(path) ?? path)])
+        let folders = Set([PathUtil.parent(path), PathUtil.parent(real)])
         for folder in folders.sorted() where isOpenToOthers(folder) {
             return "is in a folder other users can change (\(PathUtil.abbreviate(folder)))"
         }
@@ -30,10 +34,12 @@ enum FileTrust {
         return trusted
     }
 
-    /// Writable by group or others without the sticky bit, which would stop them replacing this user's files.
+    /// Writable by group or others without the sticky bit, which would stop them replacing this user's files, or
+    /// open to others through its access control list.
     private static func isOpenToOthers(_ folder: String) -> Bool {
         var st = stat()
         guard stat(folder, &st) == 0 else { return false }
-        return st.st_mode & (S_IWGRP | S_IWOTH) != 0 && st.st_mode & S_ISVTX == 0
+        if st.st_mode & (S_IWGRP | S_IWOTH) != 0 && st.st_mode & S_ISVTX == 0 { return true }
+        return aclAllowsOthers(PathUtil.realpath(folder) ?? folder, folderWrites, owner: st.st_uid)
     }
 }

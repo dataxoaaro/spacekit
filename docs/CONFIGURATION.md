@@ -156,7 +156,7 @@ While the file is invalid, every command, the TUI and the app keep working for a
 | `~/Library/Application Support/SpaceKit/logs/agent.log` | Background agent output. |
 | `*.lock` next to the config, job state and suggestions | Let the app, the CLI and the agent update those files without overwriting each other. |
 
-Override the state folder with `SPACEKIT_STATE_DIR`. Debug builds also read `SPACEKIT_RULES_DIR` for the built-in rule library; release builds ignore it, because rules in that folder count as built-in, including the trust to run the built-in list of tools in automatic jobs (see [SAFETY.md](SAFETY.md#tool-commands)).
+The built-in rules aren't files on your Mac: they are compiled into SpaceKit. Override the state folder with `SPACEKIT_STATE_DIR`. Debug builds also read `SPACEKIT_RULES_DIR`, a folder whose rules replace the compiled-in ones, for trying rule edits without rebuilding; release builds ignore it, because rules in that folder count as built-in, including the trust to run the built-in list of tools in automatic jobs (see [SAFETY.md](SAFETY.md#tool-commands)).
 
 ## Permissions
 

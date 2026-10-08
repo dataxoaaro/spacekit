@@ -13,7 +13,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
                  │  Scanner ─ Layout ─ Rules ─ Intelligence       │
                  │  SafetyGuard ─ Cleanup ─ Automation ─ History  │
                  └────────────────────────────────────────────────┘
-                         ▲ rules/*.yaml   ▲ ~/.config/spacekit/config.yaml
+                         ▲ rules/*.yaml (compiled in)   ▲ ~/.config/spacekit/config.yaml
 ```
 
 | Target | Role |
@@ -22,6 +22,7 @@ SpaceKit is one Swift package with a shared core and three front ends.
 | `SpaceKitTUI` | Full-screen terminal interface (`spacekit tui`), plus ANSI helpers the CLI shares. |
 | `SpaceKitCLI` → `spacekit` | Every capability as a command; also the background agent (`spacekit agent run`). |
 | `SpaceKitApp` | The macOS app. Bundled by `scripts/build-app.sh` with the CLI in `Contents/Helpers`. |
+| `EmbedRules` plugin + `RuleEmbedder` | Build tool plugin on `SpaceKitCore`: on every build, `RuleEmbedder` writes the text of each `rules/**/*.yaml` into a generated Swift source (`EmbeddedRuleFiles`). Each rule file is an input, so editing one rebuilds Core. |
 
 ## Core modules
 
@@ -29,10 +30,10 @@ SpaceKit is one Swift package with a shared core and three front ends.
 |---|---|
 | `Scanner/` | `Scanner` (parallel `getattrlistbulk` traversal), `DirNode` tree, `ScanTree` in-place updates (`TreeMutations`), `HardLinkTable` in `HardLinks.swift` (every multiply-linked file, indexed by the folders holding its links, so an update touches only the files linked from where it changes the tree), `VolumeTable` (mounts, APFS containers, firmlinks). |
 | `Layout/` | Squarified treemap and sunburst layouts, with hit testing. Pure geometry, shared by the app's Canvas and the TUI. |
-| `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
+| `Rules/` | `Rule` schema, `BuiltinRules` (the compiled-in rule files; a debug build's `SPACEKIT_RULES_DIR`), `RuleLibrary` (loading, validation, and overrides of built-in rules that may only narrow them), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
 | `Safety/` | `SafetyGuard`, the single gate for removals, and `RuleScope` (where a rule applies, shared by the guard, `RuleIndex` and `RuleEngine` so they agree). See [SAFETY.md](SAFETY.md). |
-| `Cleanup/` | `CleanupPlan`, `CleanupReview` (the guard's verdict per row, unticked rows, totals and Trash wording; the only maker of a `ReviewedPlan`), `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `RemovalTarget` (one item's location, pinned identity, repository flags and size, read once for the guard and the removal), `Remover` (the Trash-or-delete decision, and the move or deletion checked against the target), `SafeRemoval` (deletion through checked directory handles, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove, staying on the item's volume), `Journal`. |
+| `Cleanup/` | `CleanupPlan`, `CleanupReview` (the guard's verdict per row, unticked rows, totals and Trash wording; the only maker of a `ReviewedPlan`), `CleanupExecutor` (re-checks, removes, runs tool commands through the `ProcessRunner` port, journals each removal, and accounts for items deleted only in part; `SystemProcessRunner` runs real processes, tests stand in a recorder), `RemovalTarget` (one item's location, pinned identity, repository flags and size, read once for the guard and the removal), `Remover` (the Trash-or-delete decision, and the move or deletion checked against the target), `SafeRemoval` (deletion through checked directory handles, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove, staying on the item's volume), `CommandTrust` (whether a tool command may run: rule origin, manual or automatic run, trusted list, `allowedCommands`, code launchers, option-like names, and a local Docker endpoint), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
@@ -134,7 +135,8 @@ JobRunner (automatic) ─► AutomaticPlan      ReviewedPlan
                                          ─► Trash or delete ─► SafetyGuard (again; an unshown warning skips) ─► budget
                                          ─► Remover: identity checked ─► trashItem + check what moved │ delete via handles, same volume
                                          ─► journal entry
-                    for each command ─► gates + trusted? ─► run without shell ─► measure freed ─► journal entry
+                    for each command ─► gates + CommandTrust ─► budget ─► local Docker? ─► ProcessRunner: no shell,
+                                         cleaned environment ─► measure freed ─► charge budget ─► journal entry
                                       │
                                       ▼
                                    report ─► incremental UI update

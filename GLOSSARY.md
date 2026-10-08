@@ -2,11 +2,23 @@
 
 ## Rules and command trust
 
-**Built-in rule**: a rule from SpaceKit's own rule library, which may run the tools on the built-in trusted list without configuration. _Avoid_: default rule, system rule.
+**Built-in rule**: a rule compiled into SpaceKit from the repository's `rules/` folder (`BuiltinRules.embedded`), which may run the tools on the built-in trusted list without configuration; only a debug build's `SPACEKIT_RULES_DIR` replaces them. _Avoid_: default rule, system rule, bundled rule.
 
-**User rule**: a rule loaded from any folder other than the built-in library; its commands run only when listed in `safety.allowedCommands` and only in manual runs. _Avoid_: custom rule, third-party rule.
+**User rule**: a rule loaded from a rule folder on disk (the user rules folder or `rules.directories`); its commands run only when listed in `safety.allowedCommands` and only in manual runs. _Avoid_: custom rule, third-party rule.
+
+**Override**: a user rule with a built-in rule's id, loaded in its place; it may only narrow the built-in rule (add exclusions, raise thresholds, ages or the safety level). _Avoid_: replacement rule, customisation.
+
+**Command trust**: the module (`CommandTrust`) that decides whether a rule's tool command runs, from the rule's origin, the kind of run and the executable policy. _Avoid_: command allowlist (only part of it).
+
+**Executable policy**: which executables may run: the built-in trusted list (built-in rules only), `safety.allowedCommands`, and the code launchers neither may grant. _Avoid_: whitelist.
 
 **Code launcher**: an executable that runs whatever code or program its arguments name (a shell, an interpreter, `env`, `xargs`, `find`, `open`); `safety.allowedCommands` can't list one. _Avoid_: interpreter (too narrow), dangerous command.
+
+**Tool environment**: the cleaned environment a tool runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG and the variables that move a tool's own cache; nothing else. _Avoid_: sanitized env.
+
+**Process runner**: the port the executor finds and runs tools through (`ProcessRunner`); `SystemProcessRunner` starts real processes, tests use a recording runner. _Avoid_: shell (tools never run in one).
+
+**Local Docker endpoint**: a Docker context whose endpoint is a unix socket on this Mac (Docker Desktop, OrbStack, Colima); `docker` rule commands run only against one. _Avoid_: local daemon.
 
 ## Runs
 

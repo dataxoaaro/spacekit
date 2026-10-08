@@ -2,7 +2,7 @@
 
 A **storage rule** is a small YAML description of one kind of data on a Mac: where it lives, what it is, how risky it is to remove, and how to clean it. Rules are SpaceKit's knowledge base. The app, the TUI, the CLI and the automation engine all read the same rules.
 
-Built-in rules live in [`rules/`](../rules). Debug builds (`swift run`) read them from the source checkout. A release binary reads the copy shipped with it: `make install` puts them in `share/spacekit/rules` under the install prefix, and the app carries its own. A release binary built some other way (`swift build -c release`) needs `SPACEKIT_RULES_DIR` pointed at a rule folder, or a `rules` folder beside the binary. Your own rules go in `~/.config/spacekit/rules/` (or any folder listed under `rules.directories` in your config). A rule in your folder with the same `id` as a built-in rule replaces it, within limits (see [Your own rules and overrides](#your-own-rules-and-overrides)).
+Built-in rules are written in [`rules/`](../rules) and compiled into SpaceKit when it is built, so an installed SpaceKit reads no rule folder for them. Your own rules go in `~/.config/spacekit/rules/` (or any folder listed under `rules.directories` in your config). A rule in your folder with the same `id` as a built-in rule replaces it, but only to narrow it (see [Your own rules and overrides](#your-own-rules-and-overrides)).
 
 ```sh
 spacekit rules list                 # everything SpaceKit knows about
@@ -102,7 +102,7 @@ action:
 
 As a word, `action` accepts only `remove` and `none`. Other words such as `trash`, `delete`, `clean`, `manual` or `report` are errors: say `remove` and set `safety.trash`, or write `manual:` steps.
 
-In an `itemCommand`, `{path}` is the item's absolute path and `{name}` is its last path component (the folder or file name, not the display name). With `granularity: children`, that is the name of each entry, such as a toolchain in `~/.rustup/toolchains`. Item commands never run for an item's loose files. The SafetyGuard checks each item an `itemCommand` names, just like an item SpaceKit would remove itself.
+In an `itemCommand`, `{path}` is the item's absolute path and `{name}` is its last path component (the folder or file name, not the display name). With `granularity: children`, that is the name of each entry, such as a toolchain in `~/.rustup/toolchains`. A `{name}` that starts with `-` would reach the tool as an option, so that item's command is refused. Item commands never run for an item's loose files. The SafetyGuard checks each item an `itemCommand` names, just like an item SpaceKit would remove itself.
 
 Prefer the tool's own cleanup command when it exists (Docker, simctl, Homebrew, pnpm). It knows about references and locks that deleting files doesn't.
 
@@ -110,11 +110,13 @@ Commands run **without a shell**, so shell syntax (`;`, `&&`, `|`, backticks, `$
 
 Which programs may run depends on where the rule comes from:
 
-- **Built-in rules** (SpaceKit's own `rules/` library; in debug builds also the folder `$SPACEKIT_RULES_DIR` names) may run these without extra configuration: `brew docker xcrun npm pnpm yarn bun ollama go cargo pip pip3 uv conda mamba gem pod flutter dart gradle huggingface-cli hf mise rustup orb podman colima swift deno`.
-- **Your own rules**, and rules from any folder other than the built-in library, run a command only if its program is listed in your `safety.allowedCommands`, including programs on the list above, and only in a cleanup you start by hand. Automatic jobs skip these commands. `spacekit rules validate` warns about each such command.
+- **Built-in rules** (the rules compiled into SpaceKit from `rules/`; in debug builds, the folder `$SPACEKIT_RULES_DIR` names takes their place) may run these without extra configuration: `brew docker xcrun npm pnpm yarn bun ollama go cargo pip pip3 uv conda mamba gem pod flutter dart gradle huggingface-cli hf mise rustup orb podman colima swift deno`.
+- **Your own rules**, from any rule folder, run a command only if its program is listed in your `safety.allowedCommands`, including programs on the list above, and only in a cleanup you start by hand. Automatic jobs skip these commands. `spacekit rules validate` warns about each such command.
 - **Shells, interpreters and launchers** (`sh`, `bash`, `python…`, `perl`, `node`, `osascript`, `swift`, `env`, `xargs`, `find`, `open` and similar) can't be listed in `safety.allowedCommands`, so a rule of your own that starts with one never runs. Name the tool itself instead. See [CONFIGURATION.md](CONFIGURATION.md#values) for the full list.
 
 A command in a saved plan (a suggestion) runs only while its rule is still loaded and still has the same command; otherwise it is refused until the plan is refreshed.
+
+Tools run with a cleaned environment: `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`, `XDG_*` and the variables that move a tool's own cache (`CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`, `GOMODCACHE`, `GOCACHE`, `npm_config_cache`, `NPM_CONFIG_CACHE`, `PNPM_HOME`, `YARN_CACHE_FOLDER`, `GRADLE_USER_HOME`, `OLLAMA_MODELS`, `HOMEBREW_CACHE`, `HOMEBREW_PREFIX`). Everything else, such as `DOCKER_HOST`, `DOCKER_CONTEXT`, `OLLAMA_HOST` and tokens, stays behind. A `docker` command runs only when the active Docker context (`docker context inspect`) is a unix socket on this Mac, as with Docker Desktop, OrbStack and Colima; a remote context, or a `DOCKER_HOST` that isn't `unix://`, skips it with the reason.
 
 ### `policy`
 
@@ -155,21 +157,24 @@ ai:
 2. **Pick the honest safety level.** If removing it costs a 20 GB re-download, it's `review`, even if it's "just a cache".
 3. **Say what happens** in `description`, for someone deciding in two seconds.
 4. **Prefer tool commands** over file removal when the tool tracks what it stored.
-5. **Validate:** `spacekit rules validate rules/your-file.yaml`, then try it: `spacekit dev --rule your.rule-id`. A rule with errors is not loaded.
+5. **Validate:** `swift run spacekit rules validate` rebuilds SpaceKit with your edit and checks every built-in rule; `spacekit rules validate --builtin rules/your-file.yaml` checks one file as a built-in rule. Then try it: `spacekit dev --rule your.rule-id`. The test suite fails on any built-in rule that doesn't parse or has an error.
 6. Built-in rules are reviewed for accuracy on current macOS and tool versions. Include a `docs` link if the tool documents its storage.
 
 ## Your own rules and overrides
 
-Rules load from the built-in library first, then from each of your rule folders. A rule with the `id` of an earlier one replaces it, so you can customise a built-in rule by copying it into your folder, with two limits that protect what the built-in library protects:
+Rules load from the built-in library first, then from each of your rule folders. A rule with the `id` of an earlier one replaces it. Jobs name rules by id, and jobs from 🟢 rules run automatically, so a replacement of a built-in rule may only **narrow** it. Copy the built-in rule into your folder (`spacekit rules show <id>`) and then:
 
-- A **built-in `protected` rule can't be replaced.** A rule of yours with its id is rejected with an error and the built-in rule stays.
-- A replacement **can't lower the safety level** of the built-in rule it replaces (`review` → `safe`, for example). It may raise it. To stop using a built-in rule, add its id to `rules.disabled` instead.
+- **You may** add `exclusions` and pattern `exclude` globs, drop names from a pattern, raise `policy` `threshold`, `olderThan` and `keepRecent`, raise the safety level, drop the action, and change the name, description, group, category, docs and tags. Making it `protected` is always allowed.
+- **You may not** add a path or a pattern, add names to a pattern or change its `sibling`, `contains` or `roots`, change the granularity, drop an exclusion, add `remove`, change a `command`, `itemCommand` or `ai` settings, turn off `safety.trash`, lower a policy value, or make jobs from it start in a more automatic mode. Such a replacement is rejected with an error naming what it widens, and the built-in rule stays. Give a new rule its own id instead.
+- A **built-in `protected` rule can't be replaced** at all, and a replacement **can't lower the safety level** (`review` → `safe`, for example). To stop using a built-in rule, add its id to `rules.disabled` instead.
+
+The background agent's log (`spacekit agent run`) names every rule of yours a due job uses in place of a built-in one, and `spacekit doctor` counts them.
 
 `rules.disabled` turns rules off, except `protected` rules: those stay active, with a warning.
 
-**Rule files must be yours.** Rules decide what SpaceKit removes and which tools it runs, and the background agent reads them unattended. A rule file is loaded only if it is owned by you or root, isn't writable by group or others, and isn't in a folder that group or others can write to without the sticky bit. Access control lists count as well: a file is refused if an allow entry for anyone but its owner or root lets them write, append, delete, change its attributes or extended attributes, its owner or its permissions, and a folder if such an entry lets them add files or subfolders, delete entries, or change its owner or permissions. Any other rule file is reported as an error (`not loaded: …`) and none of its rules load. The same applies to the built-in library and the config file (see [CONFIGURATION.md](CONFIGURATION.md#invalid-config)), except that built-in rule files may also be owned by the account that owns the running SpaceKit program: whoever installed SpaceKit installed them with it. `spacekit rules new` and the app's *New Rule…* write rule files 0644, and create the rules folder 0755, whatever your umask, so they pass.
+**Rule files must be yours.** Rules decide what SpaceKit removes and which tools it runs, and the background agent reads them unattended. A rule file is loaded only if it is owned by you or root, isn't writable by group or others, and isn't in a folder that group or others can write to without the sticky bit. Access control lists count as well: a file is refused if an allow entry for anyone but its owner or root lets them write, append, delete, change its attributes or extended attributes, its owner or its permissions, and a folder if such an entry lets them add files or subfolders, delete entries, or change its owner or permissions. Any other rule file is reported as an error (`not loaded: …`) and none of its rules load. The same applies to the config file (see [CONFIGURATION.md](CONFIGURATION.md#invalid-config)) and to a debug build's `SPACEKIT_RULES_DIR`. The built-in rules themselves are compiled into SpaceKit, so no file owner or mode is involved. `spacekit rules new` and the app's *New Rule…* write rule files 0644, and create the rules folder 0755, whatever your umask, so they pass.
 
-**Invalid rules are not loaded.** A rule with any error (no `path` or `match`, a path that is too broad, an action on a protected rule, a command that isn't a bare program name, shell syntax in a command) is reported and left out, so it neither cleans nor protects anything. A file with a value SpaceKit can't read, such as an unknown safety level or schedule, doesn't parse and loads none of its rules. Run `spacekit rules validate` without arguments to check every loaded rule, including whether your overrides were accepted; it exits with status 1 when there are errors.
+**Invalid rules are not loaded.** A rule with any error (no `path` or `match`, a path that is too broad, an action on a protected rule, a command that isn't a bare program name, shell syntax in a command) is reported and left out, so it neither cleans nor protects anything. A file with a value SpaceKit can't read, such as an unknown safety level or schedule, doesn't parse and loads none of its rules. Run `spacekit rules validate` without arguments to check every loaded rule, including whether your overrides were accepted, or give it files to check them the way loading them would; it exits with status 1 when there are errors.
 
 ## Overlaps
 

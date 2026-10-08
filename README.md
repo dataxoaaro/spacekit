@@ -22,10 +22,10 @@ SpaceKit **cannot delete your disk**, a volume, your home folder, your personal 
 Requirements: macOS 15 or later, Xcode 16+ / Swift 6 to build.
 
 ```sh
-make app            # → build/SpaceKit.app (includes the CLI and the rule library)
+make app            # → build/SpaceKit.app (includes the CLI; the rule library is compiled in)
 open build/SpaceKit.app
 
-make install        # CLI → ~/.local/bin/spacekit, rules → ~/.local/share/spacekit/rules
+make install        # CLI → ~/.local/bin/spacekit (the built-in rules are part of the binary)
 spacekit doctor     # checks permissions, config, rules and the background agent
 make uninstall      # removes them again; stops the background agent only if it runs this CLI, not the app's
 ```

@@ -268,6 +268,30 @@ struct WorkspaceTests {
         #expect(workspace.snapshot.tree === newer)
     }
 
+    @Test("Only the latest analysis records a History snapshot")
+    func supersededAnalysisRecordsNoHistory() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let held = HeldAnalysis()
+        let workspace = Workspace(deliver: recorder.deliver, analyze: held.analyze)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        held.started.wait()
+
+        workspace.show(try fixture.scanHome())
+        // Lands once the superseded analysis stops reading, which is after it would have recorded its snapshot.
+        workspace.apply(CleanupReport(dryRun: false), context: fixture.context)
+        held.release.signal()
+        #expect(recorder.wait { !$0.changes.isEmpty })
+        #expect(fixture.context.history.lastSnapshotDate() == nil)
+
+        workspace.analyze(fixture.context)
+        held.started.wait()
+        held.release.signal()
+        #expect(recorder.wait { !$0.analysed.isEmpty })
+        #expect(fixture.context.history.lastSnapshotDate() != nil)
+    }
+
     @Test("A scan shown after a cleanup isn't changed by that cleanup's removals, still waiting for the old tree")
     func newScanDropsQueuedRemovals() throws {
         let fixture = try Fixture()

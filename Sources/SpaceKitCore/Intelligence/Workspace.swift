@@ -105,8 +105,10 @@ public final class Workspace: Sendable {
         }
         let analyze = analyzeTree
         Thread.detachNewThread { [self] in
-            let outcome = Result { () throws -> AnalysisResult in
+            let outcome = Result { () throws -> AnalysisResult? in
                 let analysis = try analyze(context, tree, progress)
+                // A newer scan or analysis replaced this one, so its findings are never shown nor recorded.
+                guard state.withLock({ $0.analysisRun == run }) else { return nil }
                 // History reads the tree too, so it's recorded while this analysis still counts as a reader.
                 try? context.history.recordSnapshot(analysis: analysis)
                 return context.result(of: analysis)
@@ -116,12 +118,13 @@ public final class Workspace: Sendable {
         return progress
     }
 
-    private func finishAnalysis(_ run: Int, _ outcome: Result<AnalysisResult, any Error>) {
+    /// `outcome` is nil for an analysis that was replaced before it finished.
+    private func finishAnalysis(_ run: Int, _ outcome: Result<AnalysisResult?, any Error>) {
         state.withLock { state in
             state.readers -= 1
             guard state.analysisRun == run else { return }
             state.analysisProgress = nil
-            if case .success(let result) = outcome { state.result = result }
+            if case .success(let result?) = outcome { state.result = result }
         }
         deliver { [self] in
             // Removals that waited for this analysis are applied to its result first.

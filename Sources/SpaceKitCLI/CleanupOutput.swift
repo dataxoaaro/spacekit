@@ -26,6 +26,9 @@ enum CleanupOutput {
         var commands: [(PlannedCommand, SafetyVerdict)]
         var manualSteps: [String]
         var useTrash: Bool
+        /// What the rows that may run add up to: the review's selection, or what `context` lets run without anyone
+        /// accepting a warning. Blocked rows never count.
+        var totalBytes: UInt64
 
         /// The review as a person sees it, so the warnings they accept are exactly the ones printed.
         init(_ review: CleanupReview) {
@@ -33,6 +36,7 @@ enum CleanupOutput {
             commands = review.commands.map { ($0.subject, $0.verdict) }
             manualSteps = review.manualSteps
             useTrash = review.useTrash
+            totalBytes = review.itemBytes &+ review.commandBytes
         }
 
         /// The plan with the verdicts `context` gets, such as an automatic run's.
@@ -41,12 +45,12 @@ enum CleanupOutput {
             commands = plan.commands.map { ($0, executor.verdict(for: $0, context: context)) }
             manualSteps = plan.manualSteps
             useTrash = plan.useTrash
+            // An automatic run acknowledges nothing, so only what the guard allows outright runs.
+            func runs(_ verdict: SafetyVerdict) -> Bool { context.isAutomatic ? verdict.decision == .allow : !verdict.isBlocked }
+            totalBytes =
+                items.filter { runs($0.1) }.reduce(0) { $0 &+ $1.0.size }
+                &+ commands.filter { runs($0.1) }.reduce(0) { $0 &+ $1.0.estimatedBytes }
         }
-    }
-
-    /// The review as the preview prints it: every row with every one of the guard's reasons.
-    static func planLines(_ review: CleanupReview) -> [String] {
-        planLines(Verdicts(review))
     }
 
     /// One line per item and command with its verdict, followed by the guard's reasons for anything that isn't
@@ -138,7 +142,7 @@ enum CleanupOutput {
             try Output.json(RunJSON(plan: planJSON))
             return nil
         }
-        Output.emit([heading.bold] + planLines(review), toStandardError: json)
+        Output.emit([heading.bold] + planLines(Verdicts(review)), toStandardError: json)
         guard !review.isEmpty else {
             Output.emit(["Nothing in this plan can be removed.".dim], toStandardError: json)
             // Here `json` comes with `--yes`: the result says nothing ran.
@@ -146,10 +150,12 @@ enum CleanupOutput {
             return nil
         }
         Output.emit([""] + summaryLines(review), toStandardError: json)
+        // What it cleans and where it goes is on the lines above; the question says when yes accepts the warnings.
+        let question = "\n\(verb) now" + (review.needsAcknowledgement ? ", accepting the warnings above?" : "?")
         let acceptingWarnings: Bool
         if acknowledgement.yes {
             acceptingWarnings = acknowledgement.acceptWarnings
-        } else if interactive && Output.confirm("\n" + question(review, verb: verb)) {
+        } else if interactive && Output.confirm(question) {
             acceptingWarnings = true
         } else {
             let warnings = review.needsAcknowledgement ? " Items with warnings also need --accept-warnings." : ""
@@ -179,12 +185,6 @@ enum CleanupOutput {
     static func summaryLines(_ review: CleanupReview) -> [String] {
         let disposal = review.disposalSummary.map { review.disposal.isPermanent ? $0.bold.fg(ANSI.protected) : $0.bold }
         return [disposal, review.commandSummary].compactMap { $0 }
-    }
-
-    /// "Clean now?", saying when the answer accepts the printed warnings. What it cleans and where it goes is on the
-    /// lines above (`summaryLines`).
-    static func question(_ review: CleanupReview, verb: String) -> String {
-        "\(verb) now" + (review.needsAcknowledgement ? ", accepting the warnings above" : "") + "?"
     }
 }
 
@@ -227,7 +227,7 @@ struct PlanJSON: Encodable {
 
     init(_ verdicts: CleanupOutput.Verdicts) {
         useTrash = verdicts.useTrash
-        totalBytes = verdicts.items.reduce(0) { $0 &+ $1.0.size } &+ verdicts.commands.reduce(0) { $0 &+ $1.0.estimatedBytes }
+        totalBytes = verdicts.totalBytes
         items = verdicts.items.map { item, verdict in
             Item(path: item.path, kind: item.kind.rawValue, bytes: item.size, rule: item.ruleID, verdict: VerdictJSON(verdict))
         }

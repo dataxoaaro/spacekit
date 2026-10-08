@@ -135,8 +135,8 @@ extension CleanupExecutor {
         for name in names {
             var st = stat()
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
-            guard !CleanupExecutor.changed(st, after: scanStarted) else { continue }
             let file = target.entry(name, stat: st, namedIn: item.path)
+            guard !file.changed(after: scanStarted) else { continue }
             guard CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), reviewed: reviewed) == nil else {
                 continue
             }
@@ -173,12 +173,6 @@ extension CleanupExecutor {
         if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }
         if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
         return .removed(bytes: totalFreed, trashedTo: method == .trash ? trashLocations.first.map(PathUtil.parent) : nil)
-    }
-
-    /// Modified or had its status changed (created, renamed into place) after `date`.
-    static func changed(_ st: stat, after date: Date) -> Bool {
-        func time(_ ts: timespec) -> Date { Date(timeIntervalSince1970: Double(ts.tv_sec) + Double(ts.tv_nsec) / 1e9) }
-        return time(st.st_mtimespec) > date || time(st.st_ctimespec) > date
     }
 
     /// What an item holds at removal time. `size` is all of it, charged to the budget; `freed` leaves out files

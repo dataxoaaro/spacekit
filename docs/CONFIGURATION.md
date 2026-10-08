@@ -126,7 +126,7 @@ Items already in the Trash can only be deleted. Automatic runs delete them only 
 |---|---|
 | `observe` | Notifies you when the matched total is above `when.sizeAbove`. Removes nothing. |
 | `suggest` | Prepares a cleanup plan and notifies you. Approve it in the app (Automation → Waiting for your approval) or with `spacekit suggestions approve <id>`, which previews it; add `--yes` to run it (and `--accept-warnings` for items with warnings). Approving evaluates the job again first and drops items that no longer meet its conditions, and records the job's last run. Afterwards the suggestion is dismissed when nothing in it is left to clean, also when nothing in it still met the job's conditions and nothing ran; otherwise it stays, narrowed to what's left, with the problems the run hit. |
-| `automatic` | Cleans within the safety limits: 🟢 items only unless `includeReview`, inside the rule's locations, under `maxBytesPerRun`. Anything it removes that isn't 🟢 goes to the Trash. Notifies you whenever it removed something or left something undone. |
+| `automatic` | Cleans within the safety limits: 🟢 items only unless `includeReview`, inside the rule's locations, under `maxBytesPerRun`. Anything it removes that isn't 🟢 goes to the Trash. A tool command runs only when its program and every folder on the way to it aren't yours to change, so Homebrew and per-user tools (`brew`, `docker`, `go`, `cargo`) are skipped; run the job by hand for those. Notifies you whenever it removed something or left something undone. |
 
 **Notifications.** `automation.notifications: false` silences observe and suggest runs. Automatic runs notify whenever they removed something, or skipped or failed an item or tool command, whatever the setting, because nobody watched them run.
 

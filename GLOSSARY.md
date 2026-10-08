@@ -28,6 +28,8 @@
 
 **Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH, HOME, user, locale and TMPDIR (`Shell.RunKind`). _Avoid_: sanitized env.
 
+**Changeable program**: a tool whose file, or a folder or symlink on the way to it, the person owns or can write (`CommandTrust.changeablePart`), such as anything in `~/.local/bin` or a Homebrew prefix they own; automatic runs don't start one. _Avoid_: user-writable tool, untrusted binary.
+
 **Process runner**: the port the executor finds and runs tools through (`ProcessRunner`); `SystemProcessRunner` starts real processes, tests use a recording runner. _Avoid_: shell (tools never run in one).
 
 **Local Docker endpoint**: a Docker context whose endpoint is a unix socket on this Mac (Docker Desktop, OrbStack, Colima); `docker` rule commands run only against one, and `docker builder` commands only when the selected buildx builder is a `docker` or `docker-container` builder on one. _Avoid_: local daemon.

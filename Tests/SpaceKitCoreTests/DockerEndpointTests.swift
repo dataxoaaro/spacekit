@@ -62,6 +62,8 @@ struct DockerEndpointTests {
         let runner = RecordingRunner(installed: ["docker"], in: tree) { docker.respond($0) }
         var executor = sandboxExecutor(tree, rules: [rule])
         executor.runner = runner
+        // The stand-in docker is in the test's own folder, which an automatic run would refuse; that isn't tested here.
+        executor.changeable = { _ in nil }
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: rule.id, arguments: command, estimatedBytes: 1)])
         let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         return (report.commands.first?.outcome, runner)

@@ -24,6 +24,9 @@ extension CleanupExecutor {
         }
         for reason in commandTrust.refusals(command, rule: rule, context: context) { verdict.raise(.block, reason) }
         if let refusal = commandTrust.programRefusal(command, rule: rule, at: executable, runner: runner) { verdict.raise(.block, refusal) }
+        if let refusal = commandTrust.automaticRefusal(at: executable, context: context, changeable: changeable) {
+            verdict.raise(.block, refusal)
+        }
         if let warning = commandTrust.ownRuleWarning(command, rule: rule, context: context, at: executable) {
             verdict.raise(.confirm, warning)
         }

@@ -132,6 +132,9 @@ public struct CleanupExecutor: Sendable {
     var keepsInodes: @Sendable (Int32) -> Bool = SafeRemoval.keepsInodes(on:)
     /// Finds and runs tools. Tests replace it with a recorder, so trust and budget checks run without real tools.
     var runner: any ProcessRunner = SystemProcessRunner()
+    /// What the person could change on the way to a tool, which keeps it out of automatic runs. Tests can't make files
+    /// they don't own, so they replace it to stand in the system's folders.
+    var changeable: @Sendable (String) -> String? = CommandTrust.changeablePart(of:)
     /// Reads the mount table at the start of each run. The guard keeps the table it was built with, and a context
     /// (with its guard) lives as long as the app or TUI does; a run reads it again so a volume mounted since is still a
     /// mount point the guard refuses. `nil` keeps the guard's own table: tests hand the guard theirs.

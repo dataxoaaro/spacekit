@@ -65,11 +65,15 @@ struct CommandTrustTests {
         return rule
     }
 
-    func executor(_ tree: TempTree, rules: [Rule], runner: RecordingRunner, budget: ByteCount = .gb(100), allowed: Set<String> = [])
-        -> CleanupExecutor
-    {
+    /// `changeable`: which part of a program's path the person could change; by default none, since a test's stand-in
+    /// programs are in its own folder and an automatic run would skip them.
+    func executor(
+        _ tree: TempTree, rules: [Rule], runner: RecordingRunner, budget: ByteCount = .gb(100), allowed: Set<String> = [],
+        changeable: @escaping @Sendable (String) -> String? = { _ in nil }
+    ) -> CleanupExecutor {
         var executor = sandboxExecutor(tree, rules: rules, budget: budget, allowed: allowed)
         executor.runner = runner
+        executor.changeable = changeable
         return executor
     }
 
@@ -350,6 +354,53 @@ struct CommandTrustTests {
         let review = CleanupReview(plan, executor: executor(tree, rules: [tool], runner: runner, allowed: ["cleanup-tool"]))
         #expect(review.commands.first?.verdict.isBlocked == true)
         #expect(review.commands.first?.verdict.reasons.contains { $0.contains("'sh'") } == true)
+    }
+
+    /// The agent runs with Full Disk Access and nobody watching. A program in a folder the person can change, such as
+    /// `~/.local/bin` or a Homebrew prefix they own, can be swapped by any program of theirs for its own.
+    @Test("Automatic runs start a tool only from files and folders you can't change; your own folder is skipped")
+    func automaticRunsNeedFixedPrograms() throws {
+        let tree = try TempTree()
+        try program(tree, "bin/tidy")
+        let cache = tree.path("home/.tool/cache")
+        let tidy = rule("tidy", builtin: true, command: ["tidy", "--all"])
+        let du = rule("du", builtin: true, command: ["du", "-s", cache])
+        let plan = CleanupPlan(commands: [
+            PlannedCommand(ruleID: "tidy", arguments: ["tidy", "--all"], estimatedBytes: 1),
+            PlannedCommand(ruleID: "du", arguments: ["du", "-s", cache], estimatedBytes: 1),
+        ])
+        // The file system as it is: the test's own folder is yours, /usr/bin is the system's.
+        let runner = RecordingRunner(searchPath: [tree.path("bin"), "/usr/bin"])
+        let executor = executor(
+            tree, rules: [tidy, du], runner: runner, allowed: ["tidy", "du"], changeable: CommandTrust.changeablePart(of:))
+        let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
+        let reason = skipReason(report.commands.first?.outcome) ?? "ran"
+        // The temporary folder the test's own folder is in is already yours.
+        let yours = try #require(CommandTrust.changeablePart(of: tree.path("bin/tidy")))
+        #expect(tree.path("bin/tidy").hasPrefix(yours))
+        #expect(reason.contains("\(yours) can be replaced by any program of yours, so 'tidy' runs only when you start it"), "\(reason)")
+        #expect(report.commands.last?.outcome.isRemoved == true)
+        #expect(runner.calls == [["du", "-s", cache]])
+
+        // By hand the person starts it themselves, from wherever it is.
+        let manual = manualRun(plan, with: executor)
+        #expect(manual.commands.allSatisfy { skipReason($0.outcome) == nil })
+    }
+
+    @Test("A symlink or a folder above a program that you can change makes it changeable")
+    func changeablePaths() throws {
+        let tree = try TempTree()
+        try program(tree, "mine/tool")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("mine/to-du"), withDestinationPath: "/usr/bin/du")
+        #expect(CommandTrust.changeablePart(of: "/usr/bin/du") == nil)
+        #expect(CommandTrust.changeablePart(of: "/bin/sh") == nil)
+        #expect(CommandTrust.changeablePart(of: tree.path("mine/tool")).map { tree.path("mine/tool").hasPrefix($0) } == true)
+        // The symlink sits in a folder of yours: you can point it elsewhere.
+        #expect(CommandTrust.changeablePart(of: tree.path("mine/to-du")) != nil)
+        // A system symlink to a file of yours leads to something you can change.
+        #expect(CommandTrust.changeablePart(of: "/var/tmp") == "/private/var/tmp")
+        // What isn't there can't be told apart from what is: refused.
+        #expect(CommandTrust.changeablePart(of: "/usr/bin/no-such-tool-for-spacekit") == "/usr/bin/no-such-tool-for-spacekit")
     }
 
     @Test("What a command frees is charged to the run's budget; the next command that doesn't fit isn't started")

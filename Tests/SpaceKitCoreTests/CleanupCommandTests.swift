@@ -90,7 +90,9 @@ struct CleanupCommandTests {
         let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["du"])
         #expect(isSkipped(outcome(user.execute(AutomaticPlan(plan, automation: automatic), dryRun: true)), mentioning: "automatic"))
         #expect(wouldRun(outcome(manualRun(plan, with: user, dryRun: true))))
-        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)], allowed: ["du"])
+        var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)], allowed: ["du"])
+        // Where `du` is found on this Mac's search path isn't what this test is about.
+        builtin.changeable = { _ in nil }
         #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: automatic), dryRun: true))))
     }
 
@@ -109,7 +111,9 @@ struct CleanupCommandTests {
         // swift is both a code launcher and on the built-in trusted list: built-in rules keep using it.
         let swift = ["swift", "--version"]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: swift, estimatedBytes: 1)])
-        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
+        var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
+        // A toolchain's swift found first on this Mac's search path may be in a folder of yours; not what this tests.
+        builtin.changeable = { _ in nil }
         #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: true))))
     }
 

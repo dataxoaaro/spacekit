@@ -15,7 +15,7 @@ SpaceKit is an open-source disk space tool for developers: a native macOS app, a
 
 ## Safety
 
-SpaceKit **cannot delete your disk**, a volume, your home folder, your personal folders, system folders, credentials or git repositories, and it never removes anything without a preview. Every removal, from every front end, goes through one guard that re-checks each item immediately before acting. Automation only touches what a rule recognises (regenerable data, unless a job opts in to more) or a folder you listed in the job, within a per-run byte budget. It deletes only regenerable data directly; everything else it removes goes to the Trash. By default everything goes to the Trash. If your config file can't be read, nothing is removed until it's fixed. Read the full guidelines in **[docs/SAFETY.md](docs/SAFETY.md)**.
+SpaceKit **cannot delete your disk**, a volume, your home folder, your personal folders, system folders, credentials or git repositories, and it never removes anything without a preview. Every removal, from every front end, goes through one guard that re-checks each item immediately before acting. Automation only touches what a rule recognises (regenerable data, unless a job opts in to more) or a folder you listed in the job, within a per-run byte budget, and starts a tool only from system folders you can't change (Homebrew and per-user tools run when you start the job yourself). It deletes only regenerable data directly; everything else it removes goes to the Trash. By default everything goes to the Trash. If your config file can't be read, nothing is removed until it's fixed. Read the full guidelines in **[docs/SAFETY.md](docs/SAFETY.md)**.
 
 ## Install
 

@@ -37,7 +37,7 @@ struct AutomationView: View {
         .navigationTitle("Automation")
         .onAppear { model.refreshAutomation() }
         .alert(
-            Text("“\(model.skippedRun?.run.evaluation.job.name ?? "")” would skip"),
+            Text("“\(model.skippedRun?.run.jobName ?? "")” would skip"),
             isPresented: Binding(get: { model.skippedRun != nil }, set: { if !$0 { model.skippedRun = nil } }),
             presenting: model.skippedRun
         ) { skipped in

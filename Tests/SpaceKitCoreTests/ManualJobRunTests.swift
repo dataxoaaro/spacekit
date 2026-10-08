@@ -93,6 +93,7 @@ struct ManualJobRunTests {
         let executor = fixture.runner.executor
 
         #expect(run.skipReason?.hasSuffix("is below the 1.0 GB threshold") == true)
+        #expect(run.jobName == "Build")
         #expect(run.canForce)
         #expect(run.plan == nil)
 

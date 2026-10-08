@@ -95,11 +95,6 @@ extension AppModel {
 
     /// Takes what a cleanup removed off the cleanup list.
     private func forgetRemoved(_ removals: [Removal]) {
-        let removedPaths = Set(removals.filter { $0.kind != .looseFiles && !$0.partial }.map(\.path))
-        guard !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) else { return }
-        cleanupList.removeAll { item in
-            removedPaths.contains { PathUtil.isAncestorOrEqual($0, of: item.path) }
-                || (item.kind == .looseFiles && removals.contains { $0.kind == .looseFiles && $0.path == item.path })
-        }
+        cleanupList.removeAll { item in removals.contains { $0.takesAll(of: item.path, kind: item.kind) } }
     }
 }

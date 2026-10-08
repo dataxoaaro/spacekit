@@ -77,6 +77,9 @@ public struct ManualJobRun: Sendable {
             evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: false, candidate: plan, runner: runner)
     }
 
+    /// The name of the job that runs, for front ends to show.
+    public var jobName: String { evaluation.job.name }
+
     /// Why the run would do nothing now, or `nil` when its plan is ready for review.
     public var skipReason: String? {
         if candidate.isEmpty {

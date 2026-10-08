@@ -42,10 +42,10 @@ extension AppModel {
         } else if let outcome = run.settleWithNothingLeft() {
             finishJobRun(outcome)
             if outcome.saveErrors.isEmpty {
-                errorMessage = "\(run.evaluation.job.name): \(run.skipReason ?? ""), so the suggestion was dismissed."
+                errorMessage = "\(run.jobName): \(run.skipReason ?? ""), so the suggestion was dismissed."
             }
         } else {
-            errorMessage = "\(run.evaluation.job.name): \(run.skipReason ?? "")."
+            errorMessage = "\(run.jobName): \(run.skipReason ?? "")."
         }
     }
 

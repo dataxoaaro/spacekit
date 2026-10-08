@@ -168,6 +168,22 @@ struct LooseFilesUpdateTests {
         #expect(looseSize(after) == looseSize(before)! - top)
     }
 
+    @Test("A removal takes all of an item at or below the folder it removed, or the same folder's loose files")
+    func takesAll() {
+        let folder = Removal(path: "/c/a", kind: .directory, bytes: 1)
+        let loose = Removal(path: "/c", kind: .looseFiles, bytes: 1)
+        let partial = Removal(path: "/c/b", kind: .directory, bytes: 1, partial: true)
+
+        #expect(folder.takesAll(of: "/c/a", kind: .directory))
+        #expect(folder.takesAll(of: "/c/a/x", kind: .looseFiles))
+        #expect(!folder.takesAll(of: "/c", kind: .looseFiles))
+        #expect(!folder.takesAll(of: "/c/ab", kind: .directory))
+        #expect(loose.takesAll(of: "/c", kind: .looseFiles))
+        #expect(!loose.takesAll(of: "/c", kind: .directory))
+        #expect(!loose.takesAll(of: "/c/a", kind: .looseFiles))
+        #expect(!partial.takesAll(of: "/c/b", kind: .directory))
+    }
+
     @Test("Removing a file deeper down doesn't touch the loose-files item")
     func deeperFile() throws {
         let (tree, before) = try analysis()

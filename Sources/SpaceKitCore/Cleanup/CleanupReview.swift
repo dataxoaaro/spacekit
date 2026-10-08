@@ -104,6 +104,17 @@ public struct CleanupReview: Sendable {
         return review
     }
 
+    /// This review with the choices the person made in `previous`, a review of the same plan made before (with another
+    /// executor, after a settings change): the rows they unticked stay unticked, and the Trash choice stays where the
+    /// person may still choose it. Rows `previous` didn't have start ticked.
+    public func keepingChoices(of previous: CleanupReview) -> CleanupReview {
+        var review = self
+        let keys = Set(items.map(\.key) + commands.map(\.key))
+        review.unticked = previous.unticked.intersection(keys)
+        if canChooseTrash { review.useTrash = previous.useTrash }
+        return review
+    }
+
     public var selectedItems: [CleanupItem] { items.filter(isIncluded).map(\.subject) }
     public var selectedCommands: [PlannedCommand] { commands.filter(isIncluded).map(\.subject) }
     public var isEmpty: Bool { selectedItems.isEmpty && selectedCommands.isEmpty }

@@ -51,38 +51,8 @@ struct CleanupSheet: View {
 
     private var reviewPhase: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(pending.title).font(.title2.weight(.semibold))
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    if !selectedItems.isEmpty {
-                        Text((review?.itemBytes ?? 0).formattedBytes).font(.title2.weight(.semibold)).monospacedDigit()
-                    }
-                    if !selectedCommands.isEmpty {
-                        Text("up to \((review?.commandBytes ?? 0).formattedBytes) via tools")
-                            .font(selectedItems.isEmpty ? .title3.weight(.semibold) : .callout)
-                            .foregroundStyle(selectedItems.isEmpty ? .primary : .secondary)
-                    }
-                }
-            }
-            List {
-                ForEach(review?.items ?? []) { row in
-                    CleanupRow(
-                        item: row.subject, verdict: row.verdict, rule: row.subject.ruleID.flatMap { model.library.rule(id: $0) },
-                        isIncluded: inclusion(row))
-                }
-                ForEach(review?.commands ?? []) { row in
-                    CommandRow(command: row.subject, verdict: row.verdict, isIncluded: inclusion(row))
-                }
-                ForEach(pending.plan.manualSteps, id: \.self) { step in
-                    Label(step, systemImage: "hand.point.right").font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            .listStyle(.bordered(alternatesRowBackgrounds: true))
-            .overlay {
-                if review == nil { ProgressView().controlSize(.small) }
-            }
-
+            reviewHeader
+            reviewList
             if pending.plan.items.isEmpty {
                 Label("The tool decides what to remove; SpaceKit measures what was freed afterwards.", systemImage: "terminal")
                     .font(.callout).foregroundStyle(.secondary)
@@ -100,14 +70,57 @@ struct CleanupSheet: View {
                 Toggle("I've read the warnings above and want to remove these items", isOn: $acknowledged)
                     .toggleStyle(.checkbox)
             }
-            HStack {
-                Text("Every item is checked again right before it's removed.").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(buttonTitle, role: .destructive) { run() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled((review?.isEmpty ?? true) || (needsAcknowledgement && !acknowledged))
+            reviewButtons
+        }
+    }
+
+    /// The title, with what the selection frees.
+    private var reviewHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(pending.title).font(.title2.weight(.semibold))
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                if !selectedItems.isEmpty {
+                    Text((review?.itemBytes ?? 0).formattedBytes).font(.title2.weight(.semibold)).monospacedDigit()
+                }
+                if !selectedCommands.isEmpty {
+                    Text("up to \((review?.commandBytes ?? 0).formattedBytes) via tools")
+                        .font(selectedItems.isEmpty ? .title3.weight(.semibold) : .callout)
+                        .foregroundStyle(selectedItems.isEmpty ? .primary : .secondary)
+                }
             }
+        }
+    }
+
+    /// Every item and command with its verdict and tick box, then the manual steps.
+    private var reviewList: some View {
+        List {
+            ForEach(review?.items ?? []) { row in
+                CleanupRow(
+                    item: row.subject, verdict: row.verdict, rule: row.subject.ruleID.flatMap { model.library.rule(id: $0) },
+                    isIncluded: inclusion(row))
+            }
+            ForEach(review?.commands ?? []) { row in
+                CommandRow(command: row.subject, verdict: row.verdict, isIncluded: inclusion(row))
+            }
+            ForEach(pending.plan.manualSteps, id: \.self) { step in
+                Label(step, systemImage: "hand.point.right").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .listStyle(.bordered(alternatesRowBackgrounds: true))
+        .overlay {
+            if review == nil { ProgressView().controlSize(.small) }
+        }
+    }
+
+    private var reviewButtons: some View {
+        HStack {
+            Text("Every item is checked again right before it's removed.").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+            Button(buttonTitle, role: .destructive) { run() }
+                .keyboardShortcut(.defaultAction)
+                .disabled((review?.isEmpty ?? true) || (needsAcknowledgement && !acknowledged))
         }
     }
 
@@ -206,12 +219,12 @@ struct CleanupSheet: View {
     private func run() {
         guard let review else { return }
         // The checkbox is the person's one acknowledgement for the whole plan, of every warning listed above.
-        let plan = review.acknowledge(acceptingWarnings: acknowledged)
+        let reviewed = review.acknowledge(acceptingWarnings: acknowledged)
         phase = .running
-        progress = (0, plan.plan.items.count + plan.plan.commands.count, "")
+        progress = (0, reviewed.plan.items.count + reviewed.plan.commands.count, "")
         Task {
             let report = await model.execute(
-                plan, run: pending.run,
+                reviewed, run: pending.run,
                 onProgress: { done, total, current in
                     Task { @MainActor in progress = (done, total, current) }
                 })
@@ -219,12 +232,13 @@ struct CleanupSheet: View {
                 phase = .done(report)
                 return
             }
-            // Reviewed under settings that are no longer in force: review it again under the current ones, from scratch.
+            // Reviewed under settings that are no longer in force: review it again under the current ones. The verdicts
+            // and the acknowledgement start over; the rows the person unticked stay unticked.
             self.review = nil
             acknowledged = false
             reviewedAgain = true
             phase = .review
-            self.review = await model.cleanupReview(of: pending.plan)
+            self.review = await model.cleanupReview(of: pending.plan).keepingChoices(of: review)
         }
     }
 }

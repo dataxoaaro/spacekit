@@ -243,6 +243,29 @@ struct CleanupReviewTests {
         #expect(narrowed.setting(keepB, included: true).selectedItems.count == 2)
     }
 
+    @Test("A review made again keeps the rows the person unticked and their Trash choice")
+    func reviewAgainKeepsChoices() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/a/x", bytes: 1_000)
+        try tree.file("home/Projects/b/y", bytes: 1_000)
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: tree.path("home/Projects/a"), size: 2_000),
+                CleanupItem(path: tree.path("home/Projects/b"), size: 1_000),
+            ], useTrash: true)
+        let first = CleanupReview(plan, executor: sandboxExecutor(tree))
+        let keepB = try #require(first.items.first { $0.subject.path == tree.path("home/Projects/b") })
+        let chosen = first.setting(keepB, included: false).usingTrash(false)
+
+        // The settings changed: another executor reviews the same plan.
+        let again = CleanupReview(plan, executor: sandboxExecutor(tree)).keepingChoices(of: chosen)
+
+        #expect(again.selectedItems.map(\.path) == [tree.path("home/Projects/a")])
+        #expect(!again.useTrash)
+        let row = try #require(again.items.first { $0.id == keepB.id })
+        #expect(again.setting(row, included: true).selectedItems.count == 2)
+    }
+
     @Test("Blocked rows can't be ticked and never reach the executor")
     func blockedRowsNeverRun() throws {
         let tree = try TempTree()

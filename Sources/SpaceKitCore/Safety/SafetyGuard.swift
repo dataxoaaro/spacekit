@@ -140,10 +140,9 @@ public struct SafetyGuard: Sendable {
         }
         mountKeys = SafetyGuard.mountKeys(volumes)
         protectedPatterns = self.protectedRules.map { rule in
-            ProtectedPattern(
-                rule: rule,
-                patterns: rule.paths.map { PathUtil.comparisonKey(PathUtil.expand($0, home: home)) },
-                names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
+            let patterns = rule.paths.flatMap { path in homes.map { PathUtil.comparisonKey(PathUtil.expand(path, home: $0)) } }
+            return ProtectedPattern(
+                rule: rule, patterns: SafetyGuard.unique(patterns), names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
         }
     }
 

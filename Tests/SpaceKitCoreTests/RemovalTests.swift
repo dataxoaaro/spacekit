@@ -324,13 +324,17 @@ struct SafetyGuardTargetTests {
         #expect(guardian.evaluate(large, rule: nil, context: manual).reasons.contains { $0.contains("of the disk's used space") })
     }
 
-    @Test("A symlinked home is protected at its real location by the built-in lists and your own")
+    @Test("A symlinked home is protected at its real location by the built-in lists, protected rules and your own")
     func symlinkedHome() throws {
         let tree = try TempTree()
         for folder in ["real/Documents", "real/.ssh", "real/Library/Caches/app", "real/Downloads"] { try tree.directory(folder) }
         try FileManager.default.createSymbolicLink(atPath: tree.path("home"), withDestinationPath: tree.path("real"))
+        let credentials = Rule(
+            id: "credentials", name: "Credentials", paths: ["~/.netrc", "~/.docker/config.json"], safety: SafetySpec(level: .protected),
+            action: ActionSpec())
         let guardian = SafetyGuard(
-            home: tree.path("home"), userProtectedPaths: ["~/Work/archive"], volumes: emptyVolumes, isRunningAsRoot: false)
+            home: tree.path("home"), userProtectedPaths: ["~/Work/archive"], protectedRules: [credentials], volumes: emptyVolumes,
+            isRunningAsRoot: false)
         func verdict(_ relative: String) -> SafetyVerdict {
             let target = RemovalTarget.at(
                 tree.path(relative), home: guardian.home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
@@ -341,6 +345,8 @@ struct SafetyGuardTargetTests {
         #expect(verdict("real/.ssh/id_ed25519").isBlocked)
         #expect(verdict("real/Library/Caches").isBlocked)
         #expect(verdict("real/Work/archive/2020").isBlocked, "a protected path that doesn't exist yet, under the real home")
+        #expect(verdict("real/.netrc").isBlocked, "a protected rule's path, under the real home")
+        #expect(verdict("real/.docker/config.json").isBlocked)
         #expect(verdict("real/Downloads/x.dmg").reasons == ["This is personal data, not a cache"])
         #expect(!verdict("real/Library/Caches/app").isBlocked)
     }

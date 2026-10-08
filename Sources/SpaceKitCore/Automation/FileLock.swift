@@ -8,8 +8,8 @@ import Foundation
 enum FileLock {
     static func withLock<T>(for file: String, _ body: () throws -> T) throws -> T {
         let lockPath = file + ".lock"
-        try FileManager.default.createDirectory(atPath: PathUtil.parent(file), withIntermediateDirectories: true)
-        let fd = open(lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        try LockedFile.createDirectory(PathUtil.parent(file))
+        let fd = LockedFile.openForWriting(lockPath, flags: O_RDWR)
         guard fd >= 0 else { throw error(lockPath) }
         defer { close(fd) }
         while flock(fd, LOCK_EX) != 0 {

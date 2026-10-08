@@ -46,4 +46,58 @@ struct FileTrustTests {
         #expect(chmod(file, 0o644) == 0)
         #expect(RuleLibrary.load(builtinDirectory: nil, directories: [tree.path("rules")]).rule(id: "mine.cache") != nil)
     }
+
+    static func mode(_ path: String) -> mode_t {
+        var st = stat()
+        stat(path, &st)
+        return st.st_mode & 0o7777
+    }
+
+    @Test("SpaceKit gives its own config, backup, lock and state files fixed modes, whatever the umask")
+    func modesIgnoreUmask() throws {
+        let tree = try TempTree()
+        let file = tree.path("config/spacekit/config.yaml")
+        let journal = tree.path("state/SpaceKit/journal.jsonl")
+        let store = ConfigStore(file: file)
+        // Under umask 002 the defaults would make the config group-writable and refused on the next load. The umask
+        // is process-wide, and 002 would get configs that tests running alongside write refused too, so this uses
+        // 077 instead: modes that come from the umask show up just the same (0600 and 0700).
+        let previous = umask(0o077)
+        let written = Result {
+            try store.initialize()
+            try store.update { $0.ui.mapDepth = 3 }
+            try Journal(file: journal).append([JournalEntry(path: "/x", bytes: 1, method: .delete, automatic: false)])
+            try SpaceKitPaths.writeRuleFile("rules: []\n", to: tree.path("config/spacekit/rules/mine.yaml"))
+        }
+        umask(previous)
+        try written.get()
+
+        let folders = ["config", "config/spacekit", "config/spacekit/rules", "state", "state/SpaceKit"].map(tree.path)
+        for folder in folders {
+            #expect(FileTrustTests.mode(folder) == 0o755, "\(folder)")
+        }
+        for created in [file, file + ".bak", file + ".lock", journal, tree.path("config/spacekit/rules/mine.yaml")] {
+            #expect(FileTrustTests.mode(created) == 0o644, "\(created)")
+        }
+        #expect(throws: Never.self) { try store.load() }
+    }
+
+    @Test("Built-in rule files may belong to whoever owns the running program; other rule files may not")
+    func builtinRulesOwnedByInstaller() throws {
+        let tree = try TempTree()
+        let file = tree.path("rules/builtin.yaml")
+        try tree.file("rules/builtin.yaml", bytes: 10)
+        #expect(chmod(file, 0o644) == 0)
+        let installer = getuid()
+        // As another account would see it: the file belongs to the installer, who also owns the program.
+        let user: uid_t = installer &+ 4_242
+        let program = tree.path("bin/spacekit")
+        try tree.file("bin/spacekit", bytes: 10)
+
+        #expect(FileTrust.problem(with: file, owners: FileTrust.builtinOwners(user: user, executable: program)) == nil)
+        #expect(FileTrust.problem(with: file, owners: FileTrust.owners(user: user)) == "is owned by another user")
+
+        #expect(chmod(file, 0o664) == 0)
+        #expect(FileTrust.problem(with: file, owners: FileTrust.builtinOwners(user: user, executable: program)) != nil)
+    }
 }

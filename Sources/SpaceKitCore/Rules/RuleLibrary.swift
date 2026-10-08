@@ -62,9 +62,10 @@ public struct RuleLibrary: Sendable {
             sources.append((directory, false))
         }
 
+        let builtinOwners = FileTrust.builtinOwners()
         for (directory, isBuiltin) in sources {
             for file in yamlFiles(in: directory) {
-                if let problem = FileTrust.problem(with: file) {
+                if let problem = FileTrust.problem(with: file, owners: isBuiltin ? builtinOwners : FileTrust.owners()) {
                     issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
                     continue
                 }

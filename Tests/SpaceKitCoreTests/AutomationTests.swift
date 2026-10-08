@@ -37,10 +37,7 @@ struct RunnerFixture {
     }
 
     var runner: JobRunner {
-        let guardian = SafetyGuard(home: tree.path("home"), protectedRules: rules, volumes: emptyVolumes, isRunningAsRoot: false)
-        var executor = CleanupExecutor(safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules)
-        executor.trash = sandboxTrash(home: tree.path("home"))
-        return JobRunner(context: context, executor: executor, notifier: notifier)
+        JobRunner(context: context, executor: sandboxExecutor(tree, rules: rules, protectedRules: rules), notifier: notifier)
     }
 
     func rule(_ id: String, _ relative: String, level: SafetyLevel, action: ActionSpec = ActionSpec(remove: true)) -> Rule {

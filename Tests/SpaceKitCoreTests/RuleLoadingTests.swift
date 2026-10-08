@@ -182,11 +182,9 @@ struct RuleLoadingTests {
 
 @Suite("Built-in rule directory")
 struct BuiltinDirectoryTests {
-    @Test("Only debug builds look for rules in the source checkout they were built from")
-    func sourceCheckoutIsDebugOnly() {
-        let checkout = PathUtil.standardize(RuleLibrary.sourceCheckoutRules)
-        #expect(RuleLibrary.builtinCandidates(includingSourceCheckout: true).contains(checkout))
-        #expect(!RuleLibrary.builtinCandidates(includingSourceCheckout: false).contains(checkout))
+    @Test("Debug builds also look for rules in the source checkout they were built from")
+    func sourceCheckoutInDebug() {
+        #expect(RuleLibrary.builtinCandidates().contains(PathUtil.standardize(RuleLibrary.sourceCheckoutRules)))
     }
 }
 

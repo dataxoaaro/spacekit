@@ -49,33 +49,58 @@ public struct StorageAnalyzer: Sendable {
     /// Evaluates `rules` (all rules by default). If `tree` already covers every location the rules need,
     /// no scanning happens; otherwise the needed locations are scanned in one parallel pass. With nothing
     /// to look at, the home folder is scanned and there are no findings.
+    ///
+    /// Only the locations of `rules` are scanned, but every rule of the library claims its share there, so each
+    /// of `rules` finds what it would in a full analysis: never something another rule (or a protected rule) claims.
     public func analyze(
         rules: [Rule]? = nil,
         reusing tree: ScanTree? = nil,
         progress: ScanProgress = ScanProgress()
     ) async throws -> Analysis {
-        let (engine, roots) = prepare(rules)
-        if let tree, roots.allSatisfy(tree.covers) { return evaluate(engine, roots: roots, on: tree) }
-        let scanned = try await Scanner(options: scanOptions).scan(roots: roots.isEmpty ? [PathUtil.home] : roots, progress: progress)
-        return evaluate(engine, roots: roots, on: scanned)
+        let plan = prepare(rules)
+        if let tree, plan.roots.allSatisfy(tree.covers) { return evaluate(plan, on: tree) }
+        let roots = plan.roots.isEmpty ? [PathUtil.home] : plan.roots
+        return evaluate(plan, on: try await Scanner(options: scanOptions).scan(roots: roots, progress: progress))
     }
 
     /// Synchronous variant of `analyze` for command-line use.
     public func analyzeSync(rules: [Rule]? = nil, reusing tree: ScanTree? = nil, progress: ScanProgress = ScanProgress()) throws
         -> Analysis
     {
-        let (engine, roots) = prepare(rules)
-        if let tree, roots.allSatisfy(tree.covers) { return evaluate(engine, roots: roots, on: tree) }
-        let scanned = try Scanner(options: scanOptions).scan(roots: roots.isEmpty ? [PathUtil.home] : roots, progress: progress)
-        return evaluate(engine, roots: roots, on: scanned)
+        let plan = prepare(rules)
+        if let tree, plan.roots.allSatisfy(tree.covers) { return evaluate(plan, on: tree) }
+        let roots = plan.roots.isEmpty ? [PathUtil.home] : plan.roots
+        return evaluate(plan, on: try Scanner(options: scanOptions).scan(roots: roots, progress: progress))
     }
 
-    private func prepare(_ rules: [Rule]?) -> (RuleEngine, [String]) {
-        let engine = RuleEngine(rules: rules ?? library.rules, devRoots: devRoots)
-        return (engine, engine.requiredRoots())
+    /// What one analysis evaluates: an engine with every rule, the locations to scan, and whose findings to keep
+    /// (`nil`: all).
+    private struct Plan {
+        var engine: RuleEngine
+        var roots: [String]
+        var selected: Set<String>?
     }
 
-    private func evaluate(_ engine: RuleEngine, roots: [String], on tree: ScanTree) -> Analysis {
-        Analysis(findings: roots.isEmpty ? [] : engine.evaluate(tree), tree: tree)
+    private func prepare(_ rules: [Rule]?) -> Plan {
+        guard let rules else {
+            let engine = RuleEngine(rules: library.rules, devRoots: devRoots)
+            return Plan(engine: engine, roots: engine.requiredRoots(), selected: nil)
+        }
+        let roots = RuleEngine(rules: rules, devRoots: devRoots).requiredRoots()
+        // The library's order decides ties between equally specific rules, as in a full analysis. Rules from
+        // elsewhere (a job's own folders) come last.
+        var given: [String: Rule] = [:]
+        for rule in rules where given[rule.id] == nil { given[rule.id] = rule }
+        var seen = Set(library.rules.map(\.id))
+        let others = rules.filter { seen.insert($0.id).inserted }
+        let all = library.rules.map { given[$0.id] ?? $0 } + others
+        return Plan(engine: RuleEngine(rules: all, devRoots: devRoots), roots: roots, selected: Set(given.keys))
+    }
+
+    private func evaluate(_ plan: Plan, on tree: ScanTree) -> Analysis {
+        guard !plan.roots.isEmpty else { return Analysis(findings: [], tree: tree) }
+        let findings = plan.engine.evaluate(tree)
+        guard let selected = plan.selected else { return Analysis(findings: findings, tree: tree) }
+        return Analysis(findings: findings.filter { selected.contains($0.rule.id) }, tree: tree)
     }
 }

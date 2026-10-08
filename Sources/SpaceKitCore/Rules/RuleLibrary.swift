@@ -62,9 +62,10 @@ public struct RuleLibrary: Sendable {
             sources.append((directory, false))
         }
 
+        let builtinOwners = FileTrust.builtinOwners()
         for (directory, isBuiltin) in sources {
             for file in yamlFiles(in: directory) {
-                if let problem = FileTrust.problem(with: file) {
+                if let problem = FileTrust.problem(with: file, owners: isBuiltin ? builtinOwners : FileTrust.owners()) {
                     issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
                     continue
                 }
@@ -86,7 +87,8 @@ public struct RuleLibrary: Sendable {
                     }
                     if let existing = byID[rule.id] {
                         let origin = PathUtil.abbreviate(existing.source ?? "<inline>")
-                        issues.append(RuleIssue(severity: .warning, source: file, ruleID: rule.id, message: "replaces the rule from \(origin)"))
+                        issues.append(
+                            RuleIssue(severity: .warning, source: file, ruleID: rule.id, message: "replaces the rule from \(origin)"))
                     } else {
                         order.append(rule.id)
                     }
@@ -128,21 +130,13 @@ public struct RuleLibrary: Sendable {
     /// `SpaceKit.app/Contents/Helpers`, a `rules` folder beside the executable, and, in debug builds only, the
     /// `rules/` folder of the source checkout the binary was built from.
     public static var builtinDirectory: String? {
-        builtinCandidates(includingSourceCheckout: searchesSourceCheckout).first { path in
+        builtinCandidates().first { path in
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
     }
 
-    /// Rules found in the built-in directory get built-in trust (their commands may run trusted tools). A release
-    /// binary must not grant that to whatever sits at the path it was compiled from on some build machine.
-    #if DEBUG
-        static let searchesSourceCheckout = true
-    #else
-        static let searchesSourceCheckout = false
-    #endif
-
-    static func builtinCandidates(includingSourceCheckout: Bool) -> [String] {
+    static func builtinCandidates() -> [String] {
         var candidates: [String] = []
         if let env = ProcessInfo.processInfo.environment["SPACEKIT_RULES_DIR"], !env.isEmpty { candidates.append(env) }
         if let resources = Bundle.main.resourceURL?.path { candidates.append(resources + "/rules") }
@@ -150,7 +144,11 @@ public struct RuleLibrary: Sendable {
         candidates.append(executable + "/../share/spacekit/rules")
         candidates.append(executable + "/../Resources/rules")  // SpaceKit.app/Contents/Helpers/spacekit
         candidates.append(executable + "/rules")
-        if includingSourceCheckout { candidates.append(sourceCheckoutRules) }
+        // Rules found in the built-in directory get built-in trust (their commands may run trusted tools). A release
+        // binary must not grant that to whatever sits at the path it was compiled from on some build machine.
+        #if DEBUG
+            candidates.append(sourceCheckoutRules)
+        #endif
         return candidates.map(PathUtil.standardize)
     }
 
@@ -264,7 +262,8 @@ public struct RuleLibrary: Sendable {
             issue(.warning, "`granularity: children` is unusual for pattern rules")
         }
         if let ai = rule.ai, !AISpec.layouts.contains(ai.layout) {
-            issue(.warning, "unknown ai.layout '\(ai.layout)'; it is shown as a cache. Use one of \(AISpec.layouts.sorted().joined(separator: ", "))")
+            let layouts = AISpec.layouts.sorted().joined(separator: ", ")
+            issue(.warning, "unknown ai.layout '\(ai.layout)'; it is shown as a cache. Use one of \(layouts)")
         }
         if let command = rule.ai?.removeCommand {
             commandIssues(command, rule: rule).forEach { issue($0.severity, $0.message) }
@@ -296,12 +295,14 @@ public struct RuleLibrary: Sendable {
 
     private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
         guard let executable = command.first, Shell.isBareName(executable) else {
-            return [(.error, "command must start with a bare program name such as brew, without / or .. or {name}; got '\(command.first ?? "")'")]
+            let got = command.first ?? ""
+            return [(.error, "command must start with a bare program name such as brew, without / or .. or {name}; got '\(got)'")]
         }
         var issues: [(RuleIssue.Severity, String)] = []
         if rule.isBuiltin {
             if !trustedCommands.contains(executable) {
-                issues.append((.warning, "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"))
+                let message = "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"
+                issues.append((.warning, message))
             }
         } else {
             issues.append((.warning, untrustedRuleCommand(executable)))

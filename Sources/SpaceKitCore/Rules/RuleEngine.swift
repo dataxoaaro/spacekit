@@ -77,8 +77,9 @@ public struct Finding: Sendable, Identifiable {
 
     /// Items a cleanup with these conditions would touch.
     public func eligibleItems(olderThan: Age? = nil, keepRecent: Age? = nil, now: Date = Date()) -> [FindingItem] {
-        let keep =
-            keepRecent ?? (rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) ? rule.policy?.keepRecent ?? Job.defaultActiveProjectsWindow : nil)
+        let keepsActiveProjects = rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken)
+        let activeWindow: Age? = keepsActiveProjects ? rule.policy?.keepRecent ?? Job.defaultActiveProjectsWindow : nil
+        let keep = keepRecent ?? activeWindow
         return items.filter { item in
             guard let used = item.lastUsed else { return olderThan == nil && keep == nil }
             let idle = now.timeIntervalSince(used)
@@ -273,10 +274,10 @@ public struct RuleEngine: Sendable {
         let globExcludes = patternRules.flatMap { $0.element.match!.exclude.filter { $0.contains("*") } }
 
         let roots = allRoots.sorted().filter { candidate in !allRoots.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
+        let search = PatternSearch(byName: byName, excluded: excluded, globExcludes: globExcludes)
         var claims: [Claim] = []
         for root in roots {
-            guard let start = tree.node(at: root) else { continue }
-            var stack: [(DirNode, String)] = [(start, start.path)]
+            var stack: [(DirNode, String)] = search.starts(under: root, in: tree)
             while let (node, path) = stack.popLast() {
                 for child in node.children where !child.isSkipped && child.size > 0 {
                     let childPath = PathUtil.join(path, child.name)
@@ -307,6 +308,47 @@ public struct RuleEngine: Sendable {
         return claims
     }
 
+    /// Where the pattern walk under one root begins. A tree scanned only for some rules may hold just folders
+    /// below the root; the walk starts at each of them that a walk from the root would have reached.
+    private struct PatternSearch {
+        let byName: [String: [(Int, Rule, [String])]]
+        let excluded: Set<String>
+        let globExcludes: [String]
+
+        func starts(under root: String, in tree: ScanTree) -> [(DirNode, String)] {
+            if let node = tree.node(at: root) { return [(node, node.path)] }
+            var starts: [(DirNode, String)] = []
+            for scanned in tree.roots where PathUtil.isStrictAncestor(root, of: scanned) && isReached(scanned, from: root) {
+                if let node = tree.node(at: scanned) { starts.append((node, scanned)) }
+            }
+            return starts
+        }
+
+        /// False if the walk from `root` stops above or at `path`: an excluded folder, a bundle, or a folder a pattern
+        /// rule matches (checked on disk, since the tree doesn't hold the folders above its roots).
+        private func isReached(_ path: String, from root: String) -> Bool {
+            var current = root
+            for component in PathUtil.components(String(path.dropFirst(root.count))) {
+                let parent = current
+                let name = String(component)
+                current = PathUtil.join(parent, name)
+                if excluded.contains(current) { return false }
+                if RuleEngine.bundleSuffixes.contains(where: { name.hasSuffix($0) }) { return false }
+                if globExcludes.contains(where: { PathUtil.matches(current, glob: $0) }) { return false }
+                if matches(current, name: name, parent: parent) { return false }
+            }
+            return true
+        }
+
+        private func matches(_ path: String, name: String, parent: String) -> Bool {
+            let exists = { (folder: String, entry: String) -> Bool in FileManager.default.fileExists(atPath: PathUtil.join(folder, entry)) }
+            return (byName[name] ?? []).contains { _, rule, ruleRoots in
+                guard let match = rule.match, ruleRoots.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) else { return false }
+                return match.markersPresent(sibling: { exists(parent, $0) }, inside: { exists(path, $0) })
+            }
+        }
+    }
+
     /// When a project was last worked on, ignoring the generated folder itself.
     private func projectActivity(_ project: DirNode, excluding artifact: DirNode) -> Date? {
         var newest = project.newestModified
@@ -330,17 +372,16 @@ public struct RuleEngine: Sendable {
         }
         var wholeClaims = Set<String>()
         var looseClaims = Set<String>()
-        /// Bytes and names of claimed single files, by the folder that holds them.
-        var fileClaims: [String: UInt64] = [:]
-        var fileClaimNames: [String: Set<String>] = [:]
+        /// Claimed single files, by the folder that holds them.
+        var fileClaims: [String: ClaimedFiles] = [:]
         for claim in best.values {
             switch claim.item.kind {
             case .directory: wholeClaims.insert(claim.item.path)
             case .looseFiles: looseClaims.insert(claim.item.path)
             case .file:
                 let folder = PathUtil.parent(claim.item.path)
-                fileClaims[folder, default: 0] &+= claim.item.size
-                fileClaimNames[folder, default: []].insert(PathUtil.lastComponent(claim.item.path))
+                fileClaims[folder, default: ClaimedFiles()].bytes &+= claim.item.size
+                fileClaims[folder, default: ClaimedFiles()].names.insert(PathUtil.lastComponent(claim.item.path))
             }
         }
         // A loose-files claim takes bytes from its folder, so its folder path counts as claimed inside an ancestor.
@@ -360,7 +401,7 @@ public struct RuleEngine: Sendable {
         var result: [Claim] = []
         for claim in best.values {
             if claim.item.kind == .looseFiles {
-                if let loose = RuleEngine.withoutClaimedFiles(claim.item, bytes: fileClaims[claim.item.path], names: fileClaimNames[claim.item.path]) {
+                if let loose = RuleEngine.withoutClaimedFiles(claim.item, fileClaims[claim.item.path]) {
                     result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
                 }
                 continue
@@ -382,10 +423,10 @@ public struct RuleEngine: Sendable {
                                 rule: claim.rule, item: RuleEngine.item(for: child, markers: tree.markers), specificity: claim.specificity))
                     }
                 }
+                let claimed = fileClaims[currentPath] ?? ClaimedFiles()
                 guard !looseClaims.contains(currentPath),
                     let loose = RuleEngine.looseFilesItem(
-                        of: current, path: currentPath, excludingBytes: fileClaims[currentPath] ?? 0,
-                        excludingNames: fileClaimNames[currentPath] ?? [])
+                        of: current, path: currentPath, excludingBytes: claimed.bytes, excludingNames: claimed.names)
                 else { continue }
                 result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
             }
@@ -395,13 +436,19 @@ public struct RuleEngine: Sendable {
 }
 
 extension RuleEngine {
+    /// Single files rules claim in one folder: their bytes and names.
+    fileprivate struct ClaimedFiles {
+        var bytes: UInt64 = 0
+        var names: Set<String> = []
+    }
+
     /// A loose-files claim less the single files other rules claim in the same folder. `nil` if nothing is left.
-    fileprivate static func withoutClaimedFiles(_ item: FindingItem, bytes: UInt64?, names: Set<String>?) -> FindingItem? {
-        guard let bytes, let names else { return item }
-        guard item.size > bytes else { return nil }
+    fileprivate static func withoutClaimedFiles(_ item: FindingItem, _ claimed: ClaimedFiles?) -> FindingItem? {
+        guard let claimed else { return item }
+        guard item.size > claimed.bytes else { return nil }
         var loose = item
-        loose.size -= bytes
-        loose.looseFileNames = item.looseFileNames?.filter { !names.contains($0) }
+        loose.size -= claimed.bytes
+        loose.looseFileNames = item.looseFileNames?.filter { !claimed.names.contains($0) }
         return loose
     }
 }

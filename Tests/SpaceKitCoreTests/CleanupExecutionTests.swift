@@ -7,10 +7,11 @@ import Testing
 /// An executor whose home, Trash and journal all live inside `tree`, so nothing reaches the real Trash.
 func sandboxExecutor(
     _ tree: TempTree, rules: [Rule] = [], budget: ByteCount = .gb(100), allowed: Set<String> = [], configError: String? = nil,
-    root: Bool = false
+    root: Bool = false, protectedPaths: [String] = [], protectedRules: [Rule] = []
 ) -> CleanupExecutor {
     let home = tree.path("home")
-    let guardian = SafetyGuard(home: home, volumes: emptyVolumes, isRunningAsRoot: root)
+    let guardian = SafetyGuard(
+        home: home, userProtectedPaths: protectedPaths, protectedRules: protectedRules, volumes: emptyVolumes, isRunningAsRoot: root)
     var executor = CleanupExecutor(
         safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules, extraAllowedCommands: allowed,
         maxBytesPerAutomaticRun: budget.bytes, configError: configError)
@@ -396,10 +397,7 @@ struct CheckedLocationTests {
         try tree.file("home/Harmless/target/x", bytes: 1_000)
         let link = tree.path("home/link")
         try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/Protected"))
-        let guardian = SafetyGuard(
-            home: tree.path("home"), userProtectedPaths: [tree.path("home/Protected")], volumes: emptyVolumes, isRunningAsRoot: false)
-        var executor = CleanupExecutor(safety: guardian, journal: nil, rules: [])
-        executor.trash = sandboxTrash(home: tree.path("home"))
+        var executor = sandboxExecutor(tree, protectedPaths: [tree.path("home/Protected")])
         let calls = CallCounter()
         let harmless = tree.path("home/Harmless")
         let protected = tree.path("home/Protected")

@@ -18,14 +18,14 @@ public struct ConfigStore: Sendable {
     public init(file: String) { self.file = file }
 
     /// True if anything is at the config path, including a symlink whose target is missing.
-    public var exists: Bool {
-        var st = stat()
-        return lstat(file, &st) == 0
-    }
+    public var exists: Bool { linkStatus != nil }
 
-    var isSymlink: Bool {
+    var isSymlink: Bool { linkStatus.map { ($0.st_mode & S_IFMT) == S_IFLNK } ?? false }
+
+    /// The config path itself, not followed if it's a symlink. `nil` if nothing is there.
+    private var linkStatus: stat? {
         var st = stat()
-        return lstat(file, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+        return lstat(file, &st) == 0 ? st : nil
     }
 
     /// Loads the config. A missing file yields the defaults. A file (or symlink) that is there but can't be read is
@@ -79,11 +79,9 @@ public struct ConfigStore: Sendable {
         try ConfigStore.validate(config)
         let body = try YAMLEncoder().encode(config)
         let text = ConfigStore.savedHeader + body
-        try FileManager.default.createDirectory(atPath: PathUtil.parent(file), withIntermediateDirectories: true)
-        if exists {
-            let backup = file + ".bak"
-            try? FileManager.default.removeItem(atPath: backup)
-            try? FileManager.default.copyItem(atPath: file, toPath: backup)
+        // The previous contents, not a copy of a symlink, which would show the new config once it's saved.
+        if let previous = FileManager.default.contents(atPath: file) {
+            try? LockedFile.write(previous, to: file + ".bak")
         }
         // An atomic write replaces the path, so a symlinked config (dotfiles) is written where the link points.
         let destination = isSymlink ? (PathUtil.realpath(file) ?? file) : file
@@ -97,7 +95,6 @@ public struct ConfigStore: Sendable {
         if isSymlink {
             throw ConfigError.invalid(file: file, message: "is a symlink; edit or remove it yourself, SpaceKit won't replace it")
         }
-        try FileManager.default.createDirectory(atPath: PathUtil.parent(file), withIntermediateDirectories: true)
         try LockedFile.write(Data(ConfigStore.template.utf8), to: file)
         return true
     }

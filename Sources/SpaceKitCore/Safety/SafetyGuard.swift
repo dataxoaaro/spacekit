@@ -242,6 +242,11 @@ public struct SafetyGuard: Sendable {
             verdict.raise(context.isAutomatic ? .block : .confirm, "This folder contains git repositories")
         }
 
+        // Rule and job locations are resolved through symlinks, so scope is judged on resolved spellings (`/tmp/x` as
+        // `/private/tmp/x`): where the parent's symlinks lead decides, not how the path was written.
+        var scoped: [String] = []
+        for candidate in candidates.map(PathUtil.resolveParent) where !scoped.contains(candidate) { scoped.append(candidate) }
+
         let isPersonal = candidates.contains { candidate in
             let key = PathUtil.comparisonKey(candidate)
             return personal.contains { PathUtil.isStrictAncestor($0.key, of: key) }
@@ -251,7 +256,8 @@ public struct SafetyGuard: Sendable {
             let share = Double(size) / Double(capacity.used)
             if context.isAutomatic {
                 if share > SafetyGuard.maxAutomaticVolumeShare {
-                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(Int(share * 100))% of the disk's used space")
+                    let percent = Int(share * 100)
+                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(percent)% of the disk's used space")
                 }
             } else if share > SafetyGuard.confirmVolumeShare {
                 verdict.raise(.confirm, "This holds \(Int(share * 100))% of the disk's used space")
@@ -262,7 +268,7 @@ public struct SafetyGuard: Sendable {
         case .manual:
             // A rule speaks only for its own locations; elsewhere (a node_modules inside a tool's folder) the item
             // is as unknown as one no rule matched.
-            if let rule, candidates.allSatisfy({ scope.contains($0, rule: rule) }) {
+            if let rule, scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
                 if rule.safety.level == .review {
                     verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
                 }
@@ -272,14 +278,13 @@ public struct SafetyGuard: Sendable {
                 verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
             }
         case .automatic(let automation):
-            // Every spelling must be in scope: a symlinked parent can put the real location somewhere else.
             let customRoots = automation.customPaths.map(scope.resolve)
-            let isCustom = candidates.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
+            let isCustom = scoped.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
             if let rule {
                 if rule.safety.level == .review && !automation.allowReview {
                     verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
                 }
-                if !candidates.allSatisfy({ isInsideRuleScope($0, rule: rule) }) {
+                if !scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
                     verdict.raise(.block, "Path is outside the locations rule \(rule.id) covers")
                 }
             } else if !isCustom {
@@ -292,7 +297,8 @@ public struct SafetyGuard: Sendable {
                 if !(isCustom && ageOK && automation.usesTrash) {
                     verdict.raise(
                         .block,
-                        "Automatic cleanup inside personal folders requires a folder listed in the job, “older than” of at least 7 days, and moving to Trash"
+                        "Automatic cleanup inside personal folders requires a folder listed in the job, "
+                            + "“older than” of at least 7 days, and moving to Trash"
                     )
                 }
             }
@@ -356,11 +362,6 @@ public struct SafetyGuard: Sendable {
                 verdict.raise(.block, "Protected by rule “\(protected.rule.name)”")
             }
         }
-    }
-
-    /// True if `path` is one of the places `rule` describes (or inside one). See `RuleScope`.
-    public func isInsideRuleScope(_ path: String, rule: Rule) -> Bool {
-        scope.contains(path, rule: rule)
     }
 }
 

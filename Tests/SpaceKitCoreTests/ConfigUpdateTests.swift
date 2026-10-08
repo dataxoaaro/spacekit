@@ -147,4 +147,20 @@ struct ConfigSymlinkTests {
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: file)) == target)
         #expect(try ConfigStore(file: target).load().ui.mapDepth == 3)
     }
+
+    @Test("The backup of a symlinked config is a copy of the previous contents, not another link")
+    func backupThroughLink() throws {
+        let tree = try TempTree()
+        let target = tree.path("dotfiles/config.yaml")
+        try tree.directory("dotfiles")
+        try "version: 1\nui:\n  mapDepth: 2\n".write(toFile: target, atomically: true, encoding: .utf8)
+        let file = tree.path("config.yaml")
+        try FileManager.default.createSymbolicLink(atPath: file, withDestinationPath: target)
+
+        try ConfigStore(file: file).update { $0.ui.mapDepth = 3 }
+
+        var st = stat()
+        #expect(lstat(file + ".bak", &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG)
+        #expect(try ConfigStore(file: file + ".bak").load().ui.mapDepth == 2)
+    }
 }

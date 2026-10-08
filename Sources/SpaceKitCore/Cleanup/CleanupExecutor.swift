@@ -49,10 +49,16 @@ public struct CleanupReport: Sendable {
     public var warnings: [String] = []
     /// Trash destinations of loose files moved to the Trash, keyed by the folder (the loose-files item's `path`).
     public var trashedLooseFiles: [String: [String]] = [:]
+    /// Bytes deleted from items that failed part way, keyed by the item's `path`. Their outcome is `.failed`; these
+    /// bytes are gone all the same, so they count in `freedBytes` and were journaled and charged to the budget.
+    public var partiallyFreed: [String: UInt64] = [:]
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {
-        items.reduce(0) { $0 &+ $1.outcome.freedBytes } &+ commands.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let itemBytes = items.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let commandBytes = commands.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let partialBytes = partiallyFreed.values.reduce(0, &+)
+        return itemBytes &+ commandBytes &+ partialBytes
     }
 
     /// Moved to the Trash: still using disk space until the Trash is emptied.
@@ -137,20 +143,24 @@ public struct CleanupExecutor: Sendable {
         checkedDirectory: String? = nil
     ) -> SafetyVerdict {
         let rule = item.ruleID.flatMap { rules[$0] }
-        func evaluate(_ path: String) -> SafetyVerdict {
-            safety.evaluate(
-                path: path, size: size, rule: rule, context: context, isRepository: isRepository, containsRepository: containsRepository)
-        }
         // Loose files are judged as "something inside the folder", not as the folder itself.
         let path = item.kind == .looseFiles ? CleanupItem.looseFilesPath(in: item.path) : item.path
-        var verdict = evaluate(path)
-        if let checkedDirectory {
-            let name = item.kind == .looseFiles ? "*" : PathUtil.lastComponent(item.path)
-            let resolved = PathUtil.join(checkedDirectory, name)
-            if resolved != path { verdict = verdict.merging(evaluate(resolved)) }
+        let name = item.kind == .looseFiles ? "*" : PathUtil.lastComponent(item.path)
+        var verdict = CleanupExecutor.judge(path, checked: checkedDirectory.map { PathUtil.join($0, name) }) { candidate in
+            safety.evaluate(
+                path: candidate, size: size, rule: rule, context: context, isRepository: isRepository,
+                containsRepository: containsRepository)
         }
         refuseIfConfigInvalid(&verdict)
         return verdict
+    }
+
+    /// The verdict on `path` and, if it's spelled differently, on the same entry in the folder that was resolved
+    /// and checked: the guard sees the exact location that changes, whatever a symlink in `path` points at by then.
+    static func judge(_ path: String, checked: String?, _ evaluate: (String) -> SafetyVerdict) -> SafetyVerdict {
+        let verdict = evaluate(path)
+        guard let checked, checked != path else { return verdict }
+        return verdict.merging(evaluate(checked))
     }
 
     func refuseIfConfigInvalid(_ verdict: inout SafetyVerdict) {

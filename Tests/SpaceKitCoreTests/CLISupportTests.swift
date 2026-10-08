@@ -13,7 +13,12 @@ struct PlanRefreshTests {
         FindingItem(path: path, kind: kind, name: PathUtil.lastComponent(path), size: 100)
     }
 
-    @Test("Keeps only items and commands that are still eligible, and the original creation date")
+    /// The plan a fresh evaluation of the job makes from `eligible`, from a scan after the saved one.
+    func fresh(_ eligible: [Finding], trash: Bool = false) -> CleanupPlan {
+        CleanupPlan.make(findings: eligible, trashPreference: trash, scanStarted: Date(timeIntervalSince1970: 2_000))
+    }
+
+    @Test("Keeps only items and commands that are still eligible, and the original scan start")
     func keepsEligible() {
         let scanned = Date(timeIntervalSince1970: 1_000)
         let plan = CleanupPlan(
@@ -32,19 +37,20 @@ struct PlanRefreshTests {
             Finding(rule: toolRule, items: [item("/tmp/t")]),
         ]
 
-        let (refreshed, dropped) = plan.keeping(onlyEligible: eligible)
+        let (refreshed, dropped) = plan.keeping(onlyIn: fresh(eligible))
 
         #expect(refreshed.items.map(\.id) == ["/tmp/x/a", "/tmp/x/*"])
         #expect(refreshed.commands.map(\.ruleID) == ["tool"])
         #expect(dropped.map(\.path) == ["/tmp/x/b"])
         #expect(refreshed.items.allSatisfy { $0.scanStarted == scanned })
         #expect(refreshed.useTrash == false)
+        #expect(plan.keeping(onlyIn: fresh(eligible, trash: true)).plan.useTrash, "either plan asking for the Trash wins")
     }
 
     @Test("A folder that is still there but as loose files isn't the same item")
     func kindMatters() {
         let plan = CleanupPlan(items: [CleanupItem(path: "/tmp/x", kind: .directory, size: 1, ruleID: "cache")])
-        let (refreshed, dropped) = plan.keeping(onlyEligible: [Finding(rule: rule, items: [item("/tmp/x", kind: .looseFiles)])])
+        let (refreshed, dropped) = plan.keeping(onlyIn: fresh([Finding(rule: rule, items: [item("/tmp/x", kind: .looseFiles)])]))
         #expect(refreshed.items.isEmpty)
         #expect(dropped.count == 1)
     }
@@ -55,7 +61,10 @@ struct PlanRefreshTests {
             PlannedCommand(ruleID: "cache", arguments: ["x", "/tmp/x/a"], estimatedBytes: 1, itemPath: "/tmp/x/a"),
             PlannedCommand(ruleID: "cache", arguments: ["x", "/tmp/x/b"], estimatedBytes: 1, itemPath: "/tmp/x/b"),
         ])
-        let (refreshed, _) = plan.keeping(onlyEligible: [Finding(rule: rule, items: [item("/tmp/x/b")])])
+        let itemRule = Rule(
+            id: "cache", name: "Cache", paths: ["/tmp/x"], safety: SafetySpec(level: .safe),
+            action: ActionSpec(itemCommand: ["x", "{path}"]))
+        let (refreshed, _) = plan.keeping(onlyIn: fresh([Finding(rule: itemRule, items: [item("/tmp/x/b")])]))
         #expect(refreshed.commands.map(\.itemPath) == ["/tmp/x/b"])
     }
 }

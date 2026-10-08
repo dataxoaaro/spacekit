@@ -57,7 +57,8 @@ public struct ManualJobRun: Sendable {
     }
 
     /// Evaluates the job that prepared `suggestion` again and narrows the suggestion to what still meets the job's
-    /// conditions: a project used since then drops out. The job's threshold doesn't hold an approval back; it was
+    /// conditions: a project used since then drops out. What runs is described by the fresh evaluation, never by the
+    /// saved file, which only limits it. The job's threshold doesn't hold an approval back; it was
     /// crossed when the suggestion was made, and approving is the person's explicit go-ahead.
     public static func prepare(_ suggestion: Suggestion, runner: JobRunner, progress: ScanProgress = ScanProgress(), now: Date = Date())
         throws -> ManualJobRun
@@ -66,7 +67,7 @@ public struct ManualJobRun: Sendable {
             throw JobMissing(suggestion: suggestion)
         }
         let evaluation = try runner.evaluate(job, progress: progress, now: now)
-        let (plan, dropped) = suggestion.plan.keeping(onlyEligible: evaluation.eligible)
+        let (plan, dropped) = suggestion.plan.keeping(onlyIn: runner.plan(for: evaluation))
         return ManualJobRun(
             evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: false, candidate: plan, runner: runner)
     }

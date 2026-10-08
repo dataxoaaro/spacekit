@@ -167,6 +167,35 @@ struct ManualJobRunTests {
         #expect(run.dropped.map { PathUtil.lastComponent($0.path) } == ["b"])
     }
 
+    @Test("Approving takes each item's facts from the fresh evaluation, never more than the saved suggestion offered")
+    func approvalTrustsFreshFacts() throws {
+        var fixture = try buildFixture(["a"])
+        try fixture.tree.file("home/build/stray.log", bytes: 4096)
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        var suggestion = try suggest(fixture, job: job)
+        let loose = try #require(suggestion.plan.items.firstIndex { $0.kind == .looseFiles })
+        let folder = try #require(suggestion.plan.items.firstIndex { $0.kind == .directory })
+        // A suggestions file edited after it was saved: facts that would widen what the run may remove.
+        suggestion.plan.items[loose].looseFileNames = ["stray.log", "elsewhere.log"]
+        suggestion.plan.items[loose].scanStarted = Date.distantFuture
+        suggestion.plan.items[folder].ruleID = "other"
+        suggestion.plan.items[folder].size = 1
+        let saved = Date(timeIntervalSince1970: 500)
+        suggestion.plan.items[folder].scanStarted = saved
+
+        let run = try ManualJobRun.prepare(suggestion, runner: fixture.runner)
+        let items = try #require(run.plan?.items)
+        let fresh = fixture.runner.plan(for: run.evaluation)
+        let looseItem = try #require(items.first { $0.kind == .looseFiles })
+        #expect(looseItem.looseFileNames == ["stray.log"])
+        #expect(looseItem.scanStarted == run.evaluation.scanStarted, "never later than the scan that saw the files")
+        let folderItem = try #require(items.first { $0.kind == .directory })
+        #expect(folderItem.ruleID == "build")
+        #expect(folderItem.size == fresh.items.first { $0.id == folderItem.id }?.size)
+        #expect(folderItem.scanStarted == saved, "an earlier saved scan start is the stricter one")
+    }
+
     @Test("A suggestion whose job is gone can't be approved")
     func missingJob() throws {
         var fixture = try buildFixture(["a"])

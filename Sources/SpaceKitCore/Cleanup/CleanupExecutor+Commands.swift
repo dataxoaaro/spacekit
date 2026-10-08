@@ -52,8 +52,11 @@ extension CleanupExecutor {
         return rule.action.command
     }
 
-    func runCommand(_ command: PlannedCommand, context: CleanupContext, accepted: Set<String>, run: inout Run) -> (CleanupOutcome, String) {
-        if let refused = CleanupExecutor.refusal(verdict(for: command, context: context), accepted: accepted) { return (refused, "") }
+    /// `reviewed`: what the person's review showed for this command; `nil` in an automatic run.
+    func runCommand(
+        _ command: PlannedCommand, context: CleanupContext, reviewed: ReviewRecord.Row?, run: inout Run
+    ) -> (CleanupOutcome, String) {
+        if let refused = CleanupExecutor.refusal(verdict(for: command, context: context), reviewed: reviewed) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
         let name = command.arguments[0]
         guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }

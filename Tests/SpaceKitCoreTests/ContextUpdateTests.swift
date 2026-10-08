@@ -155,7 +155,9 @@ struct MountTableTests {
         let report = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
 
         #expect(reads.withLock { $0 } == 1)
-        #expect(report.skipped.first?.reason.hasPrefix("Blocked") == true)
+        // The review didn't show the block, so it is reported as a change since the review, which is a problem.
+        #expect(report.skipped.first?.reason.hasPrefix(CleanupExecutor.changedSinceReview + "Blocked") == true)
+        #expect(report.hasProblems)
         #expect(onDisk(tree.path("home/mnt/data")))
     }
 

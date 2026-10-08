@@ -163,23 +163,23 @@ public struct CleanupExecutor: Sendable {
     /// Runs a plan a person reviewed and said go to. Each item and command is checked again first, and a warning
     /// the review didn't show for that row skips it.
     public func execute(_ reviewed: ReviewedPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
-        execute(reviewed.plan, context: .manual, accepted: reviewed.accepted, dryRun: dryRun, onProgress: onProgress)
+        execute(reviewed.plan, context: .manual, review: reviewed.review, dryRun: dryRun, onProgress: onProgress)
     }
 
     /// Runs an automatic job's plan under the automation limits. Nobody acknowledged anything, so whatever needs
     /// confirmation is skipped.
     func execute(_ automatic: AutomaticPlan, dryRun: Bool, onProgress: ProgressHandler? = nil) -> CleanupReport {
-        execute(automatic.plan, context: .automatic(automatic.automation), accepted: .none, dryRun: dryRun, onProgress: onProgress)
+        execute(automatic.plan, context: .automatic(automatic.automation), review: nil, dryRun: dryRun, onProgress: onProgress)
     }
 
     private func execute(
-        _ plan: CleanupPlan, context: CleanupContext, accepted: AcceptedWarnings, dryRun: Bool, onProgress: ProgressHandler?
+        _ plan: CleanupPlan, context: CleanupContext, review: ReviewRecord?, dryRun: Bool, onProgress: ProgressHandler?
     ) -> CleanupReport {
         if let readMounts {
             var current = self
             current.readMounts = nil
             current.safety = safety.mounted(readMounts())
-            return current.execute(plan, context: context, accepted: accepted, dryRun: dryRun, onProgress: onProgress)
+            return current.execute(plan, context: context, review: review, dryRun: dryRun, onProgress: onProgress)
         }
         var run = Run(report: CleanupReport(dryRun: dryRun), budget: context.isAutomatic ? maxBytesPerAutomaticRun : .max)
         let total = plan.items.count + plan.commands.count
@@ -188,13 +188,15 @@ public struct CleanupExecutor: Sendable {
         for item in plan.items {
             onProgress?(completed, total, item.path)
             completed += 1
-            let outcome = removeItem(item, plan: plan, context: context, accepted: accepted.items[item.id] ?? [], run: &run)
+            let reviewed = review.map { $0.items[item.id] ?? .unseen }
+            let outcome = removeItem(item, plan: plan, context: context, reviewed: reviewed, run: &run)
             run.report.items.append((item, outcome))
         }
         for command in plan.commands {
             onProgress?(completed, total, command.displayString)
             completed += 1
-            let (outcome, output) = runCommand(command, context: context, accepted: accepted.commands[command.id] ?? [], run: &run)
+            let reviewed = review.map { $0.commands[command.id] ?? .unseen }
+            let (outcome, output) = runCommand(command, context: context, reviewed: reviewed, run: &run)
             run.report.commands.append((command, outcome, output))
         }
         onProgress?(total, total, "")
@@ -235,31 +237,31 @@ public struct CleanupExecutor: Sendable {
         return nil
     }
 
-    /// Why the run may not act on `verdict`, or `nil` when it may: allowed outright, or needing confirmation only for
-    /// warnings the person accepted for this row in the review. A warning they didn't see (a repository that appeared,
-    /// a folder that grew past the volume-share limit) skips the row.
-    static func refusal(_ verdict: SafetyVerdict, accepted: Set<String>) -> CleanupOutcome? {
+    /// Why the run may not act on `verdict`, or `nil` when it may. `reviewed`: what the person's review showed for
+    /// this row; `nil` in an automatic run, which acknowledges nothing.
+    ///
+    /// A reviewed row may need confirmation only for reasons the review showed and the person accepted. A reason it
+    /// didn't show (a repository that appeared, a folder that grew past the share of the disk it was shown with, a
+    /// block such as a volume mounted since) skips the row as changed since the review, which counts as a problem.
+    static func refusal(_ verdict: SafetyVerdict, reviewed: ReviewRecord.Row?) -> CleanupOutcome? {
         let reasons = verdict.reasons.joined(separator: "; ")
         switch verdict.decision {
         case .allow:
             return nil
         case .block:
-            return .skipped(reason: "Blocked: " + reasons)
+            // A review never passes a blocked row on, so a block in a reviewed run is new.
+            return .skipped(reason: (reviewed == nil ? "" : changedSinceReview) + "Blocked: " + reasons)
         case .confirm:
-            guard !accepted.isEmpty else { return .skipped(reason: "Needs confirmation: " + reasons) }
-            let unseen = verdict.reasons.filter { !accepted.contains(reasonKey($0)) }
-            return unseen.isEmpty ? nil : .skipped(reason: changedSinceReview + unseen.joined(separator: "; "))
+            guard let reviewed else { return .skipped(reason: "Needs confirmation: " + reasons) }
+            let unseen = verdict.reasons.filter { !reviewed.showed($0) }
+            if !unseen.isEmpty { return .skipped(reason: changedSinceReview + unseen.joined(separator: "; ")) }
+            return reviewed.accepted ? nil : .skipped(reason: "Needs confirmation: " + reasons)
         }
     }
 
-    /// Starts the skip reason of a row that gained a warning after the review. Reports treat it as a problem, because the
-    /// person never saw that warning.
+    /// Starts the skip reason of a row that changed after the review: it gained a reason the review didn't show, or
+    /// isn't at the location the review judged. Reports treat it as a problem, because the person never saw that.
     public static let changedSinceReview = "Changed since you reviewed it: "
-
-    /// A reason without its numbers: a volume share shown as 12% in the preview is the same warning at 13%.
-    static func reasonKey(_ reason: String) -> String {
-        String(reason.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) })
-    }
 
     func overBudget() -> CleanupOutcome {
         .skipped(reason: "Over this run's budget of \(ByteCount.format(maxBytesPerAutomaticRun)) (safety.maxBytesPerRun)")

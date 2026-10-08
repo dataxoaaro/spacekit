@@ -60,6 +60,15 @@ public struct RemovalTarget: Sendable, Equatable {
     /// Something was there when the target was built.
     public var exists: Bool { identity != nil }
 
+    /// Where the target is and what was there: its resolved path, and the folder and the item by device and inode.
+    struct Location: Sendable, Equatable {
+        let resolvedPath: String
+        let directory: Identity?
+        let item: Identity?
+    }
+
+    var location: Location { Location(resolvedPath: resolvedPath, directory: directoryIdentity, item: identity) }
+
     /// This target with the size measured just before removal.
     func measured(_ size: UInt64) -> RemovalTarget {
         RemovalTarget(

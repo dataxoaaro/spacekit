@@ -80,6 +80,79 @@ struct CleanupReviewTests {
         #expect(onDisk(tree.path("home/Projects/plain/y")))
     }
 
+    @Test("A row the review allowed outright that gains a warning before the run is reported as changed")
+    func allowedRowGainsWarning() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/app/x", bytes: 1_000)
+        let rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let executor = sandboxExecutor(tree, rules: [rule])
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/cache/app"), size: 1_000, ruleID: "cache")], useTrash: false)
+        let review = CleanupReview(plan, executor: executor)
+        #expect(review.items.first?.verdict.decision == .allow)
+        let reviewed = review.acknowledge(acceptingWarnings: false)
+
+        try tree.directory("home/cache/app/.git")
+        let report = executor.execute(reviewed, dryRun: false)
+        let skipped = try #require(report.skipped.first)
+        #expect(skipped.reason.hasPrefix(CleanupExecutor.changedSinceReview))
+        #expect(skipped.reason.contains("git repository"))
+        #expect(report.hasProblems)
+        #expect(onDisk(tree.path("home/cache/app/x")))
+    }
+
+    @Test("An accepted warning holds only for the location the review saw")
+    func reviewedLocationBound() throws {
+        let tree = try TempTree()
+        try tree.file("home/a/Thing/x", bytes: 1_000)
+        try tree.file("home/b/Thing/y", bytes: 1_000)
+        let link = tree.path("home/link")
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/a"))
+        let executor = sandboxExecutor(tree)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/link/Thing"), size: 1_000)], useTrash: false)
+        let reviewed = CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: true)
+
+        // The parent now leads elsewhere, to a folder that raises the same warning.
+        #expect(unlink(link) == 0)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/b"))
+        let redirected = executor.execute(reviewed, dryRun: false)
+        #expect(redirected.skipped.first?.reason.hasPrefix(CleanupExecutor.changedSinceReview) == true)
+        #expect(redirected.hasProblems)
+        #expect(onDisk(tree.path("home/b/Thing/y")))
+
+        // Back at the reviewed location, but another folder stands there now.
+        #expect(unlink(link) == 0)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("home/a"))
+        try FileManager.default.removeItem(atPath: tree.path("home/a/Thing"))
+        try tree.file("home/a/Thing/z", bytes: 1_000)
+        let replaced = executor.execute(reviewed, dryRun: false)
+        #expect(replaced.skipped.first?.reason.hasPrefix(CleanupExecutor.changedSinceReview) == true)
+        #expect(onDisk(tree.path("home/a/Thing/z")))
+    }
+
+    @Test("An accepted volume share covers that share or less, not a larger one")
+    func volumeShareBound() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/big/x", bytes: 40_000)
+        var executor = sandboxExecutor(tree)
+        executor.safety = SafetyGuard(
+            home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false,
+            volumeCapacity: { _ in VolumeCapacity(name: "Test", mountPoint: "/", total: 200_000, freeNow: 100_000, available: 100_000) })
+        func plan(recording size: UInt64) -> CleanupPlan {
+            CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/big"), size: size)], useTrash: false)
+        }
+
+        // Reviewed at 12%, about 40% at removal.
+        let grown = manualRun(plan(recording: 12_000), with: executor)
+        let skipped = try #require(grown.skipped.first)
+        #expect(skipped.reason.hasPrefix(CleanupExecutor.changedSinceReview))
+        #expect(skipped.reason.contains("of the disk's used space"))
+        #expect(onDisk(tree.path("home/Projects/big/x")))
+
+        // Reviewed at 50%, about 40% at removal.
+        let shrunk = manualRun(plan(recording: 50_000), with: executor)
+        #expect(shrunk.items.first?.outcome.isRemoved == true)
+    }
+
     @Test("Unticked rows don't run, and the counts and totals leave them out")
     func untickedRowsDontRun() throws {
         let tree = try TempTree()

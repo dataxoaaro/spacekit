@@ -58,7 +58,11 @@
 
 **Acknowledgement**: the person's one go-ahead for a whole review, accepting the warnings it showed or none of them. _Avoid_: confirmation (per item), approval (that's for suggestions).
 
-**Reviewed plan**: what a review produces on acknowledgement (`ReviewedPlan`): the selected rows and the warnings shown for each; the executor's only input for a manual run. _Avoid_: confirmed plan.
+**Reviewed plan**: what a review produces on acknowledgement (`ReviewedPlan`): the selected rows, the reasons shown for each and where each item was judged; the executor's only input for a manual run. _Avoid_: confirmed plan.
+
+**Reviewed location**: where the review judged an item: its path with the folder's symlinks resolved, and the folder and the item by device and inode (`RemovalTarget.Location`); a reviewed row runs only while the item is still there. _Avoid_: checked path.
+
+**Changed since review**: a reviewed row skipped because its check at removal time raised a reason the review didn't show (a new warning, a larger share of the disk, a block) or the item isn't at its reviewed location; it counts as a problem. _Avoid_: stale row, unreviewed warning.
 
 **Automatic plan**: the plan `JobRunner` hands the executor for an automatic run (`AutomaticPlan`); it acknowledges nothing. _Avoid_: scheduled plan.
 

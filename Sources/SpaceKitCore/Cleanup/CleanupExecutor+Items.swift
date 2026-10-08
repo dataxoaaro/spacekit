@@ -2,15 +2,21 @@ import Foundation
 
 extension CleanupExecutor {
     static let stalePlan = "This item was saved without what its scan saw; refresh the plan"
+    static let notWhereReviewed = "what is at this path now isn't what you reviewed (its folder leads elsewhere, or it was replaced)"
 
-    /// `accepted`: the warnings the person accepted for this item in the review.
+    /// `reviewed`: what the person's review showed for this item; `nil` in an automatic run.
     func removeItem(
-        _ item: CleanupItem, plan: CleanupPlan, context: CleanupContext, accepted: Set<String>, run: inout Run
+        _ item: CleanupItem, plan: CleanupPlan, context: CleanupContext, reviewed: ReviewRecord.Row?, run: inout Run
     ) -> CleanupOutcome {
         let remover = self.remover
         // Built once: the guard, the Trash-or-delete decision and the removal all see this location and these facts.
         let target = remover.target(of: item, probingRepositories: true)
         guard item.kind == .looseFiles ? target.directory != nil : target.exists else { return .skipped(reason: "Already gone") }
+        // The person's go-ahead covers what the review judged where it judged it: a parent that leads elsewhere now,
+        // or another item in its place, could take an accepted warning to something they never saw.
+        if let reviewed, reviewed.location != target.location {
+            return .skipped(reason: CleanupExecutor.changedSinceReview + CleanupExecutor.notWhereReviewed)
+        }
         let rule = item.ruleID.flatMap { rules[$0] }
         let inTrash = remover.isInsideTrash(target)
         guard let method = remover.method(for: target, useTrash: plan.useTrash, rule: rule, context: context) else {
@@ -32,14 +38,14 @@ extension CleanupExecutor {
         }
 
         func check(_ target: RemovalTarget) -> CleanupOutcome? {
-            CleanupExecutor.refusal(verdict(for: target, ruleID: item.ruleID, context: context), accepted: accepted)
+            CleanupExecutor.refusal(verdict(for: target, ruleID: item.ruleID, context: context), reviewed: reviewed)
         }
         if let refused = check(target) { return refused }
 
         if item.kind == .looseFiles, let scanStarted {
             if run.dryRun { return .wouldRemove(bytes: item.size) }
             return removeLooseFiles(
-                item, target: target, method: method, scanStarted: scanStarted, context: context, accepted: accepted, run: &run)
+                item, target: target, method: method, scanStarted: scanStarted, context: context, reviewed: reviewed, run: &run)
         }
 
         // Charge the budget and report what's there now, not what the scan saw.
@@ -109,7 +115,7 @@ extension CleanupExecutor {
     /// checked by the guard, charged to the budget and journaled on its own, so a partial failure keeps an exact record.
     private func removeLooseFiles(
         _ item: CleanupItem, target: RemovalTarget, method: Remover.Method, scanStarted: Date, context: CleanupContext,
-        accepted: Set<String>, run: inout Run
+        reviewed: ReviewRecord.Row?, run: inout Run
     ) -> CleanupOutcome {
         let remover = self.remover
         let names = item.looseFileNames ?? []
@@ -131,7 +137,7 @@ extension CleanupExecutor {
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             guard !CleanupExecutor.changed(st, after: scanStarted) else { continue }
             let file = target.entry(name, stat: st, namedIn: item.path)
-            guard CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), accepted: accepted) == nil else {
+            guard CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), reviewed: reviewed) == nil else {
                 continue
             }
             // A file with another hard link keeps its bytes on disk: charged to the budget, but not freed.

@@ -44,6 +44,8 @@ public struct CleanupReview: Sendable {
     public let canChooseTrash: Bool
     /// Ids of items already in the Trash.
     private let trashed: Set<String>
+    /// Where each item was judged, by id: the reviewed plan binds the person's go-ahead to it.
+    private let locations: [String: RemovalTarget.Location]
     /// Decides where items go, for the wording.
     private let remover: Remover
     private var unticked: Set<Key> = []
@@ -60,6 +62,7 @@ public struct CleanupReview: Sendable {
         useTrash = plan.useTrash
         canChooseTrash = !executor.alwaysTrash
         trashed = Set(targets.filter { remover.isInsideTrash($1) }.map { $0.0.id })
+        locations = Dictionary(targets.map { ($0.id, $1.location) }, uniquingKeysWith: { first, _ in first })
         self.remover = remover
     }
 
@@ -139,20 +142,26 @@ public struct CleanupReview: Sendable {
     /// The plan to run now that the person said go: the selected rows, without blocked or unticked ones.
     ///
     /// `acceptingWarnings`: the person was shown every reason of every selected row that needs acknowledgement and
-    /// accepted them all, once for the whole plan. The reviewed plan records exactly those reasons for each row, and
-    /// the executor refuses any warning outside them. Without it, such rows stay in the plan and the executor skips
-    /// them as needing confirmation, so the report lists them.
+    /// accepted them all, once for the whole plan. Without it, such rows stay in the plan and the executor skips them
+    /// as needing confirmation, so the report lists them.
+    ///
+    /// The reviewed plan records, for every selected row, the reasons the review showed and, for an item, the location
+    /// it was judged at. The executor holds the run to that record: a reason the review didn't show for the row, or an
+    /// item no longer at that location, skips the row as changed since the review.
     public func acknowledge(acceptingWarnings: Bool) -> ReviewedPlan {
-        func shown<Subject>(_ rows: [Row<Subject>]) -> [String: Set<String>] {
-            guard acceptingWarnings else { return [:] }
-            let warned = rows.filter { isIncluded($0) && $0.needsAcknowledgement }
-            return Dictionary(
-                warned.map { ($0.id, Set($0.verdict.reasons.map(CleanupExecutor.reasonKey))) }, uniquingKeysWith: { $0.union($1) })
+        func record<Subject>(_ rows: [Row<Subject>], location: (Row<Subject>) -> RemovalTarget.Location?) -> [String: ReviewRecord.Row] {
+            let selected = rows.filter(isIncluded).map { row in
+                let accepted = acceptingWarnings || !row.needsAcknowledgement
+                return (row.id, ReviewRecord.Row(shown: Set(row.verdict.reasons), accepted: accepted, location: location(row)))
+            }
+            // Two rows with one id (the same path listed twice) hold the run to what both of them showed.
+            return Dictionary(selected, uniquingKeysWith: { $0.both($1) })
         }
         // With `safety.trash: always` the executor moves everything to the Trash, and the plan says so too.
         let plan = CleanupPlan(
             items: selectedItems, commands: selectedCommands, manualSteps: manualSteps, useTrash: useTrash || !canChooseTrash)
-        return ReviewedPlan(plan: plan, accepted: AcceptedWarnings(items: shown(items), commands: shown(commands)))
+        let review = ReviewRecord(items: record(items) { locations[$0.id] }, commands: record(commands) { _ in nil })
+        return ReviewedPlan(plan: plan, review: review)
     }
 }
 
@@ -161,31 +170,78 @@ public struct CleanupReview: Sendable {
 public struct ReviewedPlan: Sendable {
     /// The selected items and commands.
     public let plan: CleanupPlan
-    let accepted: AcceptedWarnings
+    let review: ReviewRecord
 
-    fileprivate init(plan: CleanupPlan, accepted: AcceptedWarnings) {
+    fileprivate init(plan: CleanupPlan, review: ReviewRecord) {
         self.plan = plan
-        self.accepted = accepted
+        self.review = review
     }
 }
 
 extension ReviewedPlan {
-    /// Only the rows that are also in `plan`, with the warnings accepted for them.
+    /// Only the rows that are also in `plan`, with what the review recorded for them.
     func limited(to plan: CleanupPlan) -> ReviewedPlan {
         let items = Set(plan.items.map(\.id))
         let commands = Set(plan.commands.map(\.id))
         var limited = self.plan
         limited.items = limited.items.filter { items.contains($0.id) }
         limited.commands = limited.commands.filter { commands.contains($0.id) }
-        return ReviewedPlan(plan: limited, accepted: accepted)
+        return ReviewedPlan(plan: limited, review: review)
     }
 }
 
-/// The warnings a person accepted in a review, by item and command id, as reason keys (`CleanupExecutor.reasonKey`).
-/// Automatic runs have none.
-struct AcceptedWarnings: Sendable {
-    var items: [String: Set<String>] = [:]
-    var commands: [String: Set<String>] = [:]
+/// What a person's review showed for each row, by item and command id. The executor holds a manual run to it;
+/// automatic runs have none.
+struct ReviewRecord: Sendable {
+    /// One row as the review showed it.
+    struct Row: Sendable {
+        /// Every reason the review showed; none for a row it allowed outright.
+        let shown: Set<String>
+        /// The person accepted `shown` (or there was nothing to accept).
+        let accepted: Bool
+        /// Where the review judged an item. `nil` for a command.
+        let location: RemovalTarget.Location?
 
-    static let none = AcceptedWarnings()
+        /// What two rows for the same thing both showed and the person accepted for both.
+        func both(_ other: Row) -> Row {
+            Row(shown: shown.intersection(other.shown), accepted: accepted && other.accepted, location: location)
+        }
+
+        /// A row with no record: everything about it is unseen.
+        static let unseen = Row(shown: [], accepted: false, location: nil)
+
+        /// Whether `reason`, raised at removal time, is one the review showed: the same text, or the same text with
+        /// every number in it no larger. An item shown as holding 12% of the disk is the same warning at 11%, not
+        /// at 45%: the person accepted removing that much, not more.
+        func showed(_ reason: String) -> Bool {
+            if shown.contains(reason) { return true }
+            let raised = ReviewRecord.numbers(in: reason)
+            return shown.contains { candidate in
+                let seen = ReviewRecord.numbers(in: candidate)
+                return seen.text == raised.text && seen.values.count == raised.values.count
+                    && zip(raised.values, seen.values).allSatisfy { $0 <= $1 }
+            }
+        }
+    }
+
+    let items: [String: Row]
+    let commands: [String: Row]
+
+    /// `reason` without its digits, and the numbers it holds in order.
+    static func numbers(in reason: String) -> (text: String, values: [UInt64]) {
+        var text = ""
+        var values: [UInt64] = []
+        var digits = ""
+        for character in reason {
+            if character.isASCII, character.isNumber {
+                digits.append(character)
+                continue
+            }
+            if let value = UInt64(digits) { values.append(value) }
+            digits = ""
+            text.append(character)
+        }
+        if let value = UInt64(digits) { values.append(value) }
+        return (text, values)
+    }
 }

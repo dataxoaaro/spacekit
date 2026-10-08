@@ -49,19 +49,10 @@ struct TreeWalk {
         stack = [item]
         while let index = stack.indices.last {
             if let entry = stack[index].pending.popLast() {
-                if let child = visit(entry, in: current) {
-                    let childDevice = device(child)
-                    guard childDevice == volume else {
-                        let code = errno
-                        close(child)
-                        if childDevice == nil { keep(entry, code: code) } else { leaveMounted(entry) }
-                        continue
-                    }
-                    close(current)
-                    current = child
-                    let inside = frame(for: child, name: entry)
-                    stack.append(inside)
-                }
+                guard let opened = visit(entry, in: current), let child = onItemVolume(opened, named: entry) else { continue }
+                close(current)
+                current = child
+                stack.append(frame(for: child, name: entry))
                 continue
             }
             if relist(current) { continue }
@@ -89,6 +80,18 @@ struct TreeWalk {
         // Not a folder (any more): try the entry itself once more; what still fails stays.
         if errno == ENOTDIR || errno == ELOOP, unlinkat(folder, entry, 0) == 0 || errno == ENOENT { return nil }
         if errno != ENOENT { keep(entry, code: errno) }
+        return nil
+    }
+
+    /// `child` (the subfolder `entry`, just opened) when it is on the item's volume, so the walk goes into it.
+    /// Otherwise it is closed and `nil` returned: a folder on another device is a mounted volume, left as it is, and
+    /// one whose device can't be read is left and counted.
+    private mutating func onItemVolume(_ child: Int32, named entry: [CChar]) -> Int32? {
+        let childDevice = device(child)
+        if childDevice == volume { return child }
+        let code = errno
+        close(child)
+        if childDevice == nil { keep(entry, code: code) } else { leaveMounted(entry) }
         return nil
     }
 

@@ -73,7 +73,9 @@ public final class Workspace: Sendable {
     // MARK: Scans and analyses
 
     /// Shows a finished scan (or none, while a new one runs): the previous tree's analysis is dropped and one still
-    /// running is stopped, so its result never lands on this tree. Call it on the front end's own thread.
+    /// running is stopped, so its result never lands on this tree. Changes still waiting for the previous tree are
+    /// dropped too: they were worked out on it, and the new scan already shows the disk as it is (a removal of a folder
+    /// it doesn't have would take bytes from the folder around it). Call it on the front end's own thread.
     @discardableResult
     public func show(_ tree: ScanTree?) -> Snapshot {
         state.withLock { state in
@@ -84,6 +86,7 @@ public final class Workspace: Sendable {
             state.tree = tree
             state.result = nil
             state.refreshing = []
+            state.pending = []
             return state.snapshot
         }
     }

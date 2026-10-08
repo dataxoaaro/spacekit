@@ -84,6 +84,8 @@ extension AppModel {
     private func applyRemovals(_ report: CleanupReport) {
         workspace.apply(report, context: context)
         let removals = Removal.from(report)
+        // Here rather than when the workspace's change lands: a new scan shown before then drops the change.
+        forgetRemoved(removals)
         refreshJournal()
         refreshVolumes()
         // Re-measure the Trash exactly (and resync it in the map) once the move has settled.
@@ -92,7 +94,7 @@ extension AppModel {
     }
 
     /// Takes what a cleanup removed off the cleanup list.
-    func forgetRemoved(_ removals: [Removal]) {
+    private func forgetRemoved(_ removals: [Removal]) {
         let removedPaths = Set(removals.filter { $0.kind != .looseFiles && !$0.partial }.map(\.path))
         guard !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) else { return }
         cleanupList.removeAll { item in

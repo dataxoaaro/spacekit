@@ -452,7 +452,6 @@ final class AppModel {
         }
         if let path = selection?.path, change.isGone(path) { selection = nil }
         if let path = hovered?.path, change.isGone(path) { hovered = nil }
-        forgetRemoved(change.removals)
     }
 
     private func recomputeCategories() {

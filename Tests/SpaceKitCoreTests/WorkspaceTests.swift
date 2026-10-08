@@ -268,6 +268,40 @@ struct WorkspaceTests {
         #expect(workspace.snapshot.tree === newer)
     }
 
+    @Test("A scan shown after a cleanup isn't changed by that cleanup's removals, still waiting for the old tree")
+    func newScanDropsQueuedRemovals() throws {
+        let fixture = try Fixture()
+        // A small file beside the removed folder: a removal that misses its folder takes a file of that name instead,
+        // and with none, a share of the small files.
+        try fixture.tree.file("home/cache/index.db", bytes: 40_960)
+        let recorder = Recorder()
+        let held = HeldAnalysis()
+        let workspace = Workspace(deliver: recorder.deliver, analyze: held.analyze)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        held.started.wait()
+        // The cleanup lands while the analysis reads the old tree, so its removals wait.
+        workspace.apply(fixture.clean(["c0"]), context: fixture.context)
+
+        // The new scan already shows the cleanup.
+        let newer = try fixture.scanHome()
+        let expected = try fixture.scanHome()
+        workspace.show(newer)
+        // A change for the new tree, applied once the old analysis stops reading: everything queued before it has
+        // been handled by then.
+        workspace.apply(CleanupReport(dryRun: false), context: fixture.context)
+        held.release.signal()
+        #expect(recorder.wait { !$0.changes.isEmpty })
+
+        #expect(recorder.changes.allSatisfy { $0.removals.isEmpty })
+        workspace.read { tree in
+            #expect(tree === newer)
+            #expect(tree?.inconsistencies() == [])
+            #expect(tree?.root.size == expected.root.size)
+            #expect(tree?.node(at: fixture.tree.path("home/cache"))?.size == expected.node(at: fixture.tree.path("home/cache"))?.size)
+        }
+    }
+
     @Test("Re-syncing a folder emptied elsewhere splices it in")
     func resync() throws {
         let fixture = try Fixture()

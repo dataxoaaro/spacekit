@@ -108,17 +108,18 @@ struct JobsCommand: ParsableCommand {
             let evaluation = try ProgressReporter.run("Evaluating") { try runner.evaluate(job, progress: $0) }
             let plan = runner.plan(for: evaluation)
             let automation = CleanupContext.automatic(runner.automationContext(for: job))
+            let verdicts = CleanupOutput.Verdicts(plan, executor: runner.executor, context: automation)
             if json {
                 try Output.json(
                     EvaluationJSON(
                         job: job, matchedBytes: evaluation.matchedBytes, eligibleBytes: evaluation.eligibleBytes,
                         triggered: evaluation.isTriggered, status: evaluation.triggerSummary, missingRules: runner.rules(for: job).missing,
-                        plan: PlanJSON(plan: plan, executor: runner.executor, context: automation)))
+                        plan: PlanJSON(verdicts)))
                 return
             }
             JobsCommand.warnMissingRules(job, runner: runner)
             Output.emit(JobsCommand.summaryLines(job, evaluation))
-            Output.emit(CleanupOutput.planLines(plan, executor: runner.executor, context: automation, limit: 25))
+            Output.emit(CleanupOutput.planLines(verdicts, limit: 25))
             print()
             print("✓ = a scheduled run may remove it; ✗ = scheduled runs leave it alone (you can still clean it yourself).".dim)
         }
@@ -177,15 +178,11 @@ struct JobsCommand: ParsableCommand {
 
             // Check custom folders against the guard up front.
             let automation = CleanupContext.automatic(JobRunner(context: context).automationContext(for: job))
-            let safetyGuard = context.safetyGuard
             for folder in job.paths {
-                // Something the job might find inside the folder; only its location is known yet.
-                let inside = RemovalTarget.at(
-                    PathUtil.join(PathUtil.expand(folder), "item"), home: safetyGuard.home, size: 0,
-                    repositories: .recorded(isRepository: false, containsRepository: false))
-                let verdict = safetyGuard.evaluate(inside, rule: nil, context: automation)
-                if verdict.isBlocked {
-                    Output.warn(Output.safe("Automatic runs won't clean inside \(folder): \(verdict.reasons.joined(separator: "; "))"))
+                // Something the job might find inside the folder: only where it would be is known yet.
+                let inside = PathUtil.join(PathUtil.expand(folder), "item")
+                if let reasons = context.safetyGuard.locationRefusal(of: inside, rule: nil, context: automation) {
+                    Output.warn(Output.safe("Automatic runs won't clean inside \(folder): \(reasons.joined(separator: "; "))"))
                 }
             }
             var storedID = job.id
@@ -237,9 +234,23 @@ struct JobsCommand: ParsableCommand {
     }
 
     /// Prints bookkeeping a manual run couldn't save. Returns whether there was any.
-    static func warnUnsaved(_ outcome: ManualJobRun.Outcome) -> Bool {
+    /// Reviews `run`'s plan with `executor`, the context's, and completes the run with that same executor once the person
+    /// said go. `nil` when nothing ran.
+    static func complete(
+        _ run: ManualJobRun, plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool,
+        heading: String, hint: String
+    ) throws -> ManualJobRun.Outcome? {
+        try CleanupOutput.session(
+            plan, executor: executor, acknowledgement: acknowledgement, json: json, interactive: false, heading: heading, hint: hint,
+            run: { run.complete($0, executor: executor) }, report: \.report)
+    }
+
+    /// Ends a job run or an approval: what couldn't be saved is warned about, and the exit status is nonzero when the
+    /// run left something undone or its state wasn't saved.
+    static func finish(_ outcome: ManualJobRun.Outcome) throws {
         for error in outcome.saveErrors { Output.warn(Output.safe(error)) }
-        return !outcome.saveErrors.isEmpty
+        try CleanupOutput.exitIfProblems(outcome.report)
+        if !outcome.saveErrors.isEmpty { throw ExitCode(1) }
     }
 
     struct Run: ParsableCommand {
@@ -283,21 +294,11 @@ struct JobsCommand: ParsableCommand {
                 if run.canForce { print("Run it anyway with --force.".dim) }
                 return
             }
-            var outcome: ManualJobRun.Outcome?
-            guard
-                let report = try CleanupOutput.session(
-                    plan, executor: runner.executor, acknowledgement: acknowledgement, json: false, interactive: false,
-                    heading: "What this run removes",
-                    hint: "Preview only. Run with --yes to clean now, or --scheduled to run it the way the agent would.",
-                    run: { reviewed in
-                        let completed = run.complete(reviewed, executor: runner.executor)
-                        outcome = completed
-                        return completed.report
-                    })
-            else { return }
-            let unsaved = outcome.map(JobsCommand.warnUnsaved) ?? false
-            try CleanupOutput.exitIfProblems(report)
-            if unsaved { throw ExitCode(1) }
+            let outcome = try JobsCommand.complete(
+                run, plan: plan, executor: context.executor, acknowledgement: acknowledgement, json: false,
+                heading: "What this run removes",
+                hint: "Preview only. Run with --yes to clean now, or --scheduled to run it the way the agent would.")
+            if let outcome { try JobsCommand.finish(outcome) }
         }
 
         private func runScheduled(_ job: Job, runner: JobRunner) throws {
@@ -447,25 +448,17 @@ struct SuggestionsCommand: ParsableCommand {
             notes += run.dropped.map { "  no longer eligible: ".dim + Output.path($0.path) }
             Output.emit(notes, toStandardError: json)
             guard let plan = run.plan else {
-                try settleNothingLeft(run, suggestion: suggestion, executor: runner.executor, dismiss: dismiss)
+                try settleNothingLeft(run, suggestion: suggestion, executor: context.executor, dismiss: dismiss)
                 return
             }
-            var outcome: ManualJobRun.Outcome?
             guard
-                let report = try CleanupOutput.session(
-                    plan, executor: runner.executor, acknowledgement: acknowledgement, json: json, interactive: false,
+                let outcome = try JobsCommand.complete(
+                    run, plan: plan, executor: context.executor, acknowledgement: acknowledgement, json: json,
                     heading: "Suggested cleanup",
-                    hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes",
-                    run: { reviewed in
-                        let completed = run.complete(reviewed, executor: runner.executor)
-                        outcome = completed
-                        return completed.report
-                    })
+                    hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes")
             else { return }
-            if let outcome { Output.emit(Self.fateLines(outcome.suggestion), toStandardError: json) }
-            let unsaved = outcome.map(JobsCommand.warnUnsaved) ?? false
-            try CleanupOutput.exitIfProblems(report)
-            if unsaved { throw ExitCode(1) }
+            Output.emit(Self.fateLines(outcome.suggestion), toStandardError: json)
+            try JobsCommand.finish(outcome)
         }
 
         /// Nothing in the suggestion still meets its job's conditions. Approving it (`--yes`) runs nothing, records the
@@ -483,7 +476,7 @@ struct SuggestionsCommand: ParsableCommand {
             }
             Output.emit([reason + "."] + Self.fateLines(outcome.suggestion), toStandardError: json)
             if json { try Output.json(RunJSON(plan: plan, result: ReportJSON(outcome.report))) }
-            if JobsCommand.warnUnsaved(outcome) { throw ExitCode(1) }
+            try JobsCommand.finish(outcome)
         }
 
         private static func fateLines(_ fate: ManualJobRun.SuggestionFate?) -> [String] {

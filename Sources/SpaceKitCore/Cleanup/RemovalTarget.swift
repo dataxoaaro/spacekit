@@ -84,7 +84,7 @@ public struct RemovalTarget: Sendable, Equatable {
 
 extension RemovalTarget {
     /// Builds the target for `path` from the disk as it is now. The one place a removal's location is resolved.
-    public static func at(_ path: String, home: String, size: UInt64, repositories: Repositories) -> RemovalTarget {
+    static func at(_ path: String, home: String, size: UInt64, repositories: Repositories) -> RemovalTarget {
         resolving(path, home: home, size: size, repositories: repositories, resolve: PathUtil.realpath)
     }
 

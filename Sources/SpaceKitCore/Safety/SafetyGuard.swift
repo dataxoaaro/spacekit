@@ -217,6 +217,20 @@ public struct SafetyGuard: Sendable {
 
     // MARK: Evaluation
 
+    /// Why `path` is refused for where it is, before anything is known about what's there; `nil` when its location
+    /// alone refuses nothing. For checks ahead of the facts: `clean` before it measures a folder it may not need to,
+    /// `jobs add` about whatever a job may find in a folder.
+    ///
+    /// The facts (size, git repositories) aren't judged here, and they can't be stood in for: each can only add a
+    /// reason, so what this refuses is refused whatever is there, and `nil` permits nothing. The review and the
+    /// removal judge the facts once they are known.
+    public func locationRefusal(of path: String, rule: Rule?, context: CleanupContext) -> [String]? {
+        // No size and no repository are the facts that add no reason; the verdict is the location's alone.
+        let location = RemovalTarget.at(path, home: home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
+        let verdict = evaluate(location, rule: rule, context: context)
+        return verdict.isBlocked ? verdict.entries.filter { $0.decision == .block }.map(\.reason) : nil
+    }
+
     /// Decides whether `target` may be removed, from the facts it carries: its spellings, whether it is or contains a git
     /// working copy, and its size (for the volume-share checks). The guard reads no file itself; `RemovalTarget` read
     /// them, once, for the guard and the removal alike.

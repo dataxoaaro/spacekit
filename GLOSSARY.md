@@ -76,6 +76,8 @@
 
 **Removal target**: one item as the guard and the removal see it, read from the disk once (`RemovalTarget`): its folder with every symlink resolved, the folder and the item pinned by device and inode, whether it is or contains a git repository, and its size. _Avoid_: checked path, checked directory.
 
+**Location refusal**: why a path is refused for where it is alone, before its size and repositories are known (`SafetyGuard.locationRefusal`); facts can only add reasons, so it never permits anything. _Avoid_: pre-check verdict, unmeasured target.
+
 **Remover**: the module that takes an item off its place (`Remover`): it builds the item's removal target, decides Trash or delete in one place, and moves or deletes the item only while it still matches its target. _Avoid_: deleter, safe removal (that's only its handle-level deletion, `SafeRemoval`).
 
 **Removal**: one item a cleanup took off its place, as the report and the trees record it (`Removal`), whether deleted or moved to the Trash. _Avoid_: deletion.

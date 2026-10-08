@@ -19,40 +19,52 @@ struct AcknowledgementOptions: ParsableArguments {
 
 /// How every command that removes things shows its plan and its result.
 enum CleanupOutput {
-    /// The review as the preview prints it: every row with every one of the guard's reasons, so the warnings a
-    /// person accepts are exactly the ones on screen.
-    static func planLines(_ review: CleanupReview) -> [String] {
-        planLines(
-            items: review.items.map { ($0.subject, $0.verdict) }, commands: review.commands.map { ($0.subject, $0.verdict) },
-            manualSteps: review.manualSteps)
+    /// Every row of a plan with the verdict a preview shows for it, largest item first: the review's own, or for
+    /// `jobs show` the verdicts an automatic run gets. The text preview and the JSON plan both print these.
+    struct Verdicts {
+        var items: [(CleanupItem, SafetyVerdict)]
+        var commands: [(PlannedCommand, SafetyVerdict)]
+        var manualSteps: [String]
+        var useTrash: Bool
+
+        /// The review as a person sees it, so the warnings they accept are exactly the ones printed.
+        init(_ review: CleanupReview) {
+            items = review.items.map { ($0.subject, $0.verdict) }
+            commands = review.commands.map { ($0.subject, $0.verdict) }
+            manualSteps = review.manualSteps
+            useTrash = review.useTrash
+        }
+
+        /// The plan with the verdicts `context` gets, such as an automatic run's.
+        init(_ plan: CleanupPlan, executor: CleanupExecutor, context: CleanupContext) {
+            items = plan.itemsLargestFirst.map { ($0, executor.verdict(for: $0, context: context)) }
+            commands = plan.commands.map { ($0, executor.verdict(for: $0, context: context)) }
+            manualSteps = plan.manualSteps
+            useTrash = plan.useTrash
+        }
     }
 
-    /// The plan with the verdicts `context` gets, such as an automatic run's (`jobs show`).
-    static func planLines(_ plan: CleanupPlan, executor: CleanupExecutor, context: CleanupContext, limit: Int) -> [String] {
-        planLines(
-            items: plan.itemsLargestFirst.map { ($0, executor.verdict(for: $0, context: context)) },
-            commands: plan.commands.map { ($0, executor.verdict(for: $0, context: context)) }, manualSteps: plan.manualSteps,
-            limit: limit)
+    /// The review as the preview prints it: every row with every one of the guard's reasons.
+    static func planLines(_ review: CleanupReview) -> [String] {
+        planLines(Verdicts(review))
     }
 
     /// One line per item and command with its verdict, followed by the guard's reasons for anything that isn't
-    /// simply allowed, and the manual steps.
-    private static func planLines(
-        items: [(CleanupItem, SafetyVerdict)], commands: [(PlannedCommand, SafetyVerdict)], manualSteps: [String], limit: Int = .max
-    ) -> [String] {
+    /// simply allowed, and the manual steps. At most `limit` items are listed.
+    static func planLines(_ verdicts: Verdicts, limit: Int = .max) -> [String] {
         var lines: [String] = []
-        for (item, verdict) in items.prefix(limit) {
+        for (item, verdict) in verdicts.items.prefix(limit) {
             let label = item.kind == .looseFiles ? "files in " + Output.path(item.path) : Output.path(item.path)
             lines += verdictLines(verdict, Output.size(item.size) + "  " + label)
         }
-        if items.count > limit { lines.append("  … \(items.count - limit) more".dim) }
-        for (command, verdict) in commands {
+        if verdicts.items.count > limit { lines.append("  … \(verdicts.items.count - limit) more".dim) }
+        for (command, verdict) in verdicts.commands {
             let text =
                 "$ ".fg(ANSI.accent) + Output.safe(command.displayString) + "  "
                 + "(frees up to \(ByteCount.format(command.estimatedBytes)); the tool decides what's unused)".dim
             lines += verdictLines(verdict, text)
         }
-        lines += manualSteps.map { "  → ".dim + Output.safe($0) }
+        lines += verdicts.manualSteps.map { "  → ".dim + Output.safe($0) }
         return lines
     }
 
@@ -96,18 +108,30 @@ enum CleanupOutput {
         return lines
     }
 
-    /// Prints the review of `plan`, gets the go-ahead and runs it, through `run` when given (a manual job run completes
-    /// it), else through `executor`. Returns the report, or `nil` when nothing ran.
+    /// Prints the review of `plan`, gets the go-ahead and runs it through `executor`. Returns the report, or `nil` when
+    /// nothing ran.
+    static func session(
+        _ plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool, interactive: Bool,
+        heading: String = "Cleanup preview", verb: String = "Clean", hint: String
+    ) throws -> CleanupReport? {
+        try session(
+            plan, executor: executor, acknowledgement: acknowledgement, json: json, interactive: interactive, heading: heading,
+            verb: verb, hint: hint, run: { executor.execute($0, dryRun: false) }, report: { $0 })
+    }
+
+    /// Prints the review of `plan` made with `executor`, gets the go-ahead and runs the reviewed plan through `run`
+    /// (a manual job run completes it with the same executor). Returns what `run` returned, or `nil` when nothing ran;
+    /// `report` reads the cleanup report from it.
     ///
     /// Warnings are accepted only here, after the preview printed them: by `--accept-warnings` next to `--yes`, or by
     /// answering the question when `interactive`. `--yes` alone runs only what the guard allows outright; the rows with
     /// warnings are still handed to the executor, which reports each as not accepted, so the result lists them and the
     /// command exits nonzero (`exitIfProblems`). With `json`, stdout carries only JSON: the plan alone without `--yes`,
     /// else the plan and the result, always; the preview then goes to stderr.
-    static func session(
+    static func session<Ran>(
         _ plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool, interactive: Bool,
-        heading: String = "Cleanup preview", verb: String = "Clean", hint: String, run: ((ReviewedPlan) -> CleanupReport)? = nil
-    ) throws -> CleanupReport? {
+        heading: String, verb: String = "Clean", hint: String, run: (ReviewedPlan) -> Ran, report: (Ran) -> CleanupReport
+    ) throws -> Ran? {
         let review = CleanupReview(plan, executor: executor)
         let planJSON = json ? PlanJSON(review) : nil
         if let planJSON, !acknowledgement.yes {
@@ -137,14 +161,13 @@ enum CleanupOutput {
             let note = "\(count) with warnings not accepted, so left alone; add --accept-warnings to run them too."
             Output.emit([note.fg(ANSI.review)], toStandardError: json)
         }
-        let reviewed = review.acknowledge(acceptingWarnings: acceptingWarnings)
-        let report = run?(reviewed) ?? executor.execute(reviewed, dryRun: false)
+        let ran = run(review.acknowledge(acceptingWarnings: acceptingWarnings))
         if let planJSON {
-            try Output.json(RunJSON(plan: planJSON, result: ReportJSON(report)))
+            try Output.json(RunJSON(plan: planJSON, result: ReportJSON(report(ran))))
         } else {
-            Output.emit([""] + reportLines(report))
+            Output.emit([""] + reportLines(report(ran)))
         }
-        return report
+        return ran
     }
 
     /// Ends the command with a nonzero status when the run didn't do everything it was asked to.
@@ -199,32 +222,20 @@ struct PlanJSON: Encodable {
 
     /// The plan a person reviews, with the verdicts the review shows.
     init(_ review: CleanupReview) {
-        self.init(
-            items: review.items.map { ($0.subject, $0.verdict) }, commands: review.commands.map { ($0.subject, $0.verdict) },
-            manualSteps: review.manualSteps, useTrash: review.useTrash)
+        self.init(CleanupOutput.Verdicts(review))
     }
 
-    /// The plan with the verdicts `context` gets, such as an automatic run's (`jobs show`).
-    init(plan: CleanupPlan, executor: CleanupExecutor, context: CleanupContext) {
-        self.init(
-            items: plan.items.map { ($0, executor.verdict(for: $0, context: context)) },
-            commands: plan.commands.map { ($0, executor.verdict(for: $0, context: context)) }, manualSteps: plan.manualSteps,
-            useTrash: plan.useTrash)
-    }
-
-    private init(
-        items: [(CleanupItem, SafetyVerdict)], commands: [(PlannedCommand, SafetyVerdict)], manualSteps: [String], useTrash: Bool
-    ) {
-        self.useTrash = useTrash
-        totalBytes = items.reduce(0) { $0 &+ $1.0.size } &+ commands.reduce(0) { $0 &+ $1.0.estimatedBytes }
-        self.items = items.map { item, verdict in
+    init(_ verdicts: CleanupOutput.Verdicts) {
+        useTrash = verdicts.useTrash
+        totalBytes = verdicts.items.reduce(0) { $0 &+ $1.0.size } &+ verdicts.commands.reduce(0) { $0 &+ $1.0.estimatedBytes }
+        items = verdicts.items.map { item, verdict in
             Item(path: item.path, kind: item.kind.rawValue, bytes: item.size, rule: item.ruleID, verdict: VerdictJSON(verdict))
         }
-        self.commands = commands.map { command, verdict in
+        commands = verdicts.commands.map { command, verdict in
             Command(
                 rule: command.ruleID, arguments: command.arguments, estimatedBytes: command.estimatedBytes, verdict: VerdictJSON(verdict))
         }
-        self.manualSteps = manualSteps
+        manualSteps = verdicts.manualSteps
     }
 }
 

@@ -137,7 +137,7 @@ extension TUIApp {
             }
             let reason = TerminalText.sanitize(run.skipReason ?? "")
             let forced = run.forced()
-            guard let plan = forced.plan else {
+            guard run.canForce, let plan = forced.plan else {
                 state.modal = Modal(title: name, lines: [reason])
                 return
             }

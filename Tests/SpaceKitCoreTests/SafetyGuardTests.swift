@@ -171,6 +171,25 @@ struct SafetyGuardTests {
         // Removing something through the link means removing it inside .git.
         #expect(guardian.check(tree.path("link/objects"), context: manual).isBlocked)
     }
+
+    @Test("A location check refuses only what its location refuses, and that stays refused whatever is there")
+    func locationRefusal() throws {
+        let tree = try TempTree()
+        try tree.directory("home/Projects/app/.git")
+        let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
+
+        let system = try #require(guardian.locationRefusal(of: "/System/Library", rule: nil, context: manual))
+        #expect(system == guardian.check("/System/Library", context: manual).reasons)
+        #expect(guardian.check("/System/Library", size: 1 << 40, context: manual, isRepository: true).isBlocked)
+
+        // A repository blocks an automatic run, but that is a fact about what is there, judged once it is known: the
+        // location alone refuses nothing.
+        let app = tree.path("home/Projects/app")
+        let custom = CleanupContext.automatic(AutomationContext(jobID: "j", customPaths: [tree.path("home/Projects")]))
+        #expect(guardian.check(app, context: custom, isRepository: true).isBlocked)
+        #expect(guardian.locationRefusal(of: app, rule: nil, context: custom) == nil)
+        #expect(guardian.locationRefusal(of: app, rule: nil, context: manual) == nil, "warnings aren't refusals")
+    }
 }
 
 @Suite("Safety verdict reasons")

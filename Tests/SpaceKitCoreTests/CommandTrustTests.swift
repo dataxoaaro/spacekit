@@ -122,7 +122,7 @@ struct CommandTrustTests {
         #expect(refused("/usr/local/bin/mytool", builtin: false, .manual))
     }
 
-    @Test("Tools get a cleaned environment: PATH, HOME, locale and tool homes stay; Docker, tokens and the rest go")
+    @Test("Tools get a cleaned environment: PATH, HOME, locale, tool homes, Homebrew settings and DEVELOPER_DIR stay; the rest goes")
     func cleanedEnvironment() {
         let parent = [
             "PATH": "/usr/bin:relative", "HOME": "/Users/tester", "USER": "tester", "LOGNAME": "tester", "LANG": "en_US.UTF-8",
@@ -133,15 +133,23 @@ struct CommandTrustTests {
             "DOCKER_HOST": "tcp://build.example.com:2376", "DOCKER_CONTEXT": "remote", "DOCKER_CONFIG": "/elsewhere",
             "OLLAMA_HOST": "gpu.example.com", "GITHUB_TOKEN": "ghp_x", "AWS_SECRET_ACCESS_KEY": "s", "HF_TOKEN": "h",
             "DYLD_INSERT_LIBRARIES": "/tmp/evil.dylib", "NODE_OPTIONS": "--require /tmp/evil.js", "SSH_AUTH_SOCK": "/tmp/agent",
+            // Homebrew's own settings change what `brew cleanup` keeps; its credentials don't belong to any tool.
+            "HOMEBREW_NO_CLEANUP_FORMULAE": "llvm,python@3.12", "HOMEBREW_CLEANUP_MAX_AGE_DAYS": "365", "HOMEBREW_NO_AUTO_UPDATE": "1",
+            "HOMEBREW_GITHUB_API_TOKEN": "ghp_y", "HOMEBREW_DOCKER_REGISTRY_BASIC_AUTH_TOKEN": "b", "HOMEBREW_ARTIFACT_PASSWORD": "p",
+            "HOMEBREW_BOTTLE_SECRET": "s", "HOMEBREW_API_KEY": "k", "HOMEBREW_GITHUB_PACKAGES_AUTH": "a",
+            // Which Xcode simctl and xcrun use, so the simulators SpaceKit measured are the ones cleaned.
+            "DEVELOPER_DIR": "/Applications/Xcode-beta.app/Contents/Developer",
         ]
         let environment = Shell.toolEnvironment(from: parent, home: "/Users/tester")
-        let droppedMarks = ["DOCKER", "OLLAMA_HOST", "TOKEN", "AWS", "DYLD", "NODE", "SSH", "PATH"]
+        let droppedMarks = ["DOCKER", "OLLAMA_HOST", "TOKEN", "AWS", "DYLD", "NODE", "SSH", "PATH", "PASSWORD", "SECRET", "KEY", "AUTH"]
         for kept in parent.keys where !droppedMarks.contains(where: { kept.contains($0) }) {
             #expect(environment[kept] == parent[kept], "\(kept)")
         }
         for dropped in [
             "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "OLLAMA_HOST", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "HF_TOKEN",
-            "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "SSH_AUTH_SOCK",
+            "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "SSH_AUTH_SOCK", "HOMEBREW_GITHUB_API_TOKEN",
+            "HOMEBREW_DOCKER_REGISTRY_BASIC_AUTH_TOKEN", "HOMEBREW_ARTIFACT_PASSWORD", "HOMEBREW_BOTTLE_SECRET", "HOMEBREW_API_KEY",
+            "HOMEBREW_GITHUB_PACKAGES_AUTH",
         ] {
             #expect(environment[dropped] == nil, "\(dropped)")
         }

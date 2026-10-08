@@ -61,22 +61,31 @@ public enum Shell {
     /// How long a tool gets to exit after SIGTERM before it (and its process group) gets SIGKILL.
     static let terminationGrace: TimeInterval = 1
 
-    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, and the
-    /// variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured.
+    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, the variables
+    /// that move a tool's own cache, so a tool cleans the cache SpaceKit measured, and DEVELOPER_DIR, the Xcode whose
+    /// simulators `xcrun simctl` cleans.
     static let keptVariables: Set<String> = [
-        "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
+        "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "DEVELOPER_DIR",
         "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "npm_config_cache", "NPM_CONFIG_CACHE", "PNPM_HOME",
-        "YARN_CACHE_FOLDER", "GRADLE_USER_HOME", "OLLAMA_MODELS", "HOMEBREW_CACHE", "HOMEBREW_PREFIX",
+        "YARN_CACHE_FOLDER", "GRADLE_USER_HOME", "OLLAMA_MODELS",
     ]
-    static let keptPrefixes = ["LC_", "XDG_"]
+    /// `HOMEBREW_*` covers Homebrew's own settings, which decide what `brew cleanup` keeps (HOMEBREW_NO_CLEANUP_FORMULAE,
+    /// HOMEBREW_CLEANUP_MAX_AGE_DAYS) as well as its cache and prefix.
+    static let keptPrefixes = ["LC_", "XDG_", "HOMEBREW_"]
+    /// Parts of a name that mark a credential, which stays behind even under a kept prefix (HOMEBREW_GITHUB_API_TOKEN).
+    static let credentialMarks = ["TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "AUTH", "CREDENTIAL"]
 
-    /// The environment a tool runs with: `keptVariables` from `environment`, and PATH set to `searchPath`. Everything
-    /// else stays behind. A variable can point a tool somewhere else entirely (DOCKER_HOST at another machine's
-    /// daemon, OLLAMA_HOST at another server), load code into it (DYLD_*, NODE_OPTIONS) or hand it credentials
-    /// (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often from an agent nobody watches.
+    /// The environment a tool runs with: `keptVariables` and `keptPrefixes` from `environment`, minus credentials, and
+    /// PATH set to `searchPath`. Everything else stays behind. A variable can point a tool somewhere else entirely
+    /// (DOCKER_HOST at another machine's daemon, OLLAMA_HOST at another server), load code into it (DYLD_*,
+    /// NODE_OPTIONS) or hand it credentials (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often
+    /// from an agent nobody watches. Every tool SpaceKit starts gets it, its own helpers too (launchctl, tmutil,
+    /// osascript, open), so no caller can forget it.
     public static func toolEnvironment(from environment: [String: String], home: String) -> [String: String] {
         var kept = environment.filter { name, _ in
-            keptVariables.contains(name) || keptPrefixes.contains { name.hasPrefix($0) }
+            guard keptVariables.contains(name) || keptPrefixes.contains(where: { name.hasPrefix($0) }) else { return false }
+            let upper = name.uppercased()
+            return !credentialMarks.contains { upper.contains($0) }
         }
         kept["PATH"] = searchPath(environmentPATH: environment["PATH"], home: home).joined(separator: ":")
         return kept

@@ -8,18 +8,26 @@ import Testing
 struct ScriptedDocker: Sendable {
     /// What `docker context inspect` prints for the active context.
     var context = Shell.Result(status: 0, output: "unix:///var/run/docker.sock\n", timedOut: false)
+    /// What `docker buildx version` prints: a buildx plugin is installed unless the test says otherwise.
+    var version = Shell.Result(status: 0, output: "github.com/docker/buildx v0.17.1 257815a\n", timedOut: false)
     /// What `docker buildx ls --format json` prints.
     var builders = Shell.Result(status: 0, output: "", timedOut: false)
+    /// What `docker buildx inspect` prints for the selected builder.
+    var inspected = Shell.Result(status: 0, output: "", timedOut: false)
     /// Endpoints of contexts by name, for `docker context inspect <name>`; others aren't found.
     var named: [String: String] = [:]
 
     static let activeContext = ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]
     static let builderList = ["docker", "buildx", "ls", "--format", "json"]
+    static let buildxVersion = ["docker", "buildx", "version"]
+    static let builderInspect = ["docker", "buildx", "inspect"]
     static func namedContext(_ name: String) -> [String] { activeContext + [name] }
 
     func respond(_ call: [String]) -> Shell.Result {
         if call == ScriptedDocker.activeContext { return context }
         if call == ScriptedDocker.builderList { return builders }
+        if call == ScriptedDocker.buildxVersion { return version }
+        if call == ScriptedDocker.builderInspect { return inspected }
         if call.count == ScriptedDocker.activeContext.count + 1, call.starts(with: ScriptedDocker.activeContext), let name = call.last {
             guard let endpoint = named[name] else {
                 return Shell.Result(status: 1, output: "", timedOut: false, errors: "context \"\(name)\" does not exist\n")
@@ -28,6 +36,23 @@ struct ScriptedDocker: Sendable {
         }
         return Shell.Result(status: 0, output: "", timedOut: false)
     }
+
+    /// `docker buildx inspect` output for one builder, as buildx before 0.13 prints it too.
+    static func inspect(name: String, driver: String, endpoints: [String]) -> Shell.Result {
+        let nodes = endpoints.enumerated().map { index, endpoint in
+            "Name:      \(name)\(index)\nEndpoint:  \(endpoint)\nStatus:    running\nBuildkit:  v0.12.5\nPlatforms: linux/arm64\n"
+        }
+        let text =
+            "Name:          \(name)\nDriver:        \(driver)\nLast Activity: 2026-10-01 10:00:00 +0000 UTC\n\nNodes:\n"
+            + nodes.joined(separator: "\n")
+        return Shell.Result(status: 0, output: text, timedOut: false)
+    }
+
+    /// Docker without the buildx plugin, in the words older and newer Docker CLIs use.
+    static let withoutBuildx = [
+        Shell.Result(status: 1, output: "", timedOut: false, errors: "docker: 'buildx' is not a docker command.\nSee 'docker --help'\n"),
+        Shell.Result(status: 1, output: "", timedOut: false, errors: "docker: unknown command: docker buildx\n\nRun 'docker --help'\n"),
+    ]
 
     /// `docker buildx ls --format json` output: one JSON object per builder and line.
     static func builders(_ entries: [(name: String, driver: String, endpoints: [String], current: Bool)]) -> Shell.Result {
@@ -175,5 +200,58 @@ struct DockerEndpointTests {
         var noisy = ScriptedDocker(builders: ScriptedDocker.builders([("kit", "docker-container", ["unix:///var/run/docker.sock"], true)]))
         noisy.builders.errors = "WARNING: buildx: git was not found in the system\n"
         #expect(run(builderPrune, noisy).outcome?.isRemoved == true)
+    }
+
+    @Test("Without the buildx plugin, docker builder prunes the active context's daemon, so the context check is enough")
+    func classicBuilder() {
+        for missing in ScriptedDocker.withoutBuildx {
+            let result = run(builderPrune, ScriptedDocker(version: missing))
+            #expect(result.outcome?.isRemoved == true, "\(missing.errors)")
+            #expect(result.calls == [ScriptedDocker.activeContext, ScriptedDocker.buildxVersion, builderPrune])
+            // The context still has to be this Mac's.
+            let remote = run(builderPrune, ScriptedDocker(context: context("tcp://build.example.com:2376"), version: missing))
+            #expect(skipReason(remote.outcome)?.contains("tcp://build.example.com:2376") == true)
+        }
+        // buildx there but broken, or no answer: SpaceKit can't tell which builder runs.
+        let failures = [
+            Shell.Result(status: 1, output: "", timedOut: false, errors: "fork/exec docker-buildx: permission denied\n"),
+            Shell.Result(status: -2, output: "", timedOut: true),
+        ]
+        for failure in failures {
+            let result = run(builderPrune, ScriptedDocker(version: failure))
+            #expect(skipReason(result.outcome)?.contains("docker buildx version") == true, "\(failure.errors)")
+            #expect(!result.calls.contains(builderPrune))
+        }
+    }
+
+    @Test("A buildx too old for ls --format json is read from docker buildx inspect; nothing readable refuses")
+    func olderBuildx() {
+        let noJSON = Shell.Result(status: 1, output: "", timedOut: false, errors: "unknown flag: --format\n")
+        let local = [
+            ScriptedDocker.inspect(name: "default", driver: "docker", endpoints: ["default"]),
+            ScriptedDocker.inspect(name: "kit", driver: "docker-container", endpoints: ["unix:///var/run/docker.sock"]),
+        ]
+        for inspected in local {
+            let docker = ScriptedDocker(builders: noJSON, inspected: inspected, named: ["default": "unix:///var/run/docker.sock"])
+            let result = run(builderPrune, docker)
+            #expect(result.outcome?.isRemoved == true, "\(inspected.output)")
+            #expect(result.calls.contains(ScriptedDocker.builderInspect) && result.calls.last == builderPrune)
+        }
+        let refused: [(Shell.Result, String)] = [
+            (ScriptedDocker.inspect(name: "ci", driver: "remote", endpoints: ["tcp://buildkitd.example.com:1234"]), "remote"),
+            (ScriptedDocker.inspect(name: "kit", driver: "docker-container", endpoints: ["ssh://me@ci.example.com"]), "ssh://"),
+            (ScriptedDocker.inspect(name: "kit", driver: "docker-container", endpoints: []), "no nodes"),
+            (Shell.Result(status: 0, output: "Name: kit\nDriver: docker\nDriver: remote\nEndpoint: default\n", timedOut: false), "inspect"),
+            (Shell.Result(status: 0, output: "Name: kit\nEndpoint: default\n", timedOut: false), "inspect"),
+            (Shell.Result(status: 0, output: "", timedOut: false), "unknown flag: --format"),
+            (Shell.Result(status: 1, output: "", timedOut: false, errors: "no builder \"kit\" found\n"), "no builder"),
+        ]
+        for (inspected, mentioning) in refused {
+            let result = run(
+                builderPrune, ScriptedDocker(builders: noJSON, inspected: inspected, named: ["default": "unix:///var/run/docker.sock"]))
+            let reason = skipReason(result.outcome)
+            #expect(reason?.contains(mentioning) == true, "\(mentioning): \(reason ?? "ran")")
+            #expect(!result.calls.contains(builderPrune), "\(mentioning)")
+        }
     }
 }

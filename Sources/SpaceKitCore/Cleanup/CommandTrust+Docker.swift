@@ -37,17 +37,19 @@ extension CommandTrust {
     }
 
     /// Why the selected buildx builder isn't this Mac's Docker, or `nil` when it is: its driver builds in a Docker
-    /// daemon, and every node's endpoint is a unix socket or a context whose endpoint is one.
+    /// daemon, and every node's endpoint is a unix socket or a context whose endpoint is one. Without the buildx plugin
+    /// (Colima with Homebrew's docker, say) `docker builder` is the classic builder, which prunes the build cache of the
+    /// active context's daemon, already checked.
     private func builderRefusal(docker: DockerCLI) -> String? {
-        let listed = docker.ask(["buildx", "ls", "--format", "json"])
-        guard listed.status == 0, !listed.timedOut else {
-            return "Couldn't tell which buildx builder docker builder uses (docker buildx ls: \(CommandTrust.problem(listed)))"
+        let version = docker.ask(["buildx", "version"])
+        if version.status != 0 || version.timedOut {
+            if !version.timedOut && CommandTrust.saysBuildxIsMissing(version) { return nil }
+            return "Couldn't tell whether docker builder uses buildx (docker buildx version: \(CommandTrust.problem(version)))"
         }
-        guard let builders = BuildxBuilder.list(listed.output) else {
-            return "Couldn't read the builders docker buildx ls listed, so SpaceKit can't tell where docker builder acts"
-        }
-        guard let builder = builders.first(where: \.isCurrent) else {
-            return "docker buildx ls shows no selected builder, so SpaceKit can't tell where docker builder acts"
+        let builder: BuildxBuilder
+        switch CommandTrust.selectedBuilder(docker: docker) {
+        case .failure(let problem): return problem.description
+        case .success(let selected): builder = selected
         }
         let name = CommandTrust.shown(builder.name)
         guard CommandTrust.localBuilderDrivers.contains(builder.driver) else {
@@ -59,6 +61,41 @@ extension CommandTrust {
             if let refusal = nodeRefusal(endpoint, builder: name, docker: docker) { return refusal }
         }
         return nil
+    }
+
+    /// The selected buildx builder: from `docker buildx ls --format json`, or, from a buildx older than 0.13 that can't
+    /// list as JSON, from the text `docker buildx inspect` prints for it. The failure says why neither could be read.
+    private static func selectedBuilder(docker: DockerCLI) -> Result<BuildxBuilder, Unanswered> {
+        let listed = docker.ask(["buildx", "ls", "--format", "json"])
+        if listed.status == 0 && !listed.timedOut {
+            guard let builders = BuildxBuilder.list(listed.output) else {
+                return .failure(
+                    Unanswered("Couldn't read the builders docker buildx ls listed, so SpaceKit can't tell where docker builder acts"))
+            }
+            guard let builder = builders.first(where: \.isCurrent) else {
+                return .failure(Unanswered("docker buildx ls shows no selected builder, so SpaceKit can't tell where docker builder acts"))
+            }
+            return .success(builder)
+        }
+        let inspected = docker.ask(["buildx", "inspect"])
+        let builder = inspected.status == 0 && !inspected.timedOut ? BuildxBuilder(inspecting: inspected.output) : nil
+        guard let builder else {
+            let inspectProblem = inspected.status == 0 && !inspected.timedOut ? "no Driver line SpaceKit can read" : problem(inspected)
+            return .failure(
+                Unanswered(
+                    "Couldn't tell which buildx builder docker builder uses (docker buildx ls: \(problem(listed)); "
+                        + "docker buildx inspect: \(inspectProblem))"))
+        }
+        return .success(builder)
+    }
+
+    /// Docker's answer when no buildx plugin is installed, in the words older and newer Docker CLIs use.
+    static let buildxMissing = ["'buildx' is not a docker command", "unknown command: docker buildx"]
+
+    /// True when `result`, a failed `docker buildx version`, says the plugin isn't installed.
+    private static func saysBuildxIsMissing(_ result: Shell.Result) -> Bool {
+        let said = result.errors + "\n" + result.output
+        return buildxMissing.contains { said.contains($0) }
     }
 
     /// Why one node of a builder isn't on this Mac. A node names a socket (`unix://…`) or a Docker context, which is
@@ -150,6 +187,29 @@ private struct BuildxBuilder: Decodable {
         isCurrent = try c.decodeIfPresent(Bool.self, forKey: .current) ?? false
         // A node without an endpoint can't be checked; an empty one is refused like any other that isn't a socket.
         endpoints = try (c.decodeIfPresent([Node].self, forKey: .nodes) ?? []).map { $0.endpoint ?? "" }
+    }
+
+    /// The builder `docker buildx inspect` describes, the selected one: its `Name:` and `Driver:` lines and each node's
+    /// `Endpoint:` line. `nil` without exactly one driver.
+    init?(inspecting output: String) {
+        var names: [String] = []
+        var drivers: [String] = []
+        var endpoints: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            switch line[..<colon] {
+            case "Name": names.append(value)
+            case "Driver": drivers.append(value)
+            case "Endpoint": endpoints.append(value)
+            default: continue
+            }
+        }
+        guard drivers.count == 1, let driver = drivers.first else { return nil }
+        self.name = names.first ?? ""
+        self.driver = driver
+        self.isCurrent = true
+        self.endpoints = endpoints
     }
 
     /// The builders in `output`: one JSON object per line, or a JSON array. `nil` when any of it isn't one.

@@ -118,6 +118,9 @@ public struct CleanupExecutor: Sendable {
     var resolve: @Sendable (String) -> String? = PathUtil.realpath
     /// Reads the device of a folder open while deleting. Tests can't mount a volume, so they replace it to stand one in.
     var device: SafeRemoval.DeviceReader = SafeRemoval.device(of:)
+    /// Whether the volume of a folder open while trashing keeps a file's inode when the file moves. Tests can't make a
+    /// FAT or exFAT volume, so they replace it to stand one in.
+    var keepsInodes: @Sendable (Int32) -> Bool = SafeRemoval.keepsInodes(on:)
     /// Finds and runs tools. Tests replace it with a recorder, so trust and budget checks run without real tools.
     var runner: any ProcessRunner = SystemProcessRunner()
     /// Reads the mount table at the start of each run. The guard keeps the table it was built with, and a context

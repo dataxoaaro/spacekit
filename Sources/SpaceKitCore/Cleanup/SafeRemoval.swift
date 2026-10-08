@@ -77,6 +77,21 @@ enum SafeRemoval {
         return fstat(fd, &st) == 0 ? st.st_dev : nil
     }
 
+    /// File systems that number a file by where its entry sits. An empty file has nothing else to go by there, so
+    /// moving it (to the Trash, say) gives it a new inode.
+    static let unstableInodeFileSystems: Set<String> = ["msdos", "exfat"]
+
+    /// Whether the volume of the folder open as `fd` keeps a file's inode when the file moves. A volume that can't be
+    /// read counts as keeping them, so the stricter check applies.
+    static func keepsInodes(on fd: Int32) -> Bool {
+        var info = statfs()
+        guard fstatfs(fd, &info) == 0 else { return true }
+        let name = withUnsafeBytes(of: &info.f_fstypename) { raw in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        return !unstableInodeFileSystems.contains(name)
+    }
+
     /// Deletes the target's entry inside its folder, open as `fd`, never by path: recursively if the target is a
     /// folder, as the entry itself otherwise (a symlink is removed as a link). Every step is relative to a handle opened
     /// with `O_NOFOLLOW`, so a folder swapped for a symlink mid-way is removed as a link, a deep tree never hits

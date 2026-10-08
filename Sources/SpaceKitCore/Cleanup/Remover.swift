@@ -33,6 +33,11 @@ struct Remover: Sendable {
         var errorDescription: String? { cause.localizedDescription }
     }
 
+    /// Something went to the Trash, but it isn't known to be the target: it isn't, or macOS didn't say where it went.
+    struct TrashUnverified: LocalizedError {
+        var errorDescription: String?
+    }
+
     let home: String
     /// `safety.trash: always`.
     let alwaysTrash: Bool
@@ -42,6 +47,8 @@ struct Remover: Sendable {
     let trash: @Sendable (String) throws -> String?
     /// Reads the device of an open folder, to stay on the item's volume while deleting.
     let device: SafeRemoval.DeviceReader
+    /// Whether the volume of an open folder keeps a file's inode when the file moves.
+    let keepsInodes: @Sendable (Int32) -> Bool
 
     var trashDirectory: String { Trash.path(home: home) }
 
@@ -126,22 +133,46 @@ struct Remover: Sendable {
                 throw Interrupted(cause: error)
             }
         case .trash:
-            // FileManager reports where the item went; without that there is nothing to check it against.
-            guard let destination = try trash(target.resolvedPath) else { return Removed(trashedTo: trashDirectory) }
-            var st = stat()
-            guard lstat(destination, &st) == 0, RemovalTarget.Identity(st) == target.identity else {
-                throw SafeRemoval.Refused(
-                    errorDescription: "\(target.resolvedPath) changed while it was moved to the Trash: what went to "
-                        + "\(PathUtil.abbreviate(destination, home: home)) isn't what was checked. Look there and put it back if needed.")
-            }
+            let destination = try trash(target.resolvedPath)
+            try verifyTrashed(target, at: destination, keepsInodes: keepsInodes(fd))
             return Removed(trashedTo: destination)
         }
+    }
+
+    /// Checks that what arrived in the Trash at `destination` is the target: the same device and inode. Without a
+    /// destination there is nothing to check, so the move counts as unverified, never as done.
+    ///
+    /// A volume that doesn't keep inodes (`keepsInodes` false: FAT, exFAT) gives an empty file a new one when it moves.
+    /// There an empty file is accepted by what it is: a plain empty file on the same device, where an empty file was
+    /// checked. Whatever a swap could have sent instead holds nothing.
+    private func verifyTrashed(_ target: RemovalTarget, at destination: String?, keepsInodes: Bool) throws {
+        let path = target.resolvedPath
+        guard let destination else {
+            throw TrashUnverified(
+                errorDescription: "\(path) was moved to the Trash, but macOS didn't say where it went, so SpaceKit couldn't check it "
+                    + "was the item you reviewed. Look in the Trash.")
+        }
+        var st = stat()
+        let arrived = lstat(destination, &st) == 0 ? st : nil
+        if let arrived, RemovalTarget.Identity(arrived) == target.identity { return }
+        if !keepsInodes, let arrived, Remover.isEmptyFile(arrived), !target.isFolder, target.size == 0,
+            arrived.st_dev == target.identity?.device
+        {
+            return
+        }
+        throw TrashUnverified(
+            errorDescription: "\(path) changed while it was moved to the Trash: what went to "
+                + "\(PathUtil.abbreviate(destination, home: home)) isn't what was checked. Look there and put it back if needed.")
+    }
+
+    private static func isEmptyFile(_ st: stat) -> Bool {
+        st.st_mode & S_IFMT == S_IFREG && st.st_size == 0
     }
 }
 
 extension CleanupExecutor {
     /// The removal module, set up with this executor's home, Trash setting and seams.
     var remover: Remover {
-        Remover(home: safety.home, alwaysTrash: alwaysTrash, resolve: resolve, trash: trash, device: device)
+        Remover(home: safety.home, alwaysTrash: alwaysTrash, resolve: resolve, trash: trash, device: device, keepsInodes: keepsInodes)
     }
 }

@@ -269,6 +269,51 @@ struct RemovalTests {
         #expect(journalEntries(tree).isEmpty)
     }
 
+    @Test("A move to the Trash that doesn't say where the item went is reported, not called removed")
+    func trashWithoutDestination() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        var executor = sandboxExecutor(tree)
+        let move = executor.trash
+        executor.trash = { path in
+            _ = try move(path)
+            return nil
+        }
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000)], useTrash: true)
+        let report = manualRun(plan, with: executor)
+        let failure = try #require(report.failures.first)
+        #expect(failure.reason.contains("Trash"))
+        #expect(report.hasProblems)
+        #expect(journalEntries(tree).isEmpty)
+    }
+
+    /// FAT and exFAT number a file by where its entry sits, and an empty file has nothing else to go by, so moving
+    /// one gives it a new inode. A test can't make such a volume; the executor's `keepsInodes` seam stands one in,
+    /// and the Trash stand-in hands back a copy of what it moved, which has a new inode too.
+    @Test("An empty file moved to the Trash on a volume without stable inodes is checked by what it is")
+    func trashWithoutStableInodes() throws {
+        for (bytes, keepsInodes, removed) in [(0, false, true), (0, true, false), (1_000, false, false)] {
+            let tree = try TempTree()
+            let file = try tree.file("home/Projects/f", bytes: bytes)
+            var executor = sandboxExecutor(tree)
+            let move = executor.trash
+            executor.keepsInodes = { _ in keepsInodes }
+            executor.trash = { path in
+                let destination = try #require(try move(path))
+                let copy = destination + ".copy"
+                try FileManager.default.copyItem(atPath: destination, toPath: copy)
+                try FileManager.default.removeItem(atPath: destination)
+                try FileManager.default.moveItem(atPath: copy, toPath: destination)
+                return destination
+            }
+            let plan = CleanupPlan(items: [CleanupItem(path: file, kind: .file, size: tree.allocated("home/Projects/f"))], useTrash: true)
+            let report = manualRun(plan, with: executor)
+            let outcome = try #require(report.items.first?.outcome)
+            #expect(outcome.isRemoved == removed, "\(bytes) bytes, inodes kept: \(keepsInodes)")
+            #expect(onDisk(tree.path("home/.Trash/f")))
+        }
+    }
+
     @Test("A move to the Trash of the checked item records where it went")
     func trashMovesCheckedItem() throws {
         let tree = try TempTree()

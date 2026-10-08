@@ -334,7 +334,9 @@ struct ExecutionMechanicsTests {
         let context = SpaceKitContext.load(paths: paths)
         #expect(context.configError != nil)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("work/build"), size: 1000)], useTrash: false)
-        let report = context.executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
+        var executor = context.executor
+        executor.trash = sandboxTrash(home: tree.root)
+        let report = executor.execute(plan, context: .manual(confirmed: true), dryRun: false)
         #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
         #expect(onDisk(tree.path("work/build/x")))
     }

@@ -19,6 +19,10 @@ public struct ManualJobRun: Sendable {
     private let candidate: CleanupPlan
     /// For an approval whose every remaining row the guard blocks: a reason one of them is blocked for.
     private let allBlocked: String?
+
+    /// The rows of an approval that the guard blocks every one of (`hasNothingLeft`), for front ends to list with their
+    /// verdicts; empty for any other run.
+    public var blockedRows: CleanupPlan { allBlocked != nil ? candidate : CleanupPlan() }
     private let runner: JobRunner
 
     /// The suggestion's job is no longer in the config, so its conditions can't be checked.
@@ -81,9 +85,10 @@ public struct ManualJobRun: Sendable {
     }
 
     /// A reason the guard blocks a row of `plan` for, when it blocks every row, so a review would have nothing to select.
-    /// An invalid config blocks everything until it's fixed, which unblocks the rows, so that doesn't count.
+    /// Only the rows' own blocks count: an invalid config or running as root (`sudo`) blocks everything until it's
+    /// fixed, which unblocks the rows (`CleanupExecutor.blocksEverything`).
     private static func allBlocked(_ plan: CleanupPlan, executor: CleanupExecutor) -> String? {
-        guard !plan.isEmpty, executor.configError == nil else { return nil }
+        guard !plan.isEmpty, !executor.blocksEverything else { return nil }
         let review = CleanupReview(plan, executor: executor)
         guard review.isEmpty else { return nil }
         let verdicts = review.items.map(\.verdict) + review.commands.map(\.verdict)
@@ -171,16 +176,17 @@ public struct ManualJobRun: Sendable {
     }
 
     /// The still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows the person
-    /// unticked.
+    /// unticked. Blocks that come from the run's circumstances (`CleanupExecutor.blocksEverything`) don't count.
     private func left(after report: CleanupReport, executor: CleanupExecutor) -> CleanupPlan {
         let removedItems = Set(report.items.filter(\.outcome.isRemoved).map(\.item.id))
         let ranCommands = Set(report.commands.filter(\.outcome.isRemoved).map(\.command.id))
+        let judged = !executor.blocksEverything
         var left = candidate
         left.items = candidate.items.filter {
-            !removedItems.contains($0.id) && Self.exists($0.path) && !executor.verdict(for: $0, context: .manual).isBlocked
+            !removedItems.contains($0.id) && Self.exists($0.path) && !(judged && executor.verdict(for: $0, context: .manual).isBlocked)
         }
         left.commands = candidate.commands.filter {
-            !ranCommands.contains($0.id) && !executor.verdict(for: $0, context: .manual).isBlocked
+            !ranCommands.contains($0.id) && !(judged && executor.verdict(for: $0, context: .manual).isBlocked)
         }
         return left
     }

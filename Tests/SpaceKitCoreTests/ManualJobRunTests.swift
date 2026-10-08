@@ -263,6 +263,8 @@ struct ManualJobRunTests {
         #expect(!run.canForce)
         #expect(run.hasNothingLeft)
         #expect(run.skipReason?.contains("Protected in your configuration") == true)
+        // Front ends list the blocked rows with their verdicts (suggestions approve --json).
+        #expect(run.blockedRows.items.map(\.path) == [folder])
         let date = Date(timeIntervalSince1970: 7_000)
         let outcome = try #require(run.settleWithNothingLeft(now: date))
         #expect(outcome.fate == .dismissed)
@@ -271,20 +273,37 @@ struct ManualJobRunTests {
         #expect(onDisk(folder))
     }
 
-    @Test("An invalid config blocks every row but doesn't dismiss the suggestion: fixing the config unblocks them")
-    func invalidConfigKeepsSuggestion() throws {
+    /// `sudo spacekit suggestions approve <id> --yes` must not dismiss the suggestion for good: the rows are blocked by
+    /// how SpaceKit runs, not by what they are.
+    @Test(
+        "An invalid config or running as root blocks every row but doesn't dismiss the suggestion: fixing that unblocks them",
+        arguments: [true, false])
+    func circumstancesKeepSuggestion(_ invalidConfig: Bool) throws {
         var fixture = try buildFixture(["a"])
         let job = buildJob()
         fixture.config.jobs = [job]
         let suggestion = try suggest(fixture, job: job)
-        let broken = sandboxExecutor(fixture.tree, rules: fixture.rules, configError: "bad", protectedRules: fixture.rules)
+        let blocked = sandboxExecutor(
+            fixture.tree, rules: fixture.rules, configError: invalidConfig ? "bad" : nil, root: !invalidConfig,
+            protectedRules: fixture.rules)
 
-        let runner = JobRunner(context: fixture.context, executor: broken, notifier: fixture.notifier)
+        let runner = JobRunner(context: fixture.context, executor: blocked, notifier: fixture.notifier)
 
         let run = try ManualJobRun.prepare(suggestion, runner: runner)
 
-        #expect(!run.hasNothingLeft)
-        #expect(run.plan != nil)
+        #expect(!run.hasNothingLeft && run.settleWithNothingLeft() == nil)
+        #expect(run.blockedRows.isEmpty)
+        let plan = try #require(run.plan)
+        // Nothing can be selected, so nothing runs; were it completed anyway, the suggestion stays as it was.
+        let review = CleanupReview(plan, executor: blocked)
+        #expect(review.isEmpty)
+        let outcome = run.complete(review.acknowledge(acceptingWarnings: true), executor: blocked)
+        if case .kept(let kept)? = outcome.fate {
+            #expect(kept.plan.items.map(\.path) == suggestion.plan.items.map(\.path))
+        } else {
+            Issue.record("\(String(describing: outcome.fate))")
+        }
+        #expect(onDisk(fixture.tree.path("home/build/a")))
     }
 
     @Test("Only an approval with nothing left settles without a run")

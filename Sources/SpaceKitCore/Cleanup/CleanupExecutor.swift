@@ -216,6 +216,10 @@ public struct CleanupExecutor: Sendable {
     /// Why an automatic run leaves something in the Trash (`Remover.method`).
     static let trashedNotRegenerable = "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them"
 
+    /// True when the run's circumstances block every row, whatever the row: an invalid config, or SpaceKit running as
+    /// root. Fixing them unblocks the rows, so rows blocked then aren't blocked for good.
+    var blocksEverything: Bool { configError != nil || safety.isRunningAsRoot }
+
     func refuseIfConfigInvalid(_ verdict: inout SafetyVerdict) {
         if let configError {
             verdict.raise(.block, "Config file is invalid: \(configError). Fix it (spacekit config validate) before cleaning.")

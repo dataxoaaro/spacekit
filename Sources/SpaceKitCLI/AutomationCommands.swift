@@ -465,12 +465,12 @@ struct SuggestionsCommand: ParsableCommand {
 
         /// Nothing in the suggestion still meets its job's conditions, or the guard blocks all of it. Approving it (`--yes`)
         /// runs nothing, records the job's run and dismisses it; the plan printed is the suggestion's own, with nothing left
-        /// in it.
+        /// in it but the blocked rows, each with its verdict and reasons.
         private func settleNothingLeft(_ run: ManualJobRun, suggestion: Suggestion, executor: CleanupExecutor, dismiss: String) throws {
             let reason = Output.safe(run.skipReason ?? "")
             var left = suggestion.plan
-            left.items = []
-            left.commands = []
+            left.items = run.blockedRows.items
+            left.commands = run.blockedRows.commands
             let plan = PlanJSON(CleanupReview(left, executor: executor))
             guard acknowledgement.yes, let outcome = run.settleWithNothingLeft() else {
                 Output.emit([reason + ". Approving it with --yes dismisses it, as does: " + dismiss], toStandardError: json)

@@ -1,0 +1,257 @@
+import Foundation
+import Synchronization
+import Testing
+
+@testable import SpaceKitCore
+
+/// A workspace whose steps run on whichever thread hands them over, recording every event they return.
+private final class Recorder: Sendable {
+    let events = Mutex<[Workspace.Event]>([])
+
+    var deliver: Workspace.Deliver {
+        { step in
+            let delivered = step()
+            self.events.withLock { $0 += delivered }
+        }
+    }
+
+    var all: [Workspace.Event] { events.withLock { $0 } }
+
+    var changes: [Workspace.Change] {
+        all.compactMap { event in
+            if case .changed(let change) = event { return change }
+            return nil
+        }
+    }
+
+    var analysed: [Workspace.Snapshot] {
+        all.compactMap { event in
+            if case .analysed(let snapshot) = event { return snapshot }
+            return nil
+        }
+    }
+
+    /// Waits up to five seconds for `condition` to hold.
+    func wait(until condition: (Recorder) -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition(self) {
+            guard Date() < deadline else { return false }
+            usleep(2_000)
+        }
+        return true
+    }
+}
+
+/// An analysis that has read the tree and then holds on until the test lets it finish, so a cleanup can land while
+/// it runs.
+private final class HeldAnalysis: Sendable {
+    let started = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+
+    var analyze: Workspace.Analyze {
+        { context, tree, progress in
+            let analysis = try context.analyzer.analyzeSync(reusing: tree, progress: progress)
+            self.started.signal()
+            self.release.wait()
+            return analysis
+        }
+    }
+}
+
+/// `home/cache/<name>/blob` folders a safe rule cleans, a folder no rule claims, and a context reading them.
+private struct Fixture {
+    let tree = try! TempTree()
+    let caches: [String]
+    let rule: Rule
+    let context: SpaceKitContext
+
+    init(caches: Int = 3, bytes: Int = 120_000) throws {
+        self.caches = (0..<caches).map { "c\($0)" }
+        for name in self.caches { try tree.file("home/cache/\(name)/blob", bytes: bytes) }
+        try tree.file("home/docs/keep.txt", bytes: 50_000)
+        try tree.directory("home/.Trash")
+        rule = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        context = SpaceKitContext(
+            paths: SpaceKitPaths(configFile: tree.path("config/config.yaml"), stateDirectory: tree.path("state")),
+            config: SpaceKitConfig(), library: RuleLibrary(rules: [rule]))
+    }
+
+    func scanHome() throws -> ScanTree { try Scanner(options: context.scanOptions).scan(tree.path("home")) }
+
+    /// Removes `names` (folders under `home/cache`) the way a person's cleanup does.
+    func clean(_ names: [String], useTrash: Bool = false) -> CleanupReport {
+        let items = names.map { name in
+            CleanupItem(path: tree.path("home/cache/\(name)"), size: tree.allocated("home/cache/\(name)/blob"), ruleID: rule.id)
+        }
+        return manualRun(CleanupPlan(items: items, useTrash: useTrash), with: sandboxExecutor(tree, rules: [rule]))
+    }
+
+    /// What a fresh scan and analysis of the disk find now: each item's path and size.
+    func freshFindings() throws -> [String: UInt64] {
+        items(try context.analyzer.analyzeSync(reusing: scanHome()).findings)
+    }
+
+    func items(_ findings: [Finding]) -> [String: UInt64] {
+        Dictionary(uniqueKeysWithValues: findings.flatMap(\.items).map { ($0.path, $0.size) })
+    }
+}
+
+@Suite("Workspace: the Explore tree and its analysis, kept current")
+struct WorkspaceTests {
+    @Test("A cleanup that lands while the analysis runs is applied once it ends, to the tree and the new findings")
+    func cleanupDuringAnalysis() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let held = HeldAnalysis()
+        let workspace = Workspace(deliver: recorder.deliver, analyze: held.analyze)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        held.started.wait()
+
+        workspace.apply(fixture.clean(["c0", "c1"]), context: fixture.context)
+
+        // The analysis is still reading the tree, so the removal waits.
+        #expect(workspace.read { $0?.node(at: fixture.tree.path("home/cache/c0")) != nil })
+        #expect(recorder.changes.isEmpty)
+
+        held.release.signal()
+        #expect(recorder.wait { !$0.analysed.isEmpty })
+
+        let changes = recorder.changes
+        #expect(changes.count == 1)
+        #expect(changes.first?.removals.map(\.path).sorted() == ["c0", "c1"].map { fixture.tree.path("home/cache/\($0)") })
+        workspace.read { tree in
+            #expect(tree?.inconsistencies() == [])
+            #expect(tree?.node(at: fixture.tree.path("home/cache/c0")) == nil)
+        }
+        let result = try #require(workspace.snapshot.result)
+        #expect(fixture.items(result.analysis.findings) == (try fixture.freshFindings()))
+        #expect(recorder.analysed.last.map { fixture.items($0.result?.analysis.findings ?? []) } == (try fixture.freshFindings()))
+    }
+
+    @Test("With nothing reading the tree, a cleanup is applied straight away and announced once")
+    func cleanupWhileIdle() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        #expect(recorder.wait { !$0.analysed.isEmpty })
+
+        workspace.apply(fixture.clean(["c2"], useTrash: true), context: fixture.context)
+
+        #expect(recorder.changes.count == 1)
+        #expect(recorder.changes.first?.treeChanged == true)
+        workspace.read { tree in
+            #expect(tree?.inconsistencies() == [])
+            #expect(tree?.node(at: fixture.tree.path("home/.Trash/c2")) != nil)
+        }
+        #expect(fixture.items(workspace.snapshot.result?.analysis.findings ?? []) == (try fixture.freshFindings()))
+    }
+
+    @Test("Readers never see a cleanup half applied")
+    func readersSeeWholeChanges() throws {
+        let fixture = try Fixture(caches: 200, bytes: 8_000)
+        let workspace = Workspace(deliver: Recorder().deliver)
+        workspace.show(try fixture.scanHome())
+        let before = workspace.read { $0?.root.size ?? 0 }
+        let removed = fixture.caches.dropFirst(10).map { fixture.tree.allocated("home/cache/\($0)/blob") }.reduce(0, +)
+
+        let done = Atomic<Bool>(false)
+        let seen = Mutex<Set<UInt64>>([])
+        let problems = Mutex<[String]>([])
+        let reader = Thread {
+            while !done.load(ordering: .acquiring) {
+                workspace.read { tree in
+                    guard let tree else { return }
+                    // A write running alongside would show up as a total that moves during one read. Reads last a
+                    // while, like an analysis's, so a write that doesn't wait for them overlaps one.
+                    let first = tree.root.size
+                    usleep(10_000)
+                    let found = tree.inconsistencies(limit: .max)
+                    let last = tree.root.size
+                    if !found.isEmpty || first != last { problems.withLock { $0 += found + ["total \(first) → \(last)"] } }
+                    _ = seen.withLock { $0.insert(last) }
+                }
+            }
+        }
+        reader.start()
+        let report = fixture.clean(Array(fixture.caches.dropFirst(10)))
+        workspace.apply(report, context: fixture.context)
+        usleep(20_000)
+        done.store(true, ordering: .releasing)
+        while !reader.isFinished { usleep(1_000) }
+
+        #expect(problems.withLock { $0 } == [])
+        #expect(seen.withLock { $0 }.isSubset(of: [before, before - removed]))
+        #expect(workspace.read { $0?.root.size } == before - removed)
+    }
+
+    @Test("Focus falls back to the nearest folder that's still there")
+    func survivor() throws {
+        let fixture = try Fixture()
+        try fixture.tree.file("home/cache/c0/deep/er/blob", bytes: 10_000)
+        try fixture.tree.file("home/cache/c1/deep/blob", bytes: 10_000)
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        let scanned = try fixture.scanHome()
+        workspace.show(scanned)
+        let deleted = try #require(scanned.node(at: fixture.tree.path("home/cache/c0/deep/er")))
+        let trashed = try #require(scanned.node(at: fixture.tree.path("home/cache/c1/deep")))
+        let kept = try #require(scanned.node(at: fixture.tree.path("home/docs")))
+
+        workspace.apply(fixture.clean(["c0"]), context: fixture.context)
+        workspace.apply(fixture.clean(["c1"], useTrash: true), context: fixture.context)
+
+        let changes = recorder.changes
+        try #require(changes.count == 2)
+        let cache = scanned.node(at: fixture.tree.path("home/cache"))
+        #expect(changes[0].survivor(of: deleted) === cache)
+        #expect(changes[0].isGone(fixture.tree.path("home/cache/c0/deep")))
+        // Moved to the Trash: the folder lives on there, but where the person was looking it's gone.
+        #expect(changes[1].survivor(of: trashed) === cache)
+        #expect(changes[1].isGone(trashed.path))
+        #expect(changes[1].survivor(of: kept) === kept)
+        #expect(!changes[1].isGone(kept.path))
+    }
+
+    @Test("A scan shown while an analysis runs drops that analysis's result")
+    func newScanDropsAnalysis() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let held = HeldAnalysis()
+        let workspace = Workspace(deliver: recorder.deliver, analyze: held.analyze)
+        workspace.show(try fixture.scanHome())
+        workspace.analyze(fixture.context)
+        held.started.wait()
+
+        let newer = try fixture.scanHome()
+        workspace.show(newer)
+        held.release.signal()
+        usleep(50_000)
+
+        #expect(recorder.analysed.isEmpty)
+        #expect(workspace.snapshot.result == nil)
+        #expect(workspace.snapshot.tree === newer)
+    }
+
+    @Test("Re-syncing a folder emptied elsewhere splices it in")
+    func resync() throws {
+        let fixture = try Fixture()
+        try fixture.tree.file("home/.Trash/old/blob", bytes: 80_000)
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        try FileManager.default.removeItem(atPath: fixture.tree.path("home/.Trash/old"))
+
+        let trash = fixture.tree.path("home/.Trash")
+        workspace.resync(try Scanner(options: fixture.context.scanOptions).scan(trash), at: trash, context: fixture.context)
+
+        #expect(recorder.wait { !$0.changes.isEmpty })
+        #expect(recorder.changes.first?.rescanned == [trash])
+        workspace.read { tree in
+            #expect(tree?.inconsistencies() == [])
+            #expect(tree?.node(at: fixture.tree.path("home/.Trash/old")) == nil)
+        }
+    }
+}

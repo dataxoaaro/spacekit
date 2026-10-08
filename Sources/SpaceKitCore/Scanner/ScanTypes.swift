@@ -198,6 +198,18 @@ public final class ScanTree: @unchecked Sendable {
         }
         return node
     }
+
+    /// The folder at `path`, or the nearest one above it that's in the tree (the root if none is).
+    public func nearestNode(to path: String) -> DirNode {
+        var candidate = PathUtil.standardize(path)
+        while !candidate.isEmpty {
+            if let node = node(at: candidate) { return node }
+            let parent = PathUtil.parent(candidate)
+            if parent == candidate { break }
+            candidate = parent
+        }
+        return root
+    }
 }
 
 extension ScanTree {

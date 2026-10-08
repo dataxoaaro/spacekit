@@ -246,6 +246,47 @@ struct ManualJobRunTests {
         #expect(lastRun(fixture) == date)
     }
 
+    @Test("Approving a suggestion whose remaining rows are all blocked dismisses it and records the job's run")
+    func nothingSelectableAtPrepare() throws {
+        var fixture = try buildFixture(["a"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        // Protected since it was suggested: the job still finds it, the guard blocks it.
+        let folder = fixture.tree.path("home/build/a")
+        let protected = sandboxExecutor(fixture.tree, rules: fixture.rules, protectedPaths: [folder], protectedRules: fixture.rules)
+        let runner = JobRunner(context: fixture.context, executor: protected, notifier: fixture.notifier)
+
+        let run = try ManualJobRun.prepare(suggestion, runner: runner)
+
+        #expect(run.plan == nil)
+        #expect(!run.canForce)
+        #expect(run.hasNothingLeft)
+        #expect(run.skipReason?.contains("Protected in your configuration") == true)
+        let date = Date(timeIntervalSince1970: 7_000)
+        let outcome = try #require(run.settleWithNothingLeft(now: date))
+        #expect(outcome.fate == .dismissed)
+        #expect(fixture.context.suggestions.all().isEmpty)
+        #expect(lastRun(fixture) == date)
+        #expect(onDisk(folder))
+    }
+
+    @Test("An invalid config blocks every row but doesn't dismiss the suggestion: fixing the config unblocks them")
+    func invalidConfigKeepsSuggestion() throws {
+        var fixture = try buildFixture(["a"])
+        let job = buildJob()
+        fixture.config.jobs = [job]
+        let suggestion = try suggest(fixture, job: job)
+        let broken = sandboxExecutor(fixture.tree, rules: fixture.rules, configError: "bad", protectedRules: fixture.rules)
+
+        let runner = JobRunner(context: fixture.context, executor: broken, notifier: fixture.notifier)
+
+        let run = try ManualJobRun.prepare(suggestion, runner: runner)
+
+        #expect(!run.hasNothingLeft)
+        #expect(run.plan != nil)
+    }
+
     @Test("Only an approval with nothing left settles without a run")
     func settlingNeedsNothingLeft() throws {
         var fixture = try buildFixture(["a"])

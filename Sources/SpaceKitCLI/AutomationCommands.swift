@@ -460,8 +460,9 @@ struct SuggestionsCommand: ParsableCommand {
             try JobsCommand.finish(outcome)
         }
 
-        /// Nothing in the suggestion still meets its job's conditions. Approving it (`--yes`) runs nothing, records the
-        /// job's run and dismisses it; the plan printed is the suggestion's own, with nothing left in it.
+        /// Nothing in the suggestion still meets its job's conditions, or the guard blocks all of it. Approving it (`--yes`)
+        /// runs nothing, records the job's run and dismisses it; the plan printed is the suggestion's own, with nothing left
+        /// in it.
         private func settleNothingLeft(_ run: ManualJobRun, suggestion: Suggestion, executor: CleanupExecutor, dismiss: String) throws {
             let reason = Output.safe(run.skipReason ?? "")
             var left = suggestion.plan

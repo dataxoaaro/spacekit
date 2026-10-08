@@ -17,6 +17,8 @@ public struct ManualJobRun: Sendable {
     public let isForced: Bool
     /// Everything the run could offer, whether or not it would skip.
     private let candidate: CleanupPlan
+    /// For an approval whose every remaining row the guard blocks: a reason one of them is blocked for.
+    private let allBlocked: String?
     private let runner: JobRunner
 
     /// The suggestion's job is no longer in the config, so its conditions can't be checked.
@@ -57,7 +59,8 @@ public struct ManualJobRun: Sendable {
     {
         let evaluation = try runner.evaluate(job, progress: progress, now: now)
         return ManualJobRun(
-            evaluation: evaluation, suggestion: nil, dropped: [], isForced: false, candidate: runner.plan(for: evaluation), runner: runner)
+            evaluation: evaluation, suggestion: nil, dropped: [], isForced: false, candidate: runner.plan(for: evaluation),
+            allBlocked: nil, runner: runner)
     }
 
     /// Evaluates the job that prepared `suggestion` again and narrows the suggestion to what still meets the job's
@@ -73,7 +76,18 @@ public struct ManualJobRun: Sendable {
         let evaluation = try runner.evaluate(job, progress: progress, now: now)
         let (plan, dropped) = suggestion.plan.keeping(onlyIn: runner.plan(for: evaluation))
         return ManualJobRun(
-            evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: false, candidate: plan, runner: runner)
+            evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: false, candidate: plan,
+            allBlocked: allBlocked(plan, executor: runner.executor), runner: runner)
+    }
+
+    /// A reason the guard blocks a row of `plan` for, when it blocks every row, so a review would have nothing to select.
+    /// An invalid config blocks everything until it's fixed, which unblocks the rows, so that doesn't count.
+    private static func allBlocked(_ plan: CleanupPlan, executor: CleanupExecutor) -> String? {
+        guard !plan.isEmpty, executor.configError == nil else { return nil }
+        let review = CleanupReview(plan, executor: executor)
+        guard review.isEmpty else { return nil }
+        let verdicts = review.items.map(\.verdict) + review.commands.map(\.verdict)
+        return verdicts.lazy.flatMap(\.entries).first { $0.decision == .block }?.reason
     }
 
     /// The name of the job that runs, for front ends to show.
@@ -85,16 +99,20 @@ public struct ManualJobRun: Sendable {
             return suggestion == nil
                 ? evaluation.triggerSummary : "Nothing in this suggestion still meets the job's conditions: it was used or removed since"
         }
+        if let allBlocked { return "Everything left in this suggestion is blocked: \(allBlocked)" }
         if suggestion == nil && !evaluation.isTriggered && !isForced { return evaluation.triggerSummary }
         return nil
     }
 
-    /// Whether `forced()` would make a skipped run reviewable: only a threshold holds it back, not an empty plan.
-    public var canForce: Bool { skipReason != nil && !candidate.isEmpty }
+    /// Whether `forced()` would make a skipped run reviewable: only a threshold holds it back, not an empty plan or one
+    /// with nothing left to select.
+    public var canForce: Bool { skipReason != nil && !candidate.isEmpty && !hasNothingLeft }
 
     /// This run, going ahead although the job is below its threshold ("Run anyway", `--force`).
     public func forced() -> ManualJobRun {
-        ManualJobRun(evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: true, candidate: candidate, runner: runner)
+        ManualJobRun(
+            evaluation: evaluation, suggestion: suggestion, dropped: dropped, isForced: true, candidate: candidate, allBlocked: allBlocked,
+            runner: runner)
     }
 
     /// The plan to review, or `nil` while the run would skip.
@@ -121,9 +139,9 @@ public struct ManualJobRun: Sendable {
         return finish(report, action: .cleaned(report), now: now) { left(after: report, executor: executor) }
     }
 
-    /// An approval of a suggestion nothing of which still meets the job's conditions. There is nothing to review or
-    /// force; `settleWithNothingLeft(now:)` finishes it.
-    public var hasNothingLeft: Bool { suggestion != nil && candidate.isEmpty }
+    /// An approval of a suggestion nothing of which still meets the job's conditions, or whose every remaining row the
+    /// guard blocks. There is nothing to select, review or force; `settleWithNothingLeft(now:)` finishes it.
+    public var hasNothingLeft: Bool { suggestion != nil && (candidate.isEmpty || allBlocked != nil) }
 
     /// Finishes an approval with nothing left (`hasNothingLeft`) without running anything: records the job's run, as
     /// every approval does, and dismisses the suggestion. `nil` for any other run, which finishes through `complete`.

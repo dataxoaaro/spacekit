@@ -1,4 +1,3 @@
-import Darwin.membership
 import Foundation
 
 extension FileTrust {
@@ -41,10 +40,15 @@ extension FileTrust {
         return permissions.contains { acl_get_perm_np(permset, $0) == 1 }
     }
 
-    /// The UUID that ACL entries name the account `uid` by.
+    /// The UUID that ACL entries name the account `uid` by. `nil` if it can't be found, which leaves only entries
+    /// for nobody trusted: the check fails closed.
     private static func uuid(_ uid: uid_t) -> [UInt8]? {
+        // `mbr_uid_to_uuid` is in libSystem, but its header isn't part of the Darwin module in every SDK.
+        typealias UIDToUUID = @convention(c) (uid_t, UnsafeMutablePointer<UInt8>) -> Int32
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "mbr_uid_to_uuid") else { return nil }
+        let uidToUUID = unsafeBitCast(symbol, to: UIDToUUID.self)
         var bytes = [UInt8](repeating: 0, count: 16)
-        guard mbr_uid_to_uuid(uid, &bytes) == 0 else { return nil }
+        guard uidToUUID(uid, &bytes) == 0 else { return nil }
         return bytes
     }
 }

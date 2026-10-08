@@ -42,7 +42,8 @@ struct TreeWalk {
                 if let child = visit(entry, in: current) {
                     close(current)
                     current = child
-                    stack.append(frame(for: child, name: entry))
+                    let inside = frame(for: child, name: entry)
+                    stack.append(inside)
                 }
                 continue
             }

@@ -7,21 +7,19 @@ import Testing
 /// Stands in for running tools: records every call and answers with what the test scripted, so trust and budget
 /// tests never start a real program.
 final class RecordingRunner: ProcessRunner {
-    private let locator: @Sendable (String) -> [String]
+    private let locator: @Sendable (String) -> String?
     private let respond: @Sendable (_ call: [String]) -> Shell.Result
     private let recorded = Mutex<[[String]]>([])
-    private let standIns: String?
 
-    /// Each tool in `installed` is found as a small stand-in file, so the executor has a program file to check.
+    /// Each tool in `installed` is found as a small stand-in file in `tree`, so the executor has a program file to check.
     convenience init(
-        installed: Set<String>,
+        installed: Set<String>, in tree: TempTree,
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("spacekit-runner-\(UUID().uuidString)").path
+        let folder = tree.path("installed-tools")
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         for name in installed { try? Data("stand-in for \(name)\n".utf8).write(to: URL(fileURLWithPath: folder + "/" + name)) }
-        let locate: @Sendable (String) -> [String] = { installed.contains($0) ? [folder + "/" + $0] : [] }
-        self.init(standIns: folder, locate: locate, respond: respond)
+        self.init(locate: { installed.contains($0) ? folder + "/" + $0 : nil }, respond: respond)
     }
 
     /// Tools are found the way `Shell.which` finds them, in `searchPath`; still none is started.
@@ -29,34 +27,21 @@ final class RecordingRunner: ProcessRunner {
         searchPath: [String],
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
-        self.init(standIns: nil, locate: { Shell.installed($0, in: searchPath) }, respond: respond)
+        self.init(locate: { Shell.which($0, in: searchPath) }, respond: respond)
     }
 
-    private init(
-        standIns: String?, locate: @escaping @Sendable (String) -> [String], respond: @escaping @Sendable (_ call: [String]) -> Shell.Result
-    ) {
-        self.standIns = standIns
+    private init(locate: @escaping @Sendable (String) -> String?, respond: @escaping @Sendable (_ call: [String]) -> Shell.Result) {
         self.locator = locate
         self.respond = respond
     }
 
-    deinit {
-        if let standIns { try? FileManager.default.removeItem(atPath: standIns) }
-    }
+    func locate(_ name: String) -> String? { locator(name) }
 
-    func locate(_ name: String) -> String? { locator(name).first }
-
-    func locateAll(_ name: String) -> [String] { locator(name) }
-
-    func run(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result {
+    /// Scripted: the test puts standard output in `output`, and standard error in `errors` for a run that keeps it apart.
+    func run(_ executable: String, _ arguments: [String], timeout: TimeInterval, separateErrors: Bool) -> Shell.Result {
         let call = [PathUtil.lastComponent(executable)] + arguments
         recorded.withLock { $0.append(call) }
         return respond(call)
-    }
-
-    /// Scripted like `run`: the test puts standard output in `output` and standard error in `errors`.
-    func query(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> Shell.Result {
-        run(executable, arguments, timeout: timeout)
     }
 
     /// Every call so far, the tool by its bare name.
@@ -175,7 +160,7 @@ struct CommandTrustTests {
     @Test("Refused commands never reach the runner")
     func refusalsDontRun() throws {
         let tree = try TempTree()
-        let runner = RecordingRunner(installed: ["du", "sh", "brew"])
+        let runner = RecordingRunner(installed: ["du", "sh", "brew"], in: tree)
         let user = rule("user", builtin: false, command: ["du", "-s", "/Users/tester/.tool/cache"])
         let launcher = rule("launcher", builtin: false, command: ["sh", "-c", "true"])
         let untrusted = rule("untrusted", builtin: true, command: ["make", "clean"])
@@ -290,7 +275,7 @@ struct CommandTrustTests {
         let tree = try TempTree()
         let cache = try tree.file("home/first/blob", bytes: 6_000)
         let freed = tree.allocated("home/first/blob")
-        let runner = RecordingRunner(installed: ["brew", "cargo"]) { call in
+        let runner = RecordingRunner(installed: ["brew", "cargo"], in: tree) { call in
             if call.first == "brew" { try? FileManager.default.removeItem(atPath: cache) }
             return Shell.Result(status: 0, output: "", timedOut: false)
         }
@@ -321,7 +306,7 @@ struct CommandTrustTests {
             items: ["-rf", "wget"].map { FindingItem(path: tree.path("home/kegs/\($0)"), kind: .directory, name: $0, size: 10) })
         let plan = CleanupPlan.make(findings: [finding], scanStarted: Date())
         #expect(plan.commands.map(\.arguments) == [["brew", "uninstall", "-rf"], ["brew", "uninstall", "wget"]])
-        let runner = RecordingRunner(installed: ["brew"])
+        let runner = RecordingRunner(installed: ["brew"], in: tree)
         let report = manualRun(plan, with: executor(tree, rules: [kegs], runner: runner))
         let dashed = report.commands.first { $0.command.arguments.last == "-rf" }
         #expect(skipReason(dashed?.outcome)?.contains("'-rf'") == true)
@@ -330,7 +315,7 @@ struct CommandTrustTests {
         // {path} is absolute, so a dash at the start of the folder name is harmless there.
         let byPath = rule("kegs", builtin: true, itemCommand: ["brew", "uninstall", "{path}"], paths: [tree.path("home/kegs")])
         let pathPlan = CleanupPlan.make(findings: [Finding(rule: byPath, items: finding.items)], scanStarted: Date())
-        let pathRunner = RecordingRunner(installed: ["brew"])
+        let pathRunner = RecordingRunner(installed: ["brew"], in: tree)
         let pathReport = manualRun(pathPlan, with: executor(tree, rules: [byPath], runner: pathRunner))
         #expect(pathReport.commands.allSatisfy { skipReason($0.outcome) == nil })
     }

@@ -54,7 +54,7 @@ struct DockerEndpointTests {
             id: "docker.cache", name: "Docker", paths: [], granularity: .children, safety: SafetySpec(level: .safe),
             action: ActionSpec(command: command))
         rule.isBuiltin = true
-        let runner = RecordingRunner(installed: ["docker"]) { docker.respond($0) }
+        let runner = RecordingRunner(installed: ["docker"], in: tree) { docker.respond($0) }
         var executor = sandboxExecutor(tree, rules: [rule])
         executor.runner = runner
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: rule.id, arguments: command, estimatedBytes: 1)])

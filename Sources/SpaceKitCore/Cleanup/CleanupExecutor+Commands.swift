@@ -67,7 +67,8 @@ extension CleanupExecutor {
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }
 
         let before = measure(command.measurePaths) ?? 0
-        let result = runner.run(executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout)
+        let result = runner.run(
+            executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout, separateErrors: false)
         if result.timedOut {
             return (.failed(reason: "Stopped after \(Int(CleanupExecutor.commandTimeout)) seconds"), result.output)
         }

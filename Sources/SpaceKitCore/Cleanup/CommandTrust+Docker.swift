@@ -39,7 +39,8 @@ extension CommandTrust {
     /// Why the selected buildx builder isn't this Mac's Docker, or `nil` when it is: its driver builds in a Docker
     /// daemon, and every node's endpoint is a unix socket or a context whose endpoint is one.
     private func builderRefusal(docker: String, runner: any ProcessRunner) -> String? {
-        let listed = runner.query(docker, ["buildx", "ls", "--format", "json"], timeout: CommandTrust.dockerQueryTimeout)
+        let listed = runner.run(
+            docker, ["buildx", "ls", "--format", "json"], timeout: CommandTrust.dockerQueryTimeout, separateErrors: true)
         guard listed.status == 0, !listed.timedOut else {
             return "Couldn't tell which buildx builder docker builder uses (docker buildx ls: \(CommandTrust.problem(listed)))"
         }
@@ -85,7 +86,7 @@ extension CommandTrust {
     /// inspect` prints on standard output.
     private static func dockerEndpoint(of context: String?, docker: String, runner: any ProcessRunner) -> Result<String, Unanswered> {
         let arguments = ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"] + (context.map { [$0] } ?? [])
-        let result = runner.query(docker, arguments, timeout: dockerQueryTimeout)
+        let result = runner.run(docker, arguments, timeout: dockerQueryTimeout, separateErrors: true)
         guard result.status == 0, !result.timedOut else { return .failure(Unanswered(problem(result))) }
         let lines = result.output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         let answer = lines.filter { !$0.isEmpty }

@@ -27,29 +27,19 @@ public enum Shell {
         !name.isEmpty && !name.contains("/") && !name.contains("..") && !name.contains("{")
     }
 
-    /// Finds a tool by bare name in `searchPath`. Paths are refused. The containing directory is canonicalized,
-    /// but the tool keeps its own name: multi-call tools (rustup proxies, mise shims, bunx) pick their behavior
-    /// from the name they were started as.
-    public static func which(_ name: String) -> String? {
-        which(name, in: searchPath)
-    }
-
-    /// `which(_:)` over the given directories, in order.
-    static func which(_ name: String, in directories: [String]) -> String? {
-        installed(name, in: directories).first
-    }
-
-    /// Every place in `directories` where a tool with this bare name is installed, in search order: the first is the
-    /// one `which` finds, the rest are other copies further down the path.
-    static func installed(_ name: String, in directories: [String]) -> [String] {
-        guard isBareName(name) else { return [] }
-        return directories.compactMap { directory in
-            guard let real = PathUtil.realpath(directory) else { return nil }
+    /// Finds a tool by bare name in `directories` (`searchPath` unless a test names others), the first match in order.
+    /// Paths are refused. The containing directory is canonicalized, but the tool keeps its own name: multi-call tools
+    /// (rustup proxies, mise shims, bunx) pick their behavior from the name they were started as.
+    public static func which(_ name: String, in directories: [String] = searchPath) -> String? {
+        guard isBareName(name) else { return nil }
+        for directory in directories {
+            guard let real = PathUtil.realpath(directory) else { continue }
             let candidate = PathUtil.join(real, name)
             var st = stat()
-            guard stat(candidate, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
-            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+            guard stat(candidate, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { continue }
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
+        return nil
     }
 
     public struct Result: Sendable {
@@ -108,59 +98,77 @@ public enum Shell {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = toolEnvironment(from: environment, home: PathUtil.home)
-        let pipe = Pipe()
-        let errorPipe = separateErrors ? Pipe() : nil
-        let pipes = [pipe] + (errorPipe.map { [$0] } ?? [])
-        process.standardOutput = pipe
-        process.standardError = errorPipe ?? pipe
         process.standardInput = FileHandle.nullDevice
-
-        let output = OutputBuffer()
-        let errors = OutputBuffer()
-        // Left once per pipe, when that pipe reaches its end.
-        let ended = DispatchGroup()
+        let capture = Capture(process, separateErrors: separateErrors)
         let exited = DispatchSemaphore(value: 0)
-        for (reading, buffer) in zip(pipes, [output, errors]) {
-            ended.enter()
-            reading.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty { handle.readabilityHandler = nil }
-                if buffer.append(chunk) { ended.leave() }
-            }
-        }
         process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
-            for reading in pipes { reading.fileHandleForReading.readabilityHandler = nil }
+            capture.close()
             return Result(status: -1, output: error.localizedDescription, timedOut: false)
         }
-        let pid = process.processIdentifier
+        let timedOut = !finished(process.processIdentifier, exited: exited, ended: capture.ended, timeout: timeout)
+        capture.close()
+        return Result(
+            status: timedOut ? -2 : process.terminationStatus, output: capture.output.text, timedOut: timedOut,
+            errors: capture.errors.text)
+    }
+
+    /// Waits until the tool has exited and its output has ended, for at most `timeout`. A tool that hasn't by then
+    /// gets SIGTERM, then SIGKILL after `terminationGrace`, with its process group. True when it finished in time.
+    private static func finished(_ pid: pid_t, exited: DispatchSemaphore, ended: DispatchGroup, timeout: TimeInterval) -> Bool {
         // Process starts each tool in its own process group, so the group holds everything it spawned.
         let ownsGroup = getpgid(pid) == pid
-
         let deadline = DispatchTime.now() + timeout
         var hasExited = exited.wait(timeout: deadline) == .success
         var hasEnded = hasExited && ended.wait(timeout: deadline) == .success
-        let timedOut = !(hasExited && hasEnded)
-        if timedOut {
-            func send(_ signal: Int32) {
-                if ownsGroup { killpg(pid, signal) } else if !hasExited { kill(pid, signal) }
-            }
-            send(SIGTERM)
-            let graceEnd = DispatchTime.now() + terminationGrace
-            if !hasExited { hasExited = exited.wait(timeout: graceEnd) == .success }
-            if hasExited && !hasEnded { hasEnded = ended.wait(timeout: graceEnd) == .success }
-            if !(hasExited && hasEnded) {
-                send(SIGKILL)
-                if !hasExited { hasExited = exited.wait(timeout: .now() + terminationGrace) == .success }
+        if hasExited && hasEnded { return true }
+        func send(_ signal: Int32) {
+            if ownsGroup { killpg(pid, signal) } else if !hasExited { kill(pid, signal) }
+        }
+        send(SIGTERM)
+        let graceEnd = DispatchTime.now() + terminationGrace
+        if !hasExited { hasExited = exited.wait(timeout: graceEnd) == .success }
+        if hasExited && !hasEnded { hasEnded = ended.wait(timeout: graceEnd) == .success }
+        if !(hasExited && hasEnded) {
+            send(SIGKILL)
+            if !hasExited { _ = exited.wait(timeout: .now() + terminationGrace) }
+        }
+        return false
+    }
+
+    /// A tool's output pipes and what has been read from them: standard output, and standard error in the same pipe
+    /// unless it is kept apart.
+    private struct Capture {
+        let pipes: [Pipe]
+        let output = OutputBuffer()
+        let errors = OutputBuffer()
+        /// Left once per pipe, when that pipe reaches its end.
+        let ended = DispatchGroup()
+
+        init(_ process: Process, separateErrors: Bool) {
+            let pipe = Pipe()
+            let errorPipe = separateErrors ? Pipe() : nil
+            pipes = [pipe] + (errorPipe.map { [$0] } ?? [])
+            process.standardOutput = pipe
+            process.standardError = errorPipe ?? pipe
+            for (reading, buffer) in zip(pipes, [output, errors]) {
+                ended.enter()
+                reading.fileHandleForReading.readabilityHandler = { [ended] handle in
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { handle.readabilityHandler = nil }
+                    if buffer.append(chunk) { ended.leave() }
+                }
             }
         }
-        for reading in pipes {
-            reading.fileHandleForReading.readabilityHandler = nil
-            try? reading.fileHandleForReading.close()
+
+        func close() {
+            for reading in pipes {
+                reading.fileHandleForReading.readabilityHandler = nil
+                try? reading.fileHandleForReading.close()
+            }
         }
-        return Result(status: timedOut ? -2 : process.terminationStatus, output: output.text, timedOut: timedOut, errors: errors.text)
     }
 
     /// Keeps the last 64 KB of a tool's output.

@@ -37,20 +37,14 @@ public struct CommandTrust: Sendable {
         return codeLaunchers.contains(name) || codeLaunchers.contains(unversioned)
     }
 
-    /// True for a name `safety.allowedCommands` may hold: ASCII letters, digits, `.`, `_`, `+` and `-`. Any other
-    /// character could reach a launcher through the file system's case and normalization folding, or pass for a
-    /// name it isn't.
-    public static func isPlainName(_ executable: String) -> Bool {
-        !executable.isEmpty && executable.unicodeScalars.allSatisfy { plainNameCharacters.contains($0) }
-    }
-
-    private static let plainNameCharacters = CharacterSet(
-        charactersIn: "abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789" + "._+-")
-
     /// Why a `safety.allowedCommands` entry can't be allowed, or `nil`. Config validation and the executor say the same.
+    ///
+    /// A plain name holds only ASCII letters, digits, `.`, `_`, `+` and `-`. Any other character could reach a launcher
+    /// through the file system's case and normalization folding, or pass for a name it isn't.
     public static func allowedCommandProblem(_ executable: String) -> String? {
         if isCodeLauncher(executable) { return "'\(executable)' runs whatever code its arguments name, so it can't be allowed" }
-        guard isPlainName(executable) else {
+        let plain = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789" + "._+-")
+        guard !executable.isEmpty, executable.unicodeScalars.allSatisfy(plain.contains) else {
             return "'\(executable)' isn't a plain tool name; list tools by names made of ASCII letters, digits, '.', '_', '+' and '-'"
         }
         return nil

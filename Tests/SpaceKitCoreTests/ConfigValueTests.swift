@@ -130,7 +130,10 @@ struct ConfigValueTests {
         #expect(context.configError?.contains("'sh'") == true)
         #expect(context.config.safety.allowedCommands.isEmpty)
         let plan = CleanupPlan(items: [CleanupItem(path: tree.path("work/build"), size: 1000)], useTrash: false)
-        let report = manualRun(plan, with: context.executor)
+        // Should the refusal ever break, the item lands in the sandbox, never in the real Trash.
+        var executor = context.executor
+        executor.trash = sandboxTrash(home: tree.root)
+        let report = manualRun(plan, with: executor)
         #expect(report.skipped.first?.reason.contains("Config file is invalid") == true)
         #expect(onDisk(tree.path("work/build/x")))
     }

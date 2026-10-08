@@ -131,9 +131,9 @@ struct CleanupSheet: View {
             Toggle("Move to Trash instead of deleting", isOn: useTrash)
         }
         if let summary = review.disposalSummary {
-            let trashing = review.disposal == .moveToTrash
-            Label(summary, systemImage: trashing ? "trash" : "exclamationmark.triangle.fill")
-                .font(.callout).foregroundStyle(trashing ? Color.secondary : Theme.critical)
+            let permanent = review.disposal.isPermanent
+            Label(summary, systemImage: permanent ? "exclamationmark.triangle.fill" : "trash")
+                .font(.callout).foregroundStyle(permanent ? Theme.critical : Color.secondary)
         }
     }
 
@@ -155,6 +155,7 @@ struct CleanupSheet: View {
         case .moveToTrash: return "Move to Trash"
         case .delete: return "Delete"
         case .deleteFromTrash: return "Delete Permanently"
+        case .moveToTrashAndDeleteFromTrash: return "Move to Trash and Delete"
         }
     }
 

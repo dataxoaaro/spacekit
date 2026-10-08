@@ -25,6 +25,11 @@ public struct CleanupReview: Sendable {
         case delete
         /// Every selected item is already in the Trash: removing it deletes it for good.
         case deleteFromTrash
+        /// Some selected items are already in the Trash and are deleted for good; the rest are moved to the Trash.
+        case moveToTrashAndDeleteFromTrash
+
+        /// Something selected is deleted for good, not moved to the Trash. Front ends mark the wording as a warning.
+        public var isPermanent: Bool { self != .moveToTrash }
     }
 
     /// Items and commands can share an id, so each kind keeps its own.
@@ -143,8 +148,10 @@ public struct CleanupReview: Sendable {
 
     public var disposal: Disposal {
         let selected = selectedItems
-        if !selected.isEmpty && selected.allSatisfy({ trashed.contains($0.id) }) { return .deleteFromTrash }
-        return movesToTrash ? .moveToTrash : .delete
+        let inTrash = selected.filter { trashed.contains($0.id) }
+        if !selected.isEmpty && inTrash.count == selected.count { return .deleteFromTrash }
+        guard movesToTrash else { return .delete }
+        return inTrash.isEmpty ? .moveToTrash : .moveToTrashAndDeleteFromTrash
     }
 
     /// Items not already in the Trash go there, as the removal module decides for a manual run with `useTrash`.
@@ -160,6 +167,10 @@ public struct CleanupReview: Sendable {
         case .moveToTrash: return "\(size) will be moved to the Trash."
         case .delete: return "\(size) will be deleted permanently, not moved to the Trash."
         case .deleteFromTrash: return "\(size) is already in the Trash and will be deleted permanently."
+        case .moveToTrashAndDeleteFromTrash:
+            let inTrash = selectedItems.filter { trashed.contains($0.id) }.reduce(0) { $0 &+ $1.size }
+            return "\(ByteCount.format(itemBytes - inTrash)) will be moved to the Trash; "
+                + "\(ByteCount.format(inTrash)) already in the Trash will be deleted permanently."
         }
     }
 

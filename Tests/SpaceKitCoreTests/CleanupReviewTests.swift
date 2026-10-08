@@ -308,7 +308,17 @@ struct CleanupReviewTests {
         #expect(emptying.disposalSummary?.contains("already in the Trash") == true)
 
         let review = CleanupReview(CleanupPlan(items: [trashed, project], useTrash: true), executor: executor)
-        #expect(review.disposal == .moveToTrash)
+        // What's already in the Trash is deleted for good even when the rest goes there; the wording says which part.
+        #expect(review.disposal == .moveToTrashAndDeleteFromTrash)
+        #expect(review.disposal.isPermanent)
+        #expect(
+            review.disposalSummary
+                == "1.0 KB will be moved to the Trash; 1.0 KB already in the Trash will be deleted permanently.")
+        let projectRow = try #require(review.items.first { $0.id == project.id })
+        #expect(review.setting(projectRow, included: false).disposal == .deleteFromTrash)
+        let trashedRow = try #require(review.items.first { $0.id == trashed.id })
+        #expect(review.setting(trashedRow, included: false).disposal == .moveToTrash)
+        #expect(!review.setting(trashedRow, included: false).disposal.isPermanent)
         #expect(review.canChooseTrash)
         #expect(review.usingTrash(false).disposal == .delete)
         #expect(review.usingTrash(false).disposalSummary?.contains("deleted permanently") == true)

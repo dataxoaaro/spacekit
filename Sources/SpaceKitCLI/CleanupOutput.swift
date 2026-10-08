@@ -177,7 +177,7 @@ enum CleanupOutput {
 
     /// Where the selected items go and what the selected commands do, in the review's own words.
     static func summaryLines(_ review: CleanupReview) -> [String] {
-        let disposal = review.disposalSummary.map { review.disposal == .moveToTrash ? $0.bold : $0.bold.fg(ANSI.protected) }
+        let disposal = review.disposalSummary.map { review.disposal.isPermanent ? $0.bold.fg(ANSI.protected) : $0.bold }
         return [disposal, review.commandSummary].compactMap { $0 }
     }
 

@@ -40,11 +40,11 @@ extension TUIApp {
 
     private func cleanupFooter(_ review: CleanupReview) -> [String] {
         var counts = "\(review.selectedItems.count + review.selectedCommands.count) to clean"
-        if review.warningCount > 0 { counts += " · " + "\(review.warningCount) need your confirmation (!)".fg(ANSI.review) }
+        if review.warningCount > 0 { counts += " · " + "\(review.warningCount) with warnings to accept (!)".fg(ANSI.review) }
         if review.blockedCount > 0 { counts += " · " + "\(review.blockedCount) blocked".fg(ANSI.protected) }
         var footer = [counts]
         if let disposal = review.disposalSummary {
-            footer.append(review.disposal == .moveToTrash ? disposal.bold : disposal.bold.fg(ANSI.protected))
+            footer.append(review.disposal.isPermanent ? disposal.bold.fg(ANSI.protected) : disposal.bold)
         }
         if let commands = review.commandSummary { footer.append(commands) }
         return footer

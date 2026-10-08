@@ -76,7 +76,7 @@ struct RemovalTests {
         }
         let checked = target(tree, "home/cache/item")
 
-        #expect(throws: (any Error).self) { try executor.remover.remove(checked, by: .delete) }
+        #expect(throws: SafeRemoval.Refused.self) { try executor.remover.remove(checked, by: .delete) }
         let swapped = flags.swapped.load(ordering: .acquiring)
         #expect(swapped, "the swap never happened; the test proved nothing")
         #expect(onDisk(tree.path("home/cache/item/keep")), "the folder swapped in isn't what was checked")
@@ -205,6 +205,29 @@ struct RemovalTests {
 
         #expect(throws: SafeRemoval.Refused.self) { try remover.remove(checked, by: .delete) }
         #expect(onDisk(tree.path("home/cache/item/b")))
+    }
+
+    @Test("A deletion refused before anything went is a refusal, not a deletion that stopped part way")
+    func refusalsBeforeDeletingArentPartial() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/mnt/y", bytes: 1_000)
+        var mounted = sandboxExecutor(tree)
+        mounted.device = { fd in
+            var st = stat()
+            guard fstat(fd, &st) == 0 else { return nil }
+            return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
+        }
+        let item = target(tree, "home/Projects/mnt")
+        #expect(throws: SafeRemoval.Refused.self) { try mounted.remover.remove(item, by: .delete) }
+
+        var unreadable = sandboxExecutor(tree)
+        unreadable.device = { _ in nil }
+        #expect {
+            try unreadable.remover.remove(item, by: .delete)
+        } throws: { error in
+            !(error is Remover.Interrupted)
+        }
+        #expect(onDisk(tree.path("home/Projects/mnt/y")))
     }
 
     @Test("An item that is itself on another volume than its folder is refused")

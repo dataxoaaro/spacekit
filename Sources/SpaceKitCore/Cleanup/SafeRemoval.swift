@@ -7,7 +7,13 @@ import Foundation
 /// `O_NOFOLLOW` (see `TreeWalk`), and a folder on a different device than the item (a volume mounted inside it) is
 /// left alone.
 enum SafeRemoval {
+    /// Nothing was removed: what is there isn't what was checked, or it can't be removed safely.
     struct Refused: LocalizedError {
+        var errorDescription: String?
+    }
+
+    /// Emptying a folder began and stopped part way, because a folder was moved while the walk was inside it.
+    struct Stopped: LocalizedError {
         var errorDescription: String?
     }
 
@@ -83,9 +89,10 @@ enum SafeRemoval {
     /// A folder whose device differs from `fd`'s is a volume mounted inside the item: it is left as it is, with
     /// everything above it, and the rest is removed. Returns those folders' paths.
     ///
-    /// Throws `Incomplete` when some entries couldn't be removed (everything else is gone), and `Refused` when the
-    /// entry isn't what the target pinned or the item itself is another volume (nothing was removed), or a folder was
-    /// moved while the walk was inside it (the walk stops there).
+    /// Throws `Refused` (or the system's error) when nothing was removed: the entry isn't what the target pinned, the
+    /// item itself is another volume, or a file couldn't be unlinked. Once emptying a folder began, throws `Incomplete`
+    /// when some entries couldn't be removed (everything else is gone), and `Stopped` when a folder was moved while the
+    /// walk was inside it.
     static func delete(_ target: RemovalTarget, in fd: Int32, device: @escaping DeviceReader = SafeRemoval.device(of:)) throws -> [String] {
         let entry = Array(target.name.utf8CString)
         let path = target.resolvedPath

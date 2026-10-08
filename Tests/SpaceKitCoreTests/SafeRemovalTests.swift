@@ -179,7 +179,7 @@ struct SafeRemovalTests {
         #expect(swapped, "the racer never swapped; the test proved nothing")
         let left = names(in: victim).filter { $0.hasPrefix("f") }
         #expect(left.count == count, "files outside the item were deleted")
-        #expect(throws: SafeRemoval.Refused.self) { try result.get() }
+        #expect(throws: SafeRemoval.Stopped.self) { try result.get() }
     }
 
     @Test("A tree deeper than the open-file limit is removed with a handful of handles")

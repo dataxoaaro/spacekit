@@ -115,7 +115,7 @@ struct TreeWalk {
         guard up >= 0, fstat(up, &st) == 0, st.st_dev == expected.device, st.st_ino == expected.inode else {
             if up >= 0 { close(up) }
             let moved = path(of: finished.name)
-            throw SafeRemoval.Refused(errorDescription: "\(moved) was moved while it was being removed; stopped there")
+            throw SafeRemoval.Stopped(errorDescription: "\(moved) was moved while it was being removed; stopped there")
         }
         close(folder)
         return up

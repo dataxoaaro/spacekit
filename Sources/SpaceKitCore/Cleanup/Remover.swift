@@ -21,7 +21,8 @@ struct Remover: Sendable {
     }
 
     /// A deletion that began and stopped part way: some of the item may be gone. Errors thrown before anything was
-    /// removed (the folder or the item no longer what the target pinned) are not this.
+    /// removed (the folder or the item no longer what the target pinned, the item on another volume, a device that
+    /// can't be read, a file that couldn't be unlinked) are not this, so nothing is measured or journaled for them.
     struct Interrupted: LocalizedError {
         let cause: Error
         /// Folders left because another volume is mounted on them, besides what couldn't be removed.
@@ -119,7 +120,9 @@ struct Remover: Sendable {
             do {
                 let left = try SafeRemoval.delete(target, in: fd, device: device)
                 return Removed(trashedTo: nil, leftOnOtherVolumes: left)
-            } catch {
+            } catch let error as SafeRemoval.Incomplete {
+                throw Interrupted(cause: error)
+            } catch let error as SafeRemoval.Stopped {
                 throw Interrupted(cause: error)
             }
         case .trash:

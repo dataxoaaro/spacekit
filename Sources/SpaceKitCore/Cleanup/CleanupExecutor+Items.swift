@@ -26,38 +26,51 @@ extension CleanupExecutor {
                 reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them", kind: .refused)
         }
         let context = Remover.context(context, removingBy: method)
+        if let notScanned = notCoveredByScan(item, target: target, inTrash: inTrash) { return notScanned }
+        if let refused = refusal(of: target, item: item, context: context, reviewed: reviewed) { return refused }
 
-        // Loose files and Trash entries can appear after the preview; only what existed when the item's own scan
-        // started may go.
-        var scanStarted: Date?
-        if item.kind == .looseFiles || inTrash {
-            guard let started = item.scanStarted, item.kind != .looseFiles || item.looseFileNames != nil else {
-                return .skipped(reason: CleanupExecutor.savedWithoutScan, kind: .notScanned)
-            }
-            scanStarted = started
-            if inTrash && item.kind != .looseFiles && target.changed(after: started) {
-                return .skipped(reason: "Moved to the Trash after it was scanned", kind: .notScanned)
-            }
-        }
-
-        func check(_ target: RemovalTarget) -> CleanupOutcome? {
-            CleanupExecutor.refusal(verdict(for: target, ruleID: item.ruleID, context: context), reviewed: reviewed)
-        }
-        if let refused = check(target) { return refused }
-
-        if item.kind == .looseFiles, let scanStarted {
+        if item.kind == .looseFiles, let scanStarted = item.scanStarted {
             if run.dryRun { return .wouldRemove(bytes: item.size) }
             return removeLooseFiles(
                 item, target: target, method: method, scanStarted: scanStarted, context: context, reviewed: reviewed, run: &run)
         }
+        return removeWhole(item, target: target, method: method, context: context, reviewed: reviewed, run: &run)
+    }
 
+    /// Why the run may not act on `target` for `item`, or `nil` when it may: the guard's verdict held to the review.
+    private func refusal(
+        of target: RemovalTarget, item: CleanupItem, context: CleanupContext, reviewed: ReviewRecord.Row?
+    ) -> CleanupOutcome? {
+        CleanupExecutor.refusal(verdict(for: target, ruleID: item.ruleID, context: context), reviewed: reviewed)
+    }
+
+    /// Loose files and Trash entries can appear after the preview; only what existed when the item's own scan started
+    /// may go. Why the item isn't covered by its scan, or `nil` when it is (or needn't be). A loose-files item that
+    /// passes has a scan start.
+    private func notCoveredByScan(_ item: CleanupItem, target: RemovalTarget, inTrash: Bool) -> CleanupOutcome? {
+        guard item.kind == .looseFiles || inTrash else { return nil }
+        guard let started = item.scanStarted, item.kind != .looseFiles || item.looseFileNames != nil else {
+            return .skipped(reason: CleanupExecutor.savedWithoutScan, kind: .notScanned)
+        }
+        if inTrash && item.kind != .looseFiles && target.changed(after: started) {
+            return .skipped(reason: "Moved to the Trash after it was scanned", kind: .notScanned)
+        }
+        return nil
+    }
+
+    /// Removes an item that isn't loose files as one: measured now, checked again at that size, held to the budget,
+    /// then moved or deleted, charged and journaled.
+    private func removeWhole(
+        _ item: CleanupItem, target: RemovalTarget, method: Remover.Method, context: CleanupContext, reviewed: ReviewRecord.Row?,
+        run: inout Run
+    ) -> CleanupOutcome {
         // Charge the budget and report what's there now, not what the scan saw.
         let measured: Measured =
             run.dryRun
             ? Measured(size: item.size, freed: item.size) : measure(target.resolvedPath, isFolder: target.isFolder, fallback: item.size)
         let size = measured.size
         let sized = target.measured(size)
-        if size != item.size, let refused = check(sized) { return refused }
+        if size != item.size, let refused = refusal(of: sized, item: item, context: context, reviewed: reviewed) { return refused }
         if context.isAutomatic && size > run.budget { return overBudget() }
         if run.dryRun { return .wouldRemove(bytes: size) }
 
@@ -119,7 +132,6 @@ extension CleanupExecutor {
         reviewed: ReviewRecord.Row?, run: inout Run
     ) -> CleanupOutcome {
         let remover = self.remover
-        let names = item.looseFileNames ?? []
         let fd: Int32
         do {
             fd = try remover.openDirectory(of: target)
@@ -128,34 +140,27 @@ extension CleanupExecutor {
         }
         defer { close(fd) }
 
-        var totalFreed: UInt64 = 0
-        var trashLocations: [String] = []
-        var removedCount = 0
-        var overBudgetCount = 0
-        var failures: [String] = []
-        // Files the check at removal time refused: the review judged the folder's files as a whole, so a refusal of one
-        // file is news to the person and is reported, never dropped.
-        var refusals: [(path: String, outcome: CleanupOutcome)] = []
-        for name in names {
+        var tally = LooseFiles()
+        for name in item.looseFileNames ?? [] {
             var st = stat()
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             let file = target.entry(name, stat: st, namedIn: item.path)
             guard !file.changed(after: scanStarted) else { continue }
-            if let refused = CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), reviewed: reviewed) {
-                refusals.append((file.path, refused))
+            if let refused = refusal(of: file, item: item, context: context, reviewed: reviewed) {
+                tally.refusals.append((file.path, refused))
                 continue
             }
-            // A file with another hard link keeps its bytes on disk: charged to the budget, but not freed.
-            let freed = CleanupExecutor.isLastLink(st) ? file.size : 0
             if context.isAutomatic && file.size > run.budget {
-                overBudgetCount += 1
+                tally.overBudget += 1
                 continue
             }
             do {
                 let trashedTo = try remover.remove(file, in: fd, by: method, context: context).trashedTo
-                totalFreed &+= freed
-                removedCount += 1
-                trashedTo.map { trashLocations.append($0) }
+                // A file with another hard link keeps its bytes on disk: charged to the budget, but not freed.
+                let freed = CleanupExecutor.isLastLink(st) ? file.size : 0
+                tally.freed &+= freed
+                tally.removed += 1
+                trashedTo.map { tally.trashLocations.append($0) }
                 run.charge(file.size)
                 record(
                     entry(
@@ -163,31 +168,49 @@ extension CleanupExecutor {
                         trashedTo: trashedTo),
                     in: &run)
             } catch {
-                failures.append("Couldn't remove \(PathUtil.abbreviate(file.path, home: safety.home)): \(error.localizedDescription)")
+                tally.failures.append("Couldn't remove \(PathUtil.abbreviate(file.path, home: safety.home)): \(error.localizedDescription)")
             }
         }
+        return outcome(of: tally, for: item, method: method, run: &run)
+    }
 
-        let budgetNote = overBudgetCount > 0 ? "\(overBudgetCount) loose files over this run's budget were left" : nil
-        let refused = refusals.compactMap { path, outcome -> String? in
+    /// What one loose-files item's run did, file by file.
+    private struct LooseFiles {
+        var freed: UInt64 = 0
+        var trashLocations: [String] = []
+        var removed = 0
+        var overBudget = 0
+        var failures: [String] = []
+        /// Files the check at removal time refused: the review judged the folder's files as a whole, so a refusal of
+        /// one file is news to the person and is reported, never dropped.
+        var refusals: [(path: String, outcome: CleanupOutcome)] = []
+    }
+
+    /// The item's outcome from what happened to its files; what didn't go as planned goes to the report's warnings
+    /// when something was removed, else it is the outcome.
+    private func outcome(of tally: LooseFiles, for item: CleanupItem, method: Remover.Method, run: inout Run) -> CleanupOutcome {
+        let budgetNote = tally.overBudget > 0 ? "\(tally.overBudget) loose files over this run's budget were left" : nil
+        let refused = tally.refusals.compactMap { path, outcome -> String? in
             guard case .skipped(let reason, _) = outcome else { return nil }
             return "Left \(PathUtil.abbreviate(path, home: safety.home)): \(reason)"
         }
-        guard removedCount > 0 else {
+        let failures = tally.failures
+        guard tally.removed > 0 else {
             if let first = failures.first {
                 run.report.warnings += refused
                 return .failed(reason: first + (failures.count > 1 ? " (and \(failures.count - 1) more)" : ""))
             }
-            if let first = refusals.first, case .skipped(let reason, let kind) = first.outcome {
-                let more = refusals.count > 1 ? " and \(refusals.count - 1) more" : ""
+            if let first = tally.refusals.first, case .skipped(let reason, let kind) = first.outcome {
+                let more = tally.refusals.count > 1 ? " and \(tally.refusals.count - 1) more" : ""
                 return .skipped(reason: "\(reason) (\(PathUtil.abbreviate(first.path, home: safety.home))\(more))", kind: kind)
             }
             if let budgetNote { return .skipped(reason: budgetNote, kind: .overBudget) }
             return .skipped(reason: "None of the files from the reviewed plan are left", kind: .gone)
         }
         run.report.warnings += failures + refused
-        if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }
+        if !tally.trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = tally.trashLocations }
         if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
-        return .removed(bytes: totalFreed, trashedTo: method == .trash ? trashLocations.first.map(PathUtil.parent) : nil)
+        return .removed(bytes: tally.freed, trashedTo: method == .trash ? tally.trashLocations.first.map(PathUtil.parent) : nil)
     }
 
     /// What an item holds at removal time. `size` is all of it, charged to the budget; `freed` leaves out files

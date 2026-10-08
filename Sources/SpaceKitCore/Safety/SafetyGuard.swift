@@ -298,59 +298,75 @@ public struct SafetyGuard: Sendable {
             let key = PathUtil.comparisonKey(candidate)
             return personal.contains { PathUtil.isStrictAncestor($0.key, of: key) }
         }
-
-        if target.size > 0, let capacity = volumeCapacity(PathUtil.parent(target.path)), capacity.used > 0 {
-            let share = Double(target.size) / Double(capacity.used)
-            if context.isAutomatic {
-                if share > SafetyGuard.maxAutomaticVolumeShare {
-                    let percent = Int(share * 100)
-                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(percent)% of the disk's used space")
-                }
-            } else if share > SafetyGuard.confirmVolumeShare {
-                verdict.raise(.confirm, "This holds \(Int(share * 100))% of the disk's used space")
-            }
-        }
-
+        checkVolumeShare(target, context: context, into: &verdict)
         switch context {
         case .manual:
-            // A rule speaks only for its own locations; elsewhere (a node_modules inside a tool's folder) the item
-            // is as unknown as one no rule matched.
-            if let rule, scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
-                if rule.safety.level == .review {
-                    verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
-                }
-            } else if isPersonal {
-                verdict.raise(.confirm, "This is personal data, not a cache")
-            } else {
-                verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
-            }
+            checkManual(scoped, rule: rule, isPersonal: isPersonal, into: &verdict)
         case .automatic(let automation):
-            let customRoots = automation.customPaths.map(scope.resolve)
-            let isCustom = scoped.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
-            if let rule {
-                if rule.safety.level == .review && !automation.allowReview {
-                    verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
-                }
-                if !scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
-                    verdict.raise(.block, "Path is outside the locations rule \(rule.id) covers")
-                }
-            } else if !isCustom {
-                verdict.raise(.block, "Automatic jobs only remove what a rule matched or a folder listed in the job")
-            }
-            // Rules carry curated knowledge about what's inside personal areas (Mail downloads, app caches in
-            // containers); folders a person typed into a job don't, so those get the strict treatment.
-            if isPersonal && rule == nil {
-                let ageOK = (automation.olderThan?.days ?? 0) >= 7
-                if !(isCustom && ageOK && automation.usesTrash) {
-                    verdict.raise(
-                        .block,
-                        "Automatic cleanup inside personal folders requires a folder listed in the job, "
-                            + "“older than” of at least 7 days, and moving to Trash"
-                    )
-                }
-            }
+            checkAutomatic(scoped, rule: rule, isPersonal: isPersonal, automation: automation, into: &verdict)
         }
         return verdict
+    }
+
+    /// A single item holding a large share of its volume's used space needs confirmation, or in an automatic run past a
+    /// larger share is blocked.
+    private func checkVolumeShare(_ target: RemovalTarget, context: CleanupContext, into verdict: inout SafetyVerdict) {
+        guard target.size > 0, let capacity = volumeCapacity(PathUtil.parent(target.path)), capacity.used > 0 else { return }
+        let share = Double(target.size) / Double(capacity.used)
+        if context.isAutomatic {
+            if share > SafetyGuard.maxAutomaticVolumeShare {
+                let percent = Int(share * 100)
+                verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(percent)% of the disk's used space")
+            }
+        } else if share > SafetyGuard.confirmVolumeShare {
+            verdict.raise(.confirm, "This holds \(Int(share * 100))% of the disk's used space")
+        }
+    }
+
+    /// A person's removal: what a rule doesn't vouch for needs confirmation. `scoped`: the item's spellings with their
+    /// folders resolved.
+    private func checkManual(_ scoped: [String], rule: Rule?, isPersonal: Bool, into verdict: inout SafetyVerdict) {
+        // A rule speaks only for its own locations; elsewhere (a node_modules inside a tool's folder) the item is as
+        // unknown as one no rule matched.
+        if let rule, scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
+            if rule.safety.level == .review {
+                verdict.raise(.confirm, "\(rule.name) is marked “Review”: it can be removed but may be slow or costly to get back")
+            }
+        } else if isPersonal {
+            verdict.raise(.confirm, "This is personal data, not a cache")
+        } else {
+            verdict.raise(.confirm, "No SpaceKit rule recognises this; make sure you don't need it")
+        }
+    }
+
+    /// An automatic run's removal: only what a rule covers, or a folder listed in the job, under strict terms.
+    private func checkAutomatic(
+        _ scoped: [String], rule: Rule?, isPersonal: Bool, automation: AutomationContext, into verdict: inout SafetyVerdict
+    ) {
+        let customRoots = automation.customPaths.map(scope.resolve)
+        let isCustom = scoped.allSatisfy { candidate in customRoots.contains { PathUtil.isAncestorOrEqual($0, of: candidate) } }
+        if let rule {
+            if rule.safety.level == .review && !automation.allowReview {
+                verdict.raise(.block, "\(rule.name) needs review; enable “Include review items” on the job to automate it")
+            }
+            if !scoped.allSatisfy({ scope.contains($0, rule: rule) }) {
+                verdict.raise(.block, "Path is outside the locations rule \(rule.id) covers")
+            }
+        } else if !isCustom {
+            verdict.raise(.block, "Automatic jobs only remove what a rule matched or a folder listed in the job")
+        }
+        // Rules carry curated knowledge about what's inside personal areas (Mail downloads, app caches in containers);
+        // folders a person typed into a job don't, so those get the strict treatment.
+        if isPersonal && rule == nil {
+            let ageOK = (automation.olderThan?.days ?? 0) >= 7
+            if !(isCustom && ageOK && automation.usesTrash) {
+                verdict.raise(
+                    .block,
+                    "Automatic cleanup inside personal folders requires a folder listed in the job, "
+                        + "“older than” of at least 7 days, and moving to Trash"
+                )
+            }
+        }
     }
 
     /// Checks that can never be overridden.

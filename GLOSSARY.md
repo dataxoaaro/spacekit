@@ -1,5 +1,13 @@
 # Glossary
 
+## Config
+
+**Context**: one consistent reading of the config file (`SpaceKitContext`): the config, the rule library loaded for it, and the guard and executor built from both once; it never changes, a front end replaces it with a new one. _Avoid_: settings, environment.
+
+**Config change**: one edit applied to the config file as it is on disk at that moment (`SpaceKitContext.applying`), returning a new context; refused, and never saved over the file, while the file is invalid. _Avoid_: config save, settings update.
+
+**Config re-read**: reading the config file as it is now into a new context without changing it (`SpaceKitContext.rereadingConfig`), which the app does when it becomes active. _Avoid_: reload (that also re-reads the rule files), file watching.
+
 ## Rules and command trust
 
 **Built-in rule**: a rule compiled into SpaceKit from the repository's `rules/` folder (`BuiltinRules.embedded`), which may run the tools on the built-in trusted list without configuration; only a debug build's `SPACEKIT_RULES_DIR` replaces them. _Avoid_: default rule, system rule, bundled rule.

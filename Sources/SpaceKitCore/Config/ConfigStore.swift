@@ -82,8 +82,8 @@ public struct ConfigStore: Sendable {
         }
     }
 
-    /// Saves the config, keeping the previous file as `config.yaml.bak`. Front ends call `update(_:)` instead,
-    /// which applies one change to the file as it is now and never overwrites a file that doesn't parse.
+    /// Saves the config, keeping the previous file as `config.yaml.bak`. Front ends call `SpaceKitContext.applying(_:)`
+    /// instead, which applies one change to the file as it is now and never overwrites a file that doesn't parse.
     func save(_ config: SpaceKitConfig) throws {
         try ConfigStore.validate(config)
         let body = try YAMLEncoder().encode(config)

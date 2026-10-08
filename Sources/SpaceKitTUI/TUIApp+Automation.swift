@@ -96,14 +96,15 @@ extension TUIApp {
     }
 
     /// Applies `change` to the config file as it is on disk now, not to the copy loaded at start, which would
-    /// drop jobs added elsewhere since. Refuses while the file is invalid: saving would replace it with defaults.
+    /// drop jobs added elsewhere since. A file fixed since is adopted; one that is invalid now is left as it is.
     func saveConfig(_ message: String, _ change: (inout SpaceKitConfig) throws -> Void) {
         do {
-            if let error = context.configError {
-                throw TUIError(message: "Config file is invalid: \(error). Fix it (spacekit config validate) first")
-            }
-            context.config = try context.configStore.update(change)
+            context = try context.applying(change)
             flash(message)
+        } catch let error as ConfigError {
+            flash(
+                "Config file is invalid, nothing was saved: \(TerminalText.sanitize(error.localizedDescription)). "
+                    + "Fix it (spacekit config validate) first")
         } catch {
             flash("Couldn't save config: \(TerminalText.sanitize(error.localizedDescription))")
         }

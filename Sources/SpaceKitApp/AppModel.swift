@@ -177,28 +177,37 @@ final class AppModel {
     // MARK: Config
 
     /// Applies one change to the config file as it is on disk now, so changes made elsewhere (jobs added with the CLI,
-    /// hand edits) are kept, and saves it. A config file that doesn't parse is left untouched and the problem shown.
-    /// Only what changed is reloaded: the rule library only when rule settings differ.
+    /// hand edits) are kept, and saves it. A config file that doesn't parse is left untouched and the problem shown; once
+    /// it is fixed, the next change adopts it.
     func updateConfig(_ change: (inout SpaceKitConfig) -> Void) {
-        let before = context.config
-        let saved: SpaceKitConfig
         do {
-            saved = try context.configStore.update(change)
+            adopt(try context.applying(change))
         } catch let error as ConfigError {
             errorMessage =
                 "SpaceKit didn't save this change because the config file has a problem: \(error.localizedDescription). "
-                + "Fix it (spacekit config validate), then Reload."
-            return
+                + "Fix it (spacekit config validate), then try again."
         } catch {
             errorMessage = "Couldn't save the config: \(error.localizedDescription)"
-            return
         }
-        if saved.rules != before.rules || context.configError != nil {
-            reloadContext()
-        } else if saved != before {
-            context.config = saved
-            if saved.jobs != before.jobs { refreshJournal() }
+    }
+
+    /// Picks up edits made to the config file elsewhere (an editor, the CLI) while SpaceKit was in the background.
+    func rereadConfig() { adopt(context.rereadingConfig()) }
+
+    /// Replaces the context with `new` and refreshes only what depends on what changed: the rule labels when rule
+    /// settings or developer roots differ (the context reloaded its library only for rule settings), the Automation
+    /// screen when jobs differ.
+    private func adopt(_ new: SpaceKitContext) {
+        let old = context
+        context = new
+        if new.config.rules != old.config.rules {
+            rulesIncludingDisabledCache = nil
+            analysisResult?.reindex(rules: new.library.rules)
         }
+        if new.config.rules != old.config.rules || new.config.scan.devRoots != old.config.scan.devRoots {
+            libraryIndex = new.ruleIndex
+        }
+        if new.config.jobs != old.config.jobs { refreshJournal() }
     }
 
     /// Writes the commented starter config if there's no config file yet, and loads it.
@@ -420,13 +429,15 @@ final class AppModel {
     // MARK: Monitoring
 
     /// Keeps capacity live: every few seconds (one cheap system call per volume), and immediately when SpaceKit
-    /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder).
+    /// becomes active, which is also when the Trash is re-measured (you may have emptied it in Finder) and the config
+    /// file re-read (you may have edited it).
     private func startMonitoring() {
         observers.append(
             NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
                 [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    self.rereadConfig()
                     self.refreshVolumes()
                     self.refreshTrash(resync: true)
                     self.refreshSnapshots()

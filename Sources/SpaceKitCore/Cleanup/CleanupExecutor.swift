@@ -120,6 +120,10 @@ public struct CleanupExecutor: Sendable {
     var device: SafeRemoval.DeviceReader = SafeRemoval.device(of:)
     /// Finds and runs tools. Tests replace it with a recorder, so trust and budget checks run without real tools.
     var runner: any ProcessRunner = SystemProcessRunner()
+    /// Reads the mount table at the start of each run. The guard keeps the table it was built with, and a context
+    /// (with its guard) lives as long as the app or TUI does; a run reads it again so a volume mounted since is still a
+    /// mount point the guard refuses. `nil` keeps the guard's own table: tests hand the guard theirs.
+    var readMounts: (@Sendable () -> VolumeTable)?
 
     public static let commandTimeout: TimeInterval = 600
 
@@ -171,6 +175,12 @@ public struct CleanupExecutor: Sendable {
     private func execute(
         _ plan: CleanupPlan, context: CleanupContext, accepted: AcceptedWarnings, dryRun: Bool, onProgress: ProgressHandler?
     ) -> CleanupReport {
+        if let readMounts {
+            var current = self
+            current.readMounts = nil
+            current.safety = safety.mounted(readMounts())
+            return current.execute(plan, context: context, accepted: accepted, dryRun: dryRun, onProgress: onProgress)
+        }
         var run = Run(report: CleanupReport(dryRun: dryRun), budget: context.isAutomatic ? maxBytesPerAutomaticRun : .max)
         let total = plan.items.count + plan.commands.count
         var completed = 0

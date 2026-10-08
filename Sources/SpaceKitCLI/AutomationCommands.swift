@@ -21,11 +21,14 @@ struct JobsCommand: ParsableCommand {
     /// Changes the config file as it is on disk now. A file that doesn't parse is never replaced: saving the
     /// defaults loaded in its place would drop protected paths, allowed commands and disabled rules.
     static func updateConfig(_ context: SpaceKitContext, _ change: (inout SpaceKitConfig) throws -> Void) throws {
-        if let error = context.configError {
-            Output.warn("The config file is invalid, so nothing was saved. Fix it first (spacekit config validate): \(Output.safe(error))")
+        do {
+            _ = try context.applying(change)
+        } catch let error as ConfigError {
+            Output.warn(
+                "The config file is invalid, so nothing was saved. Fix it first (spacekit config validate): "
+                    + Output.safe(error.localizedDescription))
             throw ExitCode.failure
         }
-        try context.configStore.update(change)
     }
 
     /// The job, what it matched now and whether it would run.

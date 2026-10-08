@@ -87,7 +87,8 @@ public struct SafetyGuard: Sendable {
     public let home: String
     public let userProtectedPaths: [String]
     public let protectedRules: [Rule]
-    public let volumes: VolumeTable
+    /// The mount table the guard was built with; `mounted(_:)` swaps in a fresh one.
+    public private(set) var volumes: VolumeTable
     public let isRunningAsRoot: Bool
     /// Where pattern rules without their own `roots` look (the config's `scan.devRoots`).
     public let patternRoots: [String]
@@ -98,7 +99,7 @@ public struct SafetyGuard: Sendable {
     private let sealed: [Location]
     private let personal: [Location]
     private let userProtected: [Location]
-    private let mountKeys: [String]
+    private var mountKeys: [String]
     private let protectedPatterns: [ProtectedPattern]
     private let scope: RuleScope
 
@@ -137,13 +138,25 @@ public struct SafetyGuard: Sendable {
                     .map { Location(path: path, key: PathUtil.comparisonKey($0)) }
             }
         }
-        mountKeys = volumes.volumes.map { PathUtil.comparisonKey($0.mountPoint) }
+        mountKeys = SafetyGuard.mountKeys(volumes)
         protectedPatterns = self.protectedRules.map { rule in
             ProtectedPattern(
                 rule: rule,
                 patterns: rule.paths.map { PathUtil.comparisonKey(PathUtil.expand($0, home: home)) },
                 names: Set((rule.match?.names ?? []).map(PathUtil.comparisonKey)))
         }
+    }
+
+    /// This guard with another mount table; everything else it resolved when it was built stays as it is.
+    func mounted(_ volumes: VolumeTable) -> SafetyGuard {
+        var mounted = self
+        mounted.volumes = volumes
+        mounted.mountKeys = SafetyGuard.mountKeys(volumes)
+        return mounted
+    }
+
+    private static func mountKeys(_ volumes: VolumeTable) -> [String] {
+        volumes.volumes.map { PathUtil.comparisonKey($0.mountPoint) }
     }
 
     // MARK: Built-in lists

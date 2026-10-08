@@ -43,9 +43,9 @@ public struct ManualJobRun: Sendable {
 
     public struct Outcome: Sendable {
         public let report: CleanupReport
-        /// `nil` for a job run by hand, a run refused as reviewed with another executor, and a suggestion that
-        /// couldn't be saved (`saveErrors` says why).
-        public let suggestion: SuggestionFate?
+        /// What became of the approved suggestion. `nil` for a job run by hand, a run refused as reviewed with another
+        /// executor, and a suggestion that couldn't be saved (`saveErrors` says why).
+        public let fate: SuggestionFate?
         /// The job's state or the suggestion that couldn't be saved. The removals happened regardless.
         public let saveErrors: [String]
     }
@@ -116,9 +116,9 @@ public struct ManualJobRun: Sendable {
     public func complete(
         _ reviewed: ReviewedPlan, executor: CleanupExecutor, now: Date = Date(), onProgress: CleanupExecutor.ProgressHandler? = nil
     ) -> Outcome {
-        guard let plan else { return Outcome(report: CleanupReport(dryRun: false), suggestion: nil, saveErrors: []) }
+        guard let plan else { return Outcome(report: CleanupReport(dryRun: false), fate: nil, saveErrors: []) }
         let report = executor.execute(reviewed.limited(to: plan), dryRun: false, onProgress: onProgress)
-        if report.reviewOutdated { return Outcome(report: report, suggestion: nil, saveErrors: []) }
+        if report.reviewOutdated { return Outcome(report: report, fate: nil, saveErrors: []) }
         return finish(report, action: .cleaned(report), now: now) { left(after: report, executor: executor) }
     }
 
@@ -142,7 +142,7 @@ public struct ManualJobRun: Sendable {
         } catch {
             errors.append("Couldn't save the job's state: \(error.localizedDescription)")
         }
-        guard let suggestion else { return Outcome(report: report, suggestion: nil, saveErrors: errors) }
+        guard let suggestion else { return Outcome(report: report, fate: nil, saveErrors: errors) }
         let fate: SuggestionFate
         do {
             switch try runner.context.suggestions.narrow(suggestion.id, to: left(), problems: report.problemDetails) {
@@ -152,9 +152,9 @@ public struct ManualJobRun: Sendable {
             }
         } catch {
             errors.append("Couldn't save the suggestion: \(error.localizedDescription)")
-            return Outcome(report: report, suggestion: nil, saveErrors: errors)
+            return Outcome(report: report, fate: nil, saveErrors: errors)
         }
-        return Outcome(report: report, suggestion: fate, saveErrors: errors)
+        return Outcome(report: report, fate: fate, saveErrors: errors)
     }
 
     /// The still-eligible rows that weren't removed, still exist and aren't blocked, which includes rows the person

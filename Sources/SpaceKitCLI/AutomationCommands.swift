@@ -457,7 +457,7 @@ struct SuggestionsCommand: ParsableCommand {
                     heading: "Suggested cleanup",
                     hint: "Preview only. Approve with: spacekit suggestions approve \(Output.safe(suggestion.id)) --yes")
             else { return }
-            Output.emit(Self.fateLines(outcome.suggestion), toStandardError: json)
+            Output.emit(Self.fateLines(outcome.fate), toStandardError: json)
             try JobsCommand.finish(outcome)
         }
 
@@ -474,7 +474,7 @@ struct SuggestionsCommand: ParsableCommand {
                 if json { try Output.json(RunJSON(plan: plan)) }
                 return
             }
-            Output.emit([reason + "."] + Self.fateLines(outcome.suggestion), toStandardError: json)
+            Output.emit([reason + "."] + Self.fateLines(outcome.fate), toStandardError: json)
             if json { try Output.json(RunJSON(plan: plan, result: ReportJSON(outcome.report))) }
             try JobsCommand.finish(outcome)
         }

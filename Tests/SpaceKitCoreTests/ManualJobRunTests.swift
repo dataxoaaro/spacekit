@@ -48,7 +48,7 @@ struct ManualJobRunTests {
 
         #expect(outcome.report.freedBytes > 0)
         #expect(outcome.saveErrors.isEmpty)
-        #expect(outcome.suggestion == nil)
+        #expect(outcome.fate == nil)
         #expect(!FileManager.default.fileExists(atPath: fixture.tree.path("home/build/a")))
         #expect(lastRun(fixture) == date)
         #expect(fixture.context.jobStates.load()["build"]?.lastOutcome == outcome.report.summary)
@@ -73,7 +73,7 @@ struct ManualJobRunTests {
         let refused = run.complete(plan, executor: current)
 
         #expect(refused.report.reviewOutdated)
-        #expect(refused.suggestion == nil)
+        #expect(refused.fate == nil)
         #expect(FileManager.default.fileExists(atPath: fixture.tree.path("home/build/a")))
         #expect(lastRun(fixture) == suggested, "a refused run records nothing")
         let stored = try #require(fixture.context.suggestions.get(suggestion.id), "a refused run leaves the suggestion alone")
@@ -82,7 +82,7 @@ struct ManualJobRunTests {
 
         let outcome = run.complete(try reviewed(run, current), executor: current)
         #expect(outcome.report.removedAnything)
-        #expect(outcome.suggestion == .dismissed)
+        #expect(outcome.fate == .dismissed)
         #expect(lastRun(fixture) != suggested)
     }
 
@@ -134,7 +134,7 @@ struct ManualJobRunTests {
         let date = Date(timeIntervalSince1970: 9_000)
         let outcome = run.complete(try reviewed(run, executor), executor: executor, now: date)
 
-        #expect(outcome.suggestion == .dismissed)
+        #expect(outcome.fate == .dismissed)
         #expect(fixture.context.suggestions.all().isEmpty)
         #expect(lastRun(fixture) == date)
     }
@@ -153,7 +153,7 @@ struct ManualJobRunTests {
 
         let outcome = run.complete(try reviewed(run, executor, untick: ["c"]), executor: executor)
 
-        guard case .kept(let kept) = outcome.suggestion else {
+        guard case .kept(let kept) = outcome.fate else {
             Issue.record("expected the suggestion to be kept")
             return
         }
@@ -181,7 +181,7 @@ struct ManualJobRunTests {
         let outcome = run.complete(plan, executor: executor)
 
         #expect(!outcome.report.removedAnything)
-        #expect(outcome.suggestion == .dismissed)
+        #expect(outcome.fate == .dismissed)
         #expect(fixture.context.suggestions.all().isEmpty)
     }
 
@@ -202,7 +202,7 @@ struct ManualJobRunTests {
         let outcome = run.complete(plan, executor: executor)
 
         #expect(outcome.report.removedAnything)
-        #expect(outcome.suggestion == .dismissed, "b, unticked here, was already settled by the other approval")
+        #expect(outcome.fate == .dismissed, "b, unticked here, was already settled by the other approval")
         #expect(fixture.context.suggestions.all().isEmpty)
     }
 
@@ -220,7 +220,7 @@ struct ManualJobRunTests {
         let outcome = run.complete(plan, executor: executor)
 
         #expect(outcome.report.removedAnything)
-        #expect(outcome.suggestion == .gone)
+        #expect(outcome.fate == .gone)
         #expect(fixture.context.suggestions.all().isEmpty)
     }
 
@@ -239,7 +239,7 @@ struct ManualJobRunTests {
         let date = Date(timeIntervalSince1970: 7_000)
         let outcome = try #require(run.settleWithNothingLeft(now: date))
 
-        #expect(outcome.suggestion == .dismissed)
+        #expect(outcome.fate == .dismissed)
         #expect(outcome.report.items.isEmpty && outcome.report.commands.isEmpty)
         #expect(outcome.saveErrors.isEmpty)
         #expect(fixture.context.suggestions.all().isEmpty)

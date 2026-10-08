@@ -27,12 +27,12 @@ SpaceKit is one Swift package with a shared core and three front ends.
 
 | Folder | Contents |
 |---|---|
-| `Scanner/` | `Scanner` (parallel `getattrlistbulk` traversal), `DirNode` tree, `ScanTree` in-place updates (`TreeMutations`, with hard links indexed by folder so an update touches only the files linked from where it changes the tree), `VolumeTable` (mounts, APFS containers, firmlinks). |
+| `Scanner/` | `Scanner` (parallel `getattrlistbulk` traversal), `DirNode` tree, `ScanTree` in-place updates (`TreeMutations`), `HardLinkTable` in `HardLinks.swift` (every multiply-linked file, indexed by the folders holding its links, so an update touches only the files linked from where it changes the tree), `VolumeTable` (mounts, APFS containers, firmlinks). |
 | `Layout/` | Squarified treemap and sunburst layouts, with hit testing. Pure geometry, shared by the app's Canvas and the TUI. |
 | `Rules/` | `Rule` schema, `RuleLibrary` (loading and validation), `RuleEngine` (matching rules against a tree). |
 | `Intelligence/` | `StorageAnalyzer` (targeted scans + evaluation), `CategoryBreakdown`, `AIInspector`, `RuleIndex`, incremental updates. |
 | `Safety/` | `SafetyGuard`, the single gate for removals, and `RuleScope` (where a rule applies, shared by the guard, `RuleIndex` and `RuleEngine` so they agree). See [SAFETY.md](SAFETY.md). |
-| `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal), `SafeRemoval` (deletion through directory handles under a checked folder, never by path), `Journal`. |
+| `Cleanup/` | `CleanupPlan`, `CleanupExecutor` (re-checks, removes, runs tool commands, journals each removal, and accounts for items deleted only in part), `SafeRemoval` (deletion through directory handles under a checked folder, never by path: one folder open at a time, no recursion, carrying on past entries it can't remove), `Journal`. |
 | `Automation/` | `Job` and `Schedule`, `JobRunner` (evaluate, observe/suggest/clean, due logic), `LaunchAgent`, state stores, notifications. |
 | `Config/` | `SpaceKitConfig` (strict YAML decoding: a value it can't read makes the file invalid), `ConfigStore`, `SpaceKitContext` (wires everything from the config, and carries the config error that stops cleaning). |
 | `History/` | Usage samples and snapshots; "this month" and "what grew". |
@@ -49,7 +49,7 @@ The scanner is the hot path. Its job is to turn millions of directory entries in
 - **Hard links are attributed deterministically.** While the scan runs, a multiply-linked file's bytes go to the first link a worker reaches, so live totals stay right. When the workers finish, the bytes move to the link in the folder whose path sorts first (then by file name), so the same disk always gives the same tree whatever the thread timing. The other links stay in their folders' file counts with no bytes. The tree keeps each multiply-linked file's group of links after the scan, so later updates know where the bytes go.
 - **The whole disk, once.** Scanning `/` crosses into every volume of the startup disk's APFS container (System, Data, VM swap, Preboot, Update) and skips data-volume paths that are also reachable through firmlinks (`/Users` ≡ `/System/Volumes/Data/Users`), using `/usr/share/firmlinks`. Other disks and virtual file systems are skipped. What the scan can't see is reported as *Hidden & Purgeable* (`used − scanned`).
 - **Progressive results.** Folders down to `liveDepth` keep an atomic running total, and each folder is published (`isListed`, release/acquire) as soon as it's listed, so the app and TUI draw the map while the scan runs.
-- **After the scan**, one non-recursive bottom-up pass computes totals, newest dates and subtree markers, and sorts children by size. After that the tree changes only through `applyRemoval`, `applyMove` and `splice`, which update every ancestor so views stay correct without rescanning.
+- **After the scan**, one non-recursive bottom-up pass computes totals, newest dates and subtree markers, and sorts children by size. After that the tree changes only through `applyRemoval`, `applyMove`, `splice` and `rescan`, which update every ancestor so views stay correct without rescanning.
 
 ### Who may touch a `DirNode`
 
@@ -57,7 +57,7 @@ The scanner is the hot path. Its job is to turn millions of directory entries in
 
 1. **During a scan**, the worker that lists a folder writes its fields, then publishes it (`isListed`, release/acquire). Other threads may read only `name`, `isListed` and `liveSize`, of the nodes in `ScanProgress.liveChildren`.
 2. **When the workers finish**, the scanning thread resolves hard links and aggregates totals, sorting `children` in place, before `Scanner.scan` returns.
-3. **After that**, only the tree's owner changes it, through `applyRemoval`, `applyMove` and `splice`, from one thread or actor at a time. Reads on other threads must be synchronized with those changes by the owner.
+3. **After that**, only the tree's owner changes it, through `applyRemoval`, `applyMove`, `splice` and `rescan`, from one thread or actor at a time. Reads on other threads must be synchronized with those changes by the owner.
 
 The app keeps its trees on the main actor and waits until no background work (analysis reusing the tree, map layout) is reading them before it applies a cleanup (`untilTreesAreFree`). The TUI changes trees only on its main loop, and holds removals back while an analysis is reading the tree.
 
@@ -76,7 +76,7 @@ Modification time is used. Access times are recorded but are unreliable for fold
 2. **Pattern rules** walk the tree from their search roots. A folder matches by name plus a marker check: `sibling` in the parent's mask, `contains` in its own. Matching never descends into a match, into bundles, or into tool homes such as `~/Library` or `~/.cargo`.
 3. **Overlaps are resolved** so no byte is counted twice. The more specific rule wins an exact path. An outer item that contains another rule's item is split into its children around it.
 
-`StorageAnalyzer` decides what to scan. If the Explore tree already covers every location the selected rules need, it's reused. Otherwise only the needed roots are scanned, in one parallel multi-root pass. A job for DerivedData scans DerivedData, not your disk.
+`StorageAnalyzer` decides what to scan. If the Explore tree already covers every location the selected rules need, it's reused. Otherwise only the needed roots are scanned, in one parallel multi-root pass. A job for DerivedData scans DerivedData, not your disk. Every rule of the library is still evaluated on what was scanned, in library order (a job's own folders last), and only the selected rules' findings are kept, so each selected rule gets exactly what a full analysis would give it.
 
 ## Incremental updates (no full refresh)
 
@@ -85,8 +85,9 @@ After a cleanup, the app and the TUI do **not** re-scan or re-analyse:
 | What changed | What updates |
 |---|---|
 | Items removed from disk | `ScanTree.applyRemoval` shrinks the Explore tree (and the analysis tree, if separate) in place. Small files, which the tree only knows as a per-folder total, are removed using the size the executor measured. For loose files ("Files in …"), the folder is read again, because the executor may have skipped some of them. Removing the link that holds a hard-linked file's bytes hands them to the surviving link a rescan would credit. |
+| Items deleted only in part | The report's `partiallyFreed` lists them, and `Removal.from` turns each into a partial removal. `ScanTree.rescan` scans the folder again with the tree's own options and splices it in, so the tree shows what's left. |
 | Items moved to the Trash | `ScanTree.applyMove` re-attaches them under `~/.Trash`, so totals stay true: trashed data still uses the disk. Loose files moved to the Trash reappear under the Trash node where each one landed (the report's `trashedLooseFiles`). Afterwards the app re-scans the Trash and splices it in (`ScanTree.splice`), which also picks up a Trash emptied in Finder whenever SpaceKit becomes active. |
-| Findings | `Analysis.apply(_:)` drops removed items, shrinks items that lost something inside, and removes empty findings. Only the cards for touched rules change. |
+| Findings | `Analysis.apply(_:)` drops removed items, shrinks items that lost something inside or were deleted in part, and removes empty findings. Only the cards for touched rules change. |
 | Tool commands (`brew cleanup`, `docker builder prune`) | Only those rules are re-evaluated, with a targeted scan of their own locations (`refreshFindings`). The card shows a small spinner meanwhile. |
 | AI report | Rebuilt only if an AI rule was touched. Partial re-scans are merged into the existing report (`AIReport.replacingModels`), so other tools keep their models. |
 | Category totals | Removed bytes are subtracted from their category, with no tree walk. |

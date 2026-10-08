@@ -154,7 +154,8 @@ struct CommandTrustTests {
         // Nobody watches an automatic run, and any process of the person's can set the agent's variables (launchctl
         // setenv): a tool home, an XDG folder or a Homebrew setting would steer what a tool deletes. Only who and where.
         let automatic = Shell.toolEnvironment(from: parent, home: "/Users/tester", kind: .automatic)
-        #expect(Set(automatic.keys) == ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
+        #expect(
+            Set(automatic.keys) == Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"] + Shell.isolationVariables.keys))
         let fixed = Shell.automaticSearchPath(path, changeable: CommandTrust.changeablePart(of:))
         #expect(automatic["PATH"] == fixed.joined(separator: ":") && fixed.contains("/usr/bin") && automatic["HOME"] == "/Users/tester")
     }
@@ -393,17 +394,20 @@ struct CommandTrustTests {
     func automaticRunsNeedFixedPrograms() throws {
         let tree = try TempTree()
         try program(tree, "bin/tidy")
-        let cache = tree.path("home/.tool/cache")
+        let simulators = ["xcrun", "simctl", "delete", "unavailable"]
         let tidy = rule("tidy", builtin: true, command: ["tidy", "--all"])
-        let du = rule("du", builtin: true, command: ["du", "-s", cache])
+        let xcrun = rule("xcrun", builtin: true, command: simulators)
         let plan = CleanupPlan(commands: [
             PlannedCommand(ruleID: "tidy", arguments: ["tidy", "--all"], estimatedBytes: 1),
-            PlannedCommand(ruleID: "du", arguments: ["du", "-s", cache], estimatedBytes: 1),
+            PlannedCommand(ruleID: "xcrun", arguments: simulators, estimatedBytes: 1),
         ])
-        // The file system as it is: the test's own folder is yours, /usr/bin is the system's.
+        // The file system as it is: the test's own folder is yours, /usr/bin is the system's. Which developer folder this
+        // Mac's xcode-select chose isn't what this tests.
         let runner = RecordingRunner(searchPath: [tree.path("bin"), "/usr/bin"])
-        let executor = executor(
-            tree, rules: [tidy, du], runner: runner, allowed: ["tidy", "du"], changeable: CommandTrust.changeablePart(of:))
+        let changeable: @Sendable (String) -> String? = {
+            $0.hasPrefix(CommandTrust.developerFolderLink) ? nil : CommandTrust.changeablePart(of: $0)
+        }
+        let executor = executor(tree, rules: [tidy, xcrun], runner: runner, allowed: ["tidy"], changeable: changeable)
         let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         let reason = skipReason(report.commands.first?.outcome) ?? "ran"
         // The temporary folder the test's own folder is in is already yours.
@@ -411,7 +415,7 @@ struct CommandTrustTests {
         #expect(tree.path("bin/tidy").hasPrefix(yours))
         #expect(reason.contains("\(yours) can be replaced by any program of yours, so 'tidy' runs only when you start it"), "\(reason)")
         #expect(report.commands.last?.outcome.isRemoved == true)
-        #expect(runner.calls == [["du", "-s", cache]])
+        #expect(runner.calls == [simulators])
 
         // By hand the person starts it themselves, from wherever it is.
         let manual = manualRun(plan, with: executor)
@@ -439,23 +443,23 @@ struct CommandTrustTests {
         let tree = try TempTree()
         let cache = try tree.file("home/first/blob", bytes: 6_000)
         let freed = tree.allocated("home/first/blob")
-        let runner = RecordingRunner(installed: ["brew", "cargo"], in: tree) { call in
-            if call.first == "brew" { try? FileManager.default.removeItem(atPath: cache) }
+        let runner = RecordingRunner(installed: ["go", "uv"], in: tree) { call in
+            if call.first == "go" { try? FileManager.default.removeItem(atPath: cache) }
             return Shell.Result(status: 0, output: "", timedOut: false)
         }
-        let first = rule("first", builtin: true, command: ["brew", "cleanup"])
-        let second = rule("second", builtin: true, command: ["cargo", "cache", "--autoclean"])
+        let first = rule("first", builtin: true, command: ["go", "clean", "-cache"])
+        let second = rule("second", builtin: true, command: ["uv", "cache", "clean"])
         let plan = CleanupPlan(commands: [
             PlannedCommand(
-                ruleID: "first", arguments: ["brew", "cleanup"], estimatedBytes: 6_000, measurePaths: [tree.path("home/first")]),
-            PlannedCommand(ruleID: "second", arguments: ["cargo", "cache", "--autoclean"], estimatedBytes: 6_000),
+                ruleID: "first", arguments: ["go", "clean", "-cache"], estimatedBytes: 6_000, measurePaths: [tree.path("home/first")]),
+            PlannedCommand(ruleID: "second", arguments: ["uv", "cache", "clean"], estimatedBytes: 6_000),
         ])
         let budget = ByteCount(freed + 1_000)
         let report = executor(tree, rules: [first, second], runner: runner, budget: budget)
             .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         #expect(report.commands.first?.outcome == .removed(bytes: freed, trashedTo: nil))
         #expect(skipReason(report.commands.last?.outcome)?.contains("budget") == true)
-        #expect(runner.calls == [["brew", "cleanup"]])
+        #expect(runner.calls == [["go", "clean", "-cache"]])
         #expect(runner.kinds == [.automatic], "an automatic run's tools get the automatic environment")
         #expect(journalEntries(tree).map(\.bytes) == [freed])
     }

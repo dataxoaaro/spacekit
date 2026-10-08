@@ -105,4 +105,103 @@ extension CommandTrustTests {
         #expect(manual.commands.allSatisfy { skipReason($0.outcome) == nil })
         #expect(runner.calls.suffix(3) == commands[...])
     }
+
+    /// Any program of yours can write your tools' settings files, and nobody watches an automatic run. So its tools get
+    /// settings SpaceKit chooses instead: Docker an empty folder only root can change (no contexts, plugins or credential
+    /// helpers of yours), Go no env file and no other toolchain, npm and uv no config files.
+    @Test("An automatic run's tools leave your own Docker, Go, npm, uv and xcrun settings behind; a manual run's keep them")
+    func automaticIsolation() {
+        let parent = [
+            "PATH": "/usr/bin", "HOME": "/Users/tester", "DOCKER_CONFIG": "/Users/tester/.docker-elsewhere",
+            "GOENV": "/Users/tester/go.env", "GOFLAGS": "-modcacherw", "GOTOOLCHAIN": "go1.99.0",
+            "NPM_CONFIG_USERCONFIG": "/Users/tester/.npmrc-elsewhere", "npm_config_globalconfig": "/Users/tester/npmrc",
+            "UV_CONFIG_FILE": "/Users/tester/uv.toml", "xcrun_nocache": "0", "npm_config_cache": "/Users/tester/.npm-elsewhere",
+        ]
+        let automatic = Shell.toolEnvironment(from: parent, home: "/Users/tester", kind: .automatic)
+        let isolated = [
+            "DOCKER_CONFIG": "/var/empty", "GOENV": "off", "GOTOOLCHAIN": "local", "NPM_CONFIG_USERCONFIG": "/dev/null",
+            "NPM_CONFIG_GLOBALCONFIG": "/dev/null", "UV_NO_CONFIG": "1", "xcrun_nocache": "1",
+        ]
+        #expect(Shell.isolationVariables == isolated)
+        for (name, value) in isolated { #expect(automatic[name] == value, "\(name)") }
+        for name in ["GOFLAGS", "npm_config_globalconfig", "UV_CONFIG_FILE", "npm_config_cache"] {
+            #expect(automatic[name] == nil, "\(name)")
+        }
+
+        let manual = Shell.toolEnvironment(from: parent, home: "/Users/tester")
+        for name in isolated.keys { #expect(manual[name] == nil, "\(name)") }
+        #expect(manual["npm_config_cache"] == "/Users/tester/.npm-elsewhere")
+    }
+
+    @Test("The real runner starts an automatic run's tool in the root folder, with the isolation variables")
+    func realRunnerIsolates() {
+        let automatic = Shell.run("/bin/pwd", [], timeout: 10, environment: [:], kind: .automatic)
+        #expect(automatic.output == "/\n")
+        let environment = Shell.run("/usr/bin/env", [], timeout: 10, environment: ["GOENV": "/x"], kind: .automatic)
+        #expect(environment.output.split(separator: "\n").contains("GOENV=off"))
+    }
+
+    /// A new built-in rule's tool needs a decision: what SpaceKit leaves behind for it, or that automatic runs refuse it.
+    @Test("Every built-in rule's tool is either isolated for automatic runs or refused in them")
+    func builtinToolsClassified() {
+        let library = RuleLibrary.load(builtin: .embedded)
+        var tools = Set<String>()
+        for rule in library.rules where rule.isBuiltin {
+            for command in [rule.action.command, rule.action.itemCommand, rule.ai?.removeCommand].compactMap({ $0 }) {
+                tools.insert(command.first ?? "")
+            }
+        }
+        #expect(tools.count > 10)
+        for tool in tools {
+            #expect(CommandTrust.isolatedTools.contains(tool) != (CommandTrust.unisolatedTools[tool] != nil), "\(tool)")
+        }
+        #expect(CommandTrust.isolatedTools.isDisjoint(with: CommandTrust.unisolatedTools.keys))
+    }
+
+    /// Homebrew, CocoaPods, pnpm, bun and conda read settings no variable leaves behind, which decide what they delete
+    /// or which code they load; a tool SpaceKit hasn't looked at is refused too.
+    @Test("Tools whose own settings can't be left behind run by hand only")
+    func unisolatedToolsRunByHand() throws {
+        let tree = try TempTree()
+        let commands = [
+            ["brew", "cleanup"], ["pod", "cache", "clean", "--all"], ["cargo", "cache", "--autoclean"], ["go", "clean", "-cache"],
+        ]
+        let rules = commands.map { rule($0[0], builtin: true, command: $0) }
+        let plan = CleanupPlan(commands: commands.map { PlannedCommand(ruleID: $0[0], arguments: $0, estimatedBytes: 1) })
+        let runner = RecordingRunner(installed: Set(commands.map { $0[0] }), in: tree)
+        let executor = executor(tree, rules: rules, runner: runner)
+        let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
+        let reasons = report.commands.map { skipReason($0.outcome) ?? "ran" }
+        #expect(reasons[0].contains("~/.homebrew/brew.env") && reasons[0].hasSuffix("so 'brew' runs only when you start it"))
+        #expect(reasons[1].contains("~/.cocoapods"))
+        #expect(reasons[2].contains("SpaceKit hasn't checked which settings of yours 'cargo' reads"))
+        #expect(reasons[3] == "ran")
+        #expect(runner.calls == [["go", "clean", "-cache"]])
+        #expect(manualRun(plan, with: executor).commands.allSatisfy { skipReason($0.outcome) == nil })
+    }
+
+    /// xcrun starts developer tools from the folder `xcode-select` chose; Docker loads plugins from system folders, and
+    /// reads its settings from the empty folder an automatic run hands it. Each must be one you can't change.
+    @Test("xcrun's developer folder, Docker's plugin folders and the empty settings folder must be ones you can't change")
+    func toolFolders() throws {
+        let tree = try TempTree()
+        let commands = [["xcrun", "simctl", "delete", "unavailable"], ["docker", "image", "prune", "--all", "--force"]]
+        let rules = commands.map { rule($0[0], builtin: true, command: $0) }
+        let plan = CleanupPlan(commands: commands.map { PlannedCommand(ruleID: $0[0], arguments: $0, estimatedBytes: 1) })
+        let docker = ScriptedDocker()
+        func reasons(changeable: @escaping @Sendable (String) -> String?) -> [String] {
+            let runner = RecordingRunner(installed: ["xcrun", "docker"], in: tree, respond: docker.respond)
+            let report = executor(tree, rules: rules, runner: runner, changeable: changeable)
+                .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
+            return report.commands.map { skipReason($0.outcome) ?? "ran" }
+        }
+        #expect(reasons { _ in nil } == ["ran", "ran"])
+        let developer = reasons { $0 == "/var/db/xcode_select_link/usr/bin" ? "/Applications" : nil }
+        #expect(developer[0].contains("xcrun starts developer tools from") && developer[0].contains("/Applications"), "\(developer)")
+        // /usr/lib is on every Mac; /usr/lib/docker isn't, so its nearest folder decides who could create it.
+        let plugins = reasons { $0 == "/usr/lib" ? "/usr/lib" : nil }
+        #expect(plugins[1].contains("/usr/lib/docker/cli-plugins") && plugins[1].hasSuffix("so 'docker' runs only when you start it"))
+        let settings = reasons { $0 == Shell.emptyFolder ? Shell.emptyFolder : nil }
+        #expect(settings[1].contains("empty folder \(Shell.emptyFolder)"), "\(settings)")
+    }
 }

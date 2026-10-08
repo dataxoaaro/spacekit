@@ -90,10 +90,13 @@ struct CleanupCommandTests {
         let user = sandboxExecutor(tree, rules: [rule(tree, origin: .user, command: arguments)], allowed: ["du"])
         #expect(isSkipped(outcome(user.execute(AutomaticPlan(plan, automation: automatic), dryRun: true)), mentioning: "automatic"))
         #expect(wouldRun(outcome(manualRun(plan, with: user, dryRun: true))))
-        var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: arguments)], allowed: ["du"])
-        // Where `du` is found on this Mac's search path isn't what this test is about.
+        // A built-in rule's command runs automatically, with a tool whose settings SpaceKit leaves behind for it.
+        let simulators = ["xcrun", "simctl", "delete", "unavailable"]
+        let builtinPlan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: simulators, estimatedBytes: 1)])
+        var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: simulators)])
+        // Where this Mac keeps xcrun and its developer folder isn't what this test is about.
         builtin.changeable = { _ in nil }
-        #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: automatic), dryRun: true))))
+        #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(builtinPlan, automation: automatic), dryRun: true))))
     }
 
     @Test("Code launchers stay refused even when the executor is told they're allowed")
@@ -111,10 +114,8 @@ struct CleanupCommandTests {
         // swift is both a code launcher and on the built-in trusted list: built-in rules keep using it.
         let swift = ["swift", "--version"]
         let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: swift, estimatedBytes: 1)])
-        var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
-        // A toolchain's swift found first on this Mac's search path may be in a folder of yours; not what this tests.
-        builtin.changeable = { _ in nil }
-        #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: true))))
+        let builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: swift)], allowed: ["swift"])
+        #expect(wouldRun(outcome(manualRun(plan, with: builtin, dryRun: true))))
     }
 
     @Test("A command whose rule is gone, or that no longer matches its rule, is refused")
@@ -158,16 +159,20 @@ struct CleanupCommandTests {
     @Test("Automatic runs don't start commands beyond the byte budget")
     func commandBudget() throws {
         let tree = try TempTree()
-        let arguments = ["swift", "--version"]
+        let arguments = ["xcrun", "simctl", "delete", "unavailable"]
         let builtin = rule(tree, origin: .builtin, command: arguments)
         let big = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 20_000)])
         let context = AutomationContext(jobID: "j")
-        let over = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(10_000))
-            .execute(AutomaticPlan(big, automation: context), dryRun: true)
+        func executor(budget: ByteCount) -> CleanupExecutor {
+            var executor = sandboxExecutor(tree, rules: [builtin], budget: budget)
+            // Where this Mac keeps xcrun and its developer folder isn't what this test is about.
+            executor.changeable = { _ in nil }
+            return executor
+        }
+        let over = executor(budget: ByteCount(10_000)).execute(AutomaticPlan(big, automation: context), dryRun: true)
         #expect(isSkipped(outcome(over), mentioning: "budget"))
         let small = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 0)])
-        let exhausted = sandboxExecutor(tree, rules: [builtin], budget: ByteCount(0))
-            .execute(AutomaticPlan(small, automation: context), dryRun: true)
+        let exhausted = executor(budget: ByteCount(0)).execute(AutomaticPlan(small, automation: context), dryRun: true)
         #expect(isSkipped(outcome(exhausted), mentioning: "budget"))
     }
 

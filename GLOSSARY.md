@@ -26,9 +26,11 @@
 
 **Plain tool name**: a `safety.allowedCommands` entry made only of ASCII letters, digits, `.`, `_`, `+` and `-`, so the file system's case and Unicode folding can't turn it into another program's name. _Avoid_: safe name, ASCII name.
 
-**Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH (the search folders the person can't change), HOME, user, locale and TMPDIR (`Shell.RunKind`). _Avoid_: sanitized env.
+**Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH (the search folders the person can't change), HOME, user, locale and TMPDIR, plus the isolation variables (`Shell.RunKind`). _Avoid_: sanitized env.
 
 **Changeable program**: a tool whose file, or a folder or symlink on the way to it, the person owns or can write (`CommandTrust.changeablePart`), such as anything in `~/.local/bin` or a Homebrew prefix they own, or a script whose `#!` interpreter is one; automatic runs don't start one. _Avoid_: user-writable tool, untrusted binary.
+
+**Isolated tool**: a built-in rule's tool an automatic run may start, because the settings of the person's it reads are left behind (`Shell.isolationVariables`, `/` as its working folder) or decide nothing about what it deletes or runs (`CommandTrust.isolatedTools`); every other tool runs by hand only. _Avoid_: sandboxed tool, safe tool.
 
 **Process runner**: the port the executor finds and runs tools through (`ProcessRunner`); `SystemProcessRunner` starts real processes, tests use a recording runner. _Avoid_: shell (tools never run in one).
 

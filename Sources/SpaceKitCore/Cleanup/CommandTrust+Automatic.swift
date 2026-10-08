@@ -24,7 +24,7 @@ extension CommandTrust {
                 "\($0) can be replaced by any program of yours, so '\(program.name)' runs only when you start it"
             }
         }
-        return refusal.map(TerminalText.sanitize)
+        return (refusal ?? CommandTrust.settingsRefusal(name, changeable: changeable)).map(TerminalText.sanitize)
     }
 
     /// The first file, folder or symlink on the way to `path` that the person could change (`isChangeable`), following
@@ -82,5 +82,77 @@ extension CommandTrust {
         let count = readlink(path, &buffer, buffer.count - 1)
         guard count > 0 else { return nil }
         return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+}
+
+/// Which settings of the person's an automatic run's tool reads. Any program of theirs can write those files, so a tool
+/// runs unattended only when SpaceKit leaves them behind for it (`Shell.isolationVariables`, and the root folder as its
+/// working folder), or when it reads none that decide what it deletes or which code it runs. docs/SAFETY.md has the
+/// table of what each tool reads and how.
+extension CommandTrust {
+    /// Built-in rules' tools an automatic run may start: their settings are left behind, or decide nothing that matters.
+    static let isolatedTools: Set<String> = ["go", "npm", "deno", "uv", "docker", "xcrun", "rustup", "ollama"]
+
+    /// Built-in rules' tools whose own settings, which no variable leaves behind, decide what they delete or which code
+    /// they load: what they read. Automatic runs refuse them.
+    static let unisolatedTools: [String: String] = [
+        "brew": "reads settings of yours that decide what it keeps (~/.homebrew/brew.env) and runs formula code from taps "
+            + "in folders you own",
+        "pod": "loads settings and Ruby gems from your home folder (~/.cocoapods, ~/.gemrc, ~/.gem)",
+        "pnpm": "reads the store folder it prunes from settings of yours (~/.npmrc, pnpm's rc file)",
+        "bun": "reads the cache folder it removes from settings of yours (~/.bunfig.toml)",
+        "conda": "reads the package folders it cleans from settings of yours (~/.condarc), and its Python loads code from "
+            + "your home folder",
+    ]
+
+    /// The link `xcode-select` keeps to the developer folder xcrun starts tools from.
+    static let developerFolderLink = "/var/db/xcode_select_link"
+
+    /// Folders Docker's CLI loads plugins from besides `$DOCKER_CONFIG/cli-plugins` (docker/cli's system plugin folders).
+    static let dockerPluginFolders = [
+        "/usr/local/lib/docker/cli-plugins", "/usr/local/libexec/docker/cli-plugins", "/usr/lib/docker/cli-plugins",
+        "/usr/libexec/docker/cli-plugins",
+    ]
+
+    /// Why the tool `name` doesn't start in an automatic run for the settings and helpers it reads, or `nil`.
+    static func settingsRefusal(_ name: String, changeable: (String) -> String?) -> String? {
+        let byHand = "so '\(name)' runs only when you start it"
+        if let reads = unisolatedTools[name] { return "'\(name)' \(reads); any program of yours can change those, \(byHand)" }
+        guard isolatedTools.contains(name) else { return "SpaceKit hasn't checked which settings of yours '\(name)' reads, \(byHand)" }
+        switch name {
+        case "xcrun":
+            let tools = developerFolderLink + "/usr/bin"
+            return changeable(tools).map {
+                "xcrun starts developer tools from \(tools), and \($0) can be replaced by any program of yours, \(byHand)"
+            }
+        case "docker":
+            return dockerFoldersRefusal(changeable: changeable).map { "\($0), \(byHand)" }
+        default:
+            return nil
+        }
+    }
+
+    /// Why Docker's settings folder or plugin folders aren't fixed, or `nil`: the empty folder the run points
+    /// `DOCKER_CONFIG` at must be empty and nobody's but root's, and each system plugin folder, with every plugin in it,
+    /// one the person can't change. A plugin folder that isn't there must be one they can't create.
+    private static func dockerFoldersRefusal(changeable: (String) -> String?) -> String? {
+        let settings = Shell.emptyFolder
+        let empty = (try? FileManager.default.contentsOfDirectory(atPath: settings))?.isEmpty == true
+        if let part = changeable(settings) ?? (empty ? nil : settings) {
+            return "docker reads its settings from the empty folder \(settings) in automatic runs, and \(part) isn't empty or "
+                + "can be changed by any program of yours"
+        }
+        for folder in dockerPluginFolders {
+            var existing = folder
+            var st = stat()
+            while existing != "/" && lstat(existing, &st) != 0 { existing = PathUtil.parent(existing) }
+            let plugins = existing == folder ? (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] : []
+            for path in [existing] + plugins.map({ PathUtil.join(folder, $0) }) {
+                if let part = changeable(path) {
+                    return "docker loads plugins from \(folder), and \(part) can be changed by any program of yours"
+                }
+            }
+        }
+        return nil
     }
 }

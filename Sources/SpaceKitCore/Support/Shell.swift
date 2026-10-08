@@ -67,6 +67,23 @@ public enum Shell {
     /// Variables an automatic run's tool keeps: who and where the person is, and their locale (`LC_*` too).
     static let automaticVariables: Set<String> = ["HOME", "USER", "LOGNAME", "LANG", "TMPDIR"]
 
+    /// An empty folder only root can change, handed to an automatic run's tools as their settings folder. A fresh
+    /// temporary folder would be the person's own, which a program of theirs could fill before the tool reads it.
+    public static let emptyFolder = "/var/empty"
+
+    /// Variables an automatic run sets for its tools, so the built-in rules' tools leave the person's own settings files
+    /// behind (`CommandTrust.isolatedTools`; docs/SAFETY.md lists what each tool reads): Docker reads its contexts,
+    /// plugins and credential helpers from `emptyFolder`, Go reads no env file and starts no other toolchain, npm reads
+    /// no user or global npmrc, uv no `uv.toml`, and xcrun doesn't consult its lookup cache in the person's temporary
+    /// folder. Any program of the person's can write those files, and the tools run with Full Disk Access.
+    public static let isolationVariables: [String: String] = [
+        "DOCKER_CONFIG": emptyFolder,
+        "GOENV": "off", "GOTOOLCHAIN": "local",
+        "NPM_CONFIG_USERCONFIG": "/dev/null", "NPM_CONFIG_GLOBALCONFIG": "/dev/null",
+        "UV_NO_CONFIG": "1",
+        "xcrun_nocache": "1",
+    ]
+
     /// Variables a manual run's tool keeps from SpaceKit's environment: who and where the person is, their locale, and
     /// the variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured. DEVELOPER_DIR isn't one:
     /// it picks the folder `xcrun` starts developer tools from, so any process of the person's could set it (through
@@ -90,9 +107,9 @@ public enum Shell {
     }
 
     /// The environment a tool runs with: for a manual run `keptVariables` and `keptPrefixes` from `environment`, minus
-    /// credentials, and PATH set to `searchPath`; for an automatic run `automaticVariables` and `LC_*`, and PATH set to
-    /// `automaticSearchPath` of it (`changeable` finds what the person could change; tests stand in their own). Everything
-    /// else stays behind. A variable can point a tool somewhere else entirely
+    /// credentials, and PATH set to `searchPath`; for an automatic run `automaticVariables` and `LC_*`, PATH set to
+    /// `automaticSearchPath` of it (`changeable` finds what the person could change; tests stand in their own) and
+    /// `isolationVariables`. Everything else stays behind. A variable can point a tool somewhere else entirely
     /// (DOCKER_HOST at another machine's daemon, OLLAMA_HOST at another server), load code into it (DYLD_*,
     /// NODE_OPTIONS) or hand it credentials (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often
     /// from an agent nobody watches. Every tool SpaceKit starts gets it, its own helpers too (launchctl, tmutil,
@@ -108,15 +125,21 @@ public enum Shell {
             return !credentialMarks.contains { upper.contains($0) }
         }
         let folders = searchPath(environmentPATH: environment["PATH"], home: home)
-        kept["PATH"] = (kind == .automatic ? automaticSearchPath(folders, changeable: changeable) : folders).joined(separator: ":")
-        return kept
+        guard kind == .automatic else {
+            kept["PATH"] = folders.joined(separator: ":")
+            return kept
+        }
+        kept["PATH"] = automaticSearchPath(folders, changeable: changeable).joined(separator: ":")
+        return kept.merging(isolationVariables) { _, isolated in isolated }
     }
 
     /// Runs a tool and waits until it has exited and closed its output, or until `timeout`. A tool that is still
     /// running then, or left a background child holding its output, is sent SIGTERM and then SIGKILL; its
     /// process group goes with it. Timed-out runs report status -2. The tool gets `toolEnvironment(from:kind:)` of
-    /// `environment`, never SpaceKit's own environment as is. `separateErrors` keeps standard error out of `output`
-    /// (in `errors`), for a tool whose output is read as an answer, where a warning must not pass for one.
+    /// `environment`, never SpaceKit's own environment as is. An automatic run's tool starts in the root folder, so no
+    /// project settings in the folder SpaceKit happened to start in (`go.mod`, `.npmrc`, `uv.toml`) reach it.
+    /// `separateErrors` keeps standard error out of `output` (in `errors`), for a tool whose output is read as an
+    /// answer, where a warning must not pass for one.
     public static func run(
         _ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
         environment: [String: String] = ProcessInfo.processInfo.environment, separateErrors: Bool = false, kind: RunKind = .manual
@@ -125,6 +148,7 @@ public enum Shell {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = toolEnvironment(from: environment, home: PathUtil.home, kind: kind)
+        if kind == .automatic { process.currentDirectoryURL = URL(fileURLWithPath: "/") }
         process.standardInput = FileHandle.nullDevice
         let capture = Capture(process, separateErrors: separateErrors)
         let exited = DispatchSemaphore(value: 0)

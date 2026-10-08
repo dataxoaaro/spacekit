@@ -16,16 +16,17 @@ extension CommandTrust {
             + "'\(TerminalText.sanitize(PathUtil.lastComponent(executable)))' runs only when you start it"
     }
 
-    /// The first file, folder or symlink on the way to `path` that the person owns or can write, following every
-    /// symlink to the file it leads to; `nil` when there is none. A part that can't be read counts as changeable, so a
-    /// walk that can't be finished refuses the tool.
+    /// The first file, folder or symlink on the way to `path` that the person could change (`isChangeable`), following
+    /// every symlink to the file it leads to; `nil` when there is none. A part that can't be read counts as changeable,
+    /// so a walk that can't be finished refuses the tool.
     public static func changeablePart(of path: String) -> String? {
-        let user = getuid()
-        func isChangeable(_ part: String, _ st: stat) -> Bool {
-            st.st_uid == user || faccessat(AT_FDCWD, part, W_OK, AT_SYMLINK_NOFOLLOW) == 0
-        }
+        changeablePart(of: path) { part, st in isChangeable(part, st) }
+    }
+
+    /// `changeablePart(of:)` with `judge` deciding each part; tests stand in a judge to see which parts the walk visits.
+    static func changeablePart(of path: String, judge: (String, stat) -> Bool) -> String? {
         var st = stat()
-        guard path.hasPrefix("/"), lstat("/", &st) == 0, !isChangeable("/", st) else { return "/" }
+        guard path.hasPrefix("/"), lstat("/", &st) == 0, !judge("/", st) else { return "/" }
         // Components still to walk, the next one last. Every folder in `current` is a real folder that was checked, so a
         // `..` after it goes back to its parent.
         var pending = PathUtil.components(path).reversed().map(String.init)
@@ -38,7 +39,7 @@ extension CommandTrust {
                 continue
             }
             let part = PathUtil.join(current, next)
-            guard lstat(part, &st) == 0, !isChangeable(part, st) else { return part }
+            guard lstat(part, &st) == 0, !judge(part, st) else { return part }
             guard st.st_mode & S_IFMT == S_IFLNK else {
                 current = part
                 continue
@@ -49,6 +50,20 @@ extension CommandTrust {
             pending += PathUtil.components(target).reversed().map(String.init)
         }
         return nil
+    }
+
+    /// True when `user` (the person) could change `part`, whose `lstat` is `st`, or put another file in its place: they
+    /// own it, or can write it. Writing is judged several ways, and any one of them is enough, so the answer fails closed:
+    /// the system's access check for this process, write permission for the group or for everyone (whoever is in the
+    /// group, and with the sticky bit too, which stops renames but not new programs), or an access control list entry that
+    /// lets anyone but root write it. A symlink's own mode and list don't matter: nobody rewrites a symlink in place, and
+    /// replacing it takes its folder, which the walk checks.
+    static func isChangeable(_ part: String, _ st: stat, user: uid_t = getuid()) -> Bool {
+        if st.st_uid == user || faccessat(AT_FDCWD, part, W_OK, AT_SYMLINK_NOFOLLOW) == 0 { return true }
+        let type = st.st_mode & S_IFMT
+        guard type != S_IFLNK else { return false }
+        if st.st_mode & (S_IWGRP | S_IWOTH) != 0 { return true }
+        return FileTrust.aclAllowsOthers(part, type == S_IFDIR ? FileTrust.folderWrites : FileTrust.fileWrites, owner: 0)
     }
 
     private static func readLink(_ path: String) -> String? {

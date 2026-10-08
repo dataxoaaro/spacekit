@@ -257,6 +257,7 @@ struct DoctorCommand: ParsableCommand {
             Check(
                 check: "Rules", ok: errors.isEmpty,
                 detail: "\(context.library.rules.count) loaded, built-in: \(BuiltinRules.standard.origin)"
+                    + (context.library.overrides.isEmpty ? "" : ", \(context.library.overrides.count) replaced by your rules")
                     + (errors.isEmpty ? "" : ", \(errors.count) errors (spacekit rules validate)")))
         let agent = LaunchAgent(paths: context.paths).status()
         checks.append(

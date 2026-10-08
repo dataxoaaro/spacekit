@@ -26,18 +26,23 @@ public struct RuleIssue: Sendable, CustomStringConvertible {
 public struct RuleLibrary: Sendable {
     public private(set) var rules: [Rule]
     public private(set) var issues: [RuleIssue]
+    /// Ids of the built-in rules, including those a user rule replaced.
+    public private(set) var builtinIDs: Set<String>
 
-    public init(rules: [Rule], issues: [RuleIssue] = []) {
+    public init(rules: [Rule], issues: [RuleIssue] = [], builtinIDs: Set<String> = []) {
         self.rules = rules
         self.issues = issues
+        self.builtinIDs = builtinIDs
     }
+
+    /// User rules loaded in place of a built-in rule with the same id.
+    public var overrides: [Rule] { rules.filter { !$0.isBuiltin && builtinIDs.contains($0.id) } }
 
     /// Loads the built-in rules and every `*.yaml` / `*.yml` in `directories`.
     ///
-    /// A user rule with the id of an earlier rule replaces it, so a built-in rule can be customised by copying
-    /// it, except that a built-in `protected` rule can't be replaced and a replacement can't have a lower safety
-    /// level than the built-in rule. Rules with validation errors are reported in `issues` but not loaded, and
-    /// `disabled` never turns off a `protected` rule.
+    /// A user rule with the id of an earlier rule replaces it. A replacement of a built-in rule may only narrow it
+    /// (`overrideProblems`), and a built-in `protected` rule can't be replaced at all. Rules with validation errors
+    /// are reported in `issues` but not loaded, and `disabled` never turns off a `protected` rule.
     public static func load(builtin: BuiltinRules = .standard, directories: [String] = [], disabled: Set<String> = []) -> RuleLibrary {
         var byID: [String: Rule] = [:]
         var builtinByID: [String: Rule] = [:]
@@ -64,9 +69,12 @@ public struct RuleLibrary: Sendable {
                 let ruleIssues = RuleLibrary.issues(for: rule)
                 issues += ruleIssues
                 if ruleIssues.contains(where: { $0.severity == .error }) { continue }
-                if !isBuiltin, let problem = builtinByID[rule.id].flatMap({ overrideProblem(builtin: $0, replacement: rule) }) {
-                    issues.append(RuleIssue(severity: .error, source: file.source, ruleID: rule.id, message: problem))
-                    continue
+                if let original = builtinByID[rule.id], !isBuiltin {
+                    let problems = overrideProblems(builtin: original, replacement: rule)
+                    if !problems.isEmpty {
+                        issues += problems.map { RuleIssue(severity: .error, source: file.source, ruleID: rule.id, message: $0) }
+                        continue
+                    }
                 }
                 if let existing = byID[rule.id] {
                     let origin = PathUtil.abbreviate(existing.source ?? "<inline>")
@@ -91,19 +99,7 @@ public struct RuleLibrary: Sendable {
             }
             rules.append(rule)
         }
-        return RuleLibrary(rules: rules, issues: issues)
-    }
-
-    /// Why `replacement` may not take the place of the built-in rule with the same id, or `nil` if it may.
-    static func overrideProblem(builtin: Rule, replacement: Rule) -> String? {
-        if builtin.safety.level == .protected {
-            return "can't replace the built-in protected rule with the same id; protected rules keep SpaceKit from touching that data"
-        }
-        if replacement.safety.level < builtin.safety.level {
-            return "can't lower the safety level of the built-in rule from \(builtin.safety.level.rawValue) to "
-                + "\(replacement.safety.level.rawValue); add it to rules.disabled to turn it off instead"
-        }
-        return nil
+        return RuleLibrary(rules: rules, issues: issues, builtinIDs: Set(builtinByID.keys))
     }
 
     /// Checks rule files on disk the way loading them would: each rule on its own, and a rule with a built-in id
@@ -130,8 +126,8 @@ public struct RuleLibrary: Sendable {
         if !asBuiltin {
             for rule in rules {
                 guard let original = library.rule(id: rule.id), original.isBuiltin else { continue }
-                if let problem = overrideProblem(builtin: original, replacement: rule) {
-                    issues.append(RuleIssue(severity: .error, source: rule.source ?? "<inline>", ruleID: rule.id, message: problem))
+                issues += overrideProblems(builtin: original, replacement: rule).map {
+                    RuleIssue(severity: .error, source: rule.source ?? "<inline>", ruleID: rule.id, message: $0)
                 }
             }
         }

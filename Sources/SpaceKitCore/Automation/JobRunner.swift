@@ -262,6 +262,9 @@ public struct JobRunner: Sendable {
         var results: [JobRunResult] = []
         for job in due {
             log("Running \(job.id) (\(job.mode.rawValue))")
+            for rule in context.library.overrides where job.rules.contains(rule.id) {
+                log("  Uses your rule \(rule.id) from \(PathUtil.abbreviate(rule.source ?? "<inline>")) in place of the built-in one")
+            }
             let result = run(job, now: now)
             log("  \(result.summary)")
             if let problem = result.recordError { log("  \(problem)") }

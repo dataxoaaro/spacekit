@@ -112,18 +112,98 @@ struct RuleLoadingTests {
         #expect(library.rule(id: "base.models")?.safety.level == .protected)
     }
 
+    @Test("A user rule with a built-in id may narrow it: exclusions, higher thresholds and ages, a higher level")
+    func narrowingOverride() throws {
+        let folders = try Folders()
+        try folders.write(
+            "user/models.yaml",
+            """
+            id: base.models
+            name: My models
+            description: Mine, with the drafts kept.
+            path: ~/.base/models
+            safety: { level: protected }
+            exclusions: [active_projects, "*/drafts"]
+            """)
+        try folders.write(
+            "user/cache.yaml",
+            """
+            id: base.cache
+            name: Cache
+            path: ~/.base/cache
+            safety: review
+            exclusions: ["*/keep"]
+            policy: { threshold: 50GB, olderThan: 90d, mode: observe }
+            action:
+              command: [brew, cleanup]
+            """)
+        try folders.write(
+            "user/builds.yaml",
+            """
+            id: base.builds
+            name: Builds
+            match: { names: [build], sibling: [Makefile], exclude: ["~/Work/*"] }
+            safety: safe
+            action: remove
+            """)
+        let library = folders.load()
+        for id in ["base.models", "base.cache", "base.builds"] {
+            #expect(errors(library, id).isEmpty, "\(id): \(errors(library, id))")
+            #expect(library.rule(id: id)?.isBuiltin == false, "\(id)")
+        }
+        #expect(library.overrides.map(\.id).sorted() == ["base.builds", "base.cache", "base.models"])
+        #expect(library.rule(id: "base.models")?.exclusions == ["active_projects", "*/drafts"])
+    }
+
+    @Test("A user rule with a built-in id can't widen it: new paths, patterns, commands or lower limits are refused")
+    func wideningOverride() throws {
+        let cases: [(id: String, yaml: String, problem: String)] = [
+            (
+                "base.models", "path: [~/.base/models, ~/Documents]\nexclusions: [active_projects]\nsafety: review\naction: remove",
+                "~/Documents"
+            ),
+            ("base.models", "path: ~/.base/models\nsafety: review\naction: remove", "active_projects"),
+            (
+                "base.models",
+                "path: ~/.base/models\nexclusions: [active_projects]\nsafety: { level: review, trash: false }\naction: remove", "Trash"
+            ),
+            (
+                "base.models",
+                "path: ~/.base/models\nexclusions: [active_projects]\nsafety: review\npolicy: { threshold: 1GB }\naction: remove",
+                "threshold"
+            ),
+            (
+                "base.models",
+                "path: ~/.base/models\nexclusions: [active_projects]\nsafety: review\npolicy: { olderThan: 7d }\naction: remove",
+                "olderThan"
+            ),
+            ("base.cache", "path: ~/.base/cache\nsafety: safe\naction:\n  command: [brew, cleanup, --prune=all]", "command"),
+            ("base.cache", "path: ~/.base/cache\nsafety: safe\naction: remove", "remove"),
+            ("base.cache", "path: ~/.base/cache\nmatch: { names: [cache] }\nsafety: safe\naction:\n  command: [brew, cleanup]", "pattern"),
+            ("base.builds", "match: { names: [build, dist], sibling: [Makefile] }\nsafety: safe\naction: remove", "dist"),
+            ("base.builds", "match: { names: [build] }\nsafety: safe\naction: remove", "pattern"),
+            ("base.builds", "match: { names: [build], sibling: [Makefile], roots: [/] }\nsafety: safe\naction: remove", "pattern"),
+        ]
+        for (id, body, problem) in cases {
+            let folders = try Folders()
+            try folders.write("user/wider.yaml", "id: \(id)\nname: Wider\n" + body + "\n")
+            let library = folders.load()
+            let found = errors(library, id)
+            #expect(found.contains { $0.message.contains(problem) }, "\(id) / \(problem): \(found.map(\.message))")
+            #expect(library.rule(id: id)?.isBuiltin == true, "\(id) / \(problem)")
+            #expect(library.overrides.isEmpty)
+        }
+    }
+
     @Test("rules validate <file> judges a file the way loading it would, overrides of built-in rules included")
     func checkFiles() throws {
         let folders = try Folders()
-        try folders.write("user/wider.yaml", "id: base.cache\nname: Cache\npath: ~/.base/cache\nsafety: review\naction: remove\n")
+        try folders.write("user/wider.yaml", "id: base.cache\nname: Cache\npath: [~/.base/cache, ~/.other]\nsafety: safe\naction: remove\n")
         try folders.write(
             "user/mine.yaml", "id: mine.cache\nname: Mine\npath: ~/.mine/cache\nsafety: safe\naction:\n  command: [brew, cleanup]\n")
         let wider = RuleLibrary.check(files: [folders.tree.path("user/wider.yaml")], builtin: Folders.builtin)
         #expect(wider.rules.count == 1)
-        #expect(wider.issues.isEmpty)
-        try folders.write("user/lower.yaml", "id: base.models\nname: Models\npath: ~/.base/models\nsafety: safe\naction: remove\n")
-        let lower = RuleLibrary.check(files: [folders.tree.path("user/lower.yaml")], builtin: Folders.builtin)
-        #expect(lower.issues.contains { $0.severity == .error && $0.message.contains("lower the safety level") })
+        #expect(wider.issues.contains { $0.severity == .error && $0.message.contains("~/.other") })
         let mine = RuleLibrary.check(files: [folders.tree.path("user/mine.yaml")], builtin: Folders.builtin)
         #expect(!mine.issues.contains { $0.severity == .error })
         #expect(mine.issues.contains { $0.message.contains("allowedCommands") })

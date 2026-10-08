@@ -333,18 +333,18 @@ struct RemovalTests {
         let review = cacheRule(tree, level: .review, paths: ["home/cache"])
         let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
         var executor = sandboxExecutor(tree)
-        let item = target(tree, "home/cache/a")
-        let trashed = target(tree, "home/.Trash/b")
 
-        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: manual) == .delete)
-        #expect(executor.remover.method(for: item, useTrash: true, rule: safe, context: manual) == .trash)
-        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: automatic) == .delete)
-        #expect(executor.remover.method(for: item, useTrash: false, rule: review, context: automatic) == .trash)
-        #expect(executor.remover.method(for: trashed, useTrash: true, rule: nil, context: manual) == .delete)
-        #expect(executor.remover.method(for: trashed, useTrash: true, rule: nil, context: automatic) == nil)
+        #expect(!executor.remover.isInsideTrash(target(tree, "home/cache/a")))
+        #expect(executor.remover.isInsideTrash(target(tree, "home/.Trash/b")))
+        #expect(executor.remover.method(inTrash: false, useTrash: false, rule: safe, context: manual) == .delete)
+        #expect(executor.remover.method(inTrash: false, useTrash: true, rule: safe, context: manual) == .trash)
+        #expect(executor.remover.method(inTrash: false, useTrash: false, rule: safe, context: automatic) == .delete)
+        #expect(executor.remover.method(inTrash: false, useTrash: false, rule: review, context: automatic) == .trash)
+        #expect(executor.remover.method(inTrash: true, useTrash: true, rule: nil, context: manual) == .delete)
+        #expect(executor.remover.method(inTrash: true, useTrash: true, rule: nil, context: automatic) == nil)
         executor.alwaysTrash = true
-        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: manual) == .trash)
-        #expect(executor.remover.method(for: trashed, useTrash: false, rule: safe, context: manual) == .delete)
+        #expect(executor.remover.method(inTrash: false, useTrash: false, rule: safe, context: manual) == .trash)
+        #expect(executor.remover.method(inTrash: true, useTrash: false, rule: safe, context: manual) == .delete)
     }
 }
 

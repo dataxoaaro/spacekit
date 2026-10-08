@@ -19,7 +19,7 @@ extension CleanupExecutor {
         }
         let rule = item.ruleID.flatMap { rules[$0] }
         let inTrash = remover.isInsideTrash(target)
-        guard let method = remover.method(for: target, useTrash: plan.useTrash, rule: rule, context: context) else {
+        guard let method = remover.method(inTrash: inTrash, useTrash: plan.useTrash, rule: rule, context: context) else {
             return .skipped(reason: "Automatic runs delete things already in the Trash only when a regenerable (safe) rule covers them")
         }
         let context = Remover.context(context, removingBy: method)

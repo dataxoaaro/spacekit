@@ -72,11 +72,6 @@ struct Remover: Sendable {
         return candidates.contains { candidate in trashKeys.contains { PathUtil.isStrictAncestor($0, of: candidate) } }
     }
 
-    /// How the target leaves its place. `nil`: it may not leave at all.
-    func method(for target: RemovalTarget, useTrash: Bool, rule: Rule?, context: CleanupContext) -> Method? {
-        method(inTrash: isInsideTrash(target), useTrash: useTrash, rule: rule, context: context)
-    }
-
     /// The one place Trash or delete is decided; the review's wording asks it too. `nil`: it may not leave at all.
     ///
     /// Things already in the Trash can only be deleted, and automatic runs delete only regenerable (safe) items:

@@ -126,21 +126,27 @@ struct DiskMapView: View {
         let depth = model.mapDepth
         let colorer = MapColorer(mode: model.colorMode, ruleIndex: model.ruleIndex)
         let key = self.key
-        let workspace = model.workspace
+        // The read begins here, on the main actor, where the workspace's changes run: none can land between this
+        // check and the layout. This view may have been built before a change took its folder out of the tree (the
+        // model has moved on to the survivor); that folder's parents may already be freed, so it isn't laid out.
+        let lease = model.workspace.beginRead()
+        guard focus === model.focus else {
+            lease.end()
+            return
+        }
         let layout = await Task.detached(priority: .userInitiated) {
-            workspace.read { _ -> MapGeometry in
-                var geometry = MapGeometry(key: key, size: size)
-                switch visualization {
-                case .sunburst:
-                    geometry.arcs = Sunburst.layout(focus, maxRings: depth, minSweep: 0.004)
-                    geometry.colors = geometry.arcs.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.ring - 1) }
-                case .treemap:
-                    let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
-                    geometry.cells = Treemap.layout(focus, in: rect, maxDepth: depth, minCellArea: 36, padding: 2, headerHeight: 16)
-                    geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
-                }
-                return geometry
+            defer { lease.end() }
+            var geometry = MapGeometry(key: key, size: size)
+            switch visualization {
+            case .sunburst:
+                geometry.arcs = Sunburst.layout(focus, maxRings: depth, minSweep: 0.004)
+                geometry.colors = geometry.arcs.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.ring - 1) }
+            case .treemap:
+                let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+                geometry.cells = Treemap.layout(focus, in: rect, maxDepth: depth, minCellArea: 36, padding: 2, headerHeight: 16)
+                geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
             }
+            return geometry
         }.value
         guard !Task.isCancelled else { return }
         geometry = layout

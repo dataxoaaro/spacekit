@@ -46,12 +46,20 @@ public final class Workspace: Sendable {
     /// Runs `body` with the tree, which doesn't change until `body` returns; changes that arrive meanwhile wait for
     /// every reader to finish. Callable from any thread. Waits only while a change is being applied.
     public func read<T>(_ body: (ScanTree?) throws -> T) rethrows -> T {
+        let lease = beginRead()
+        defer { lease.end() }
+        return try body(lease.tree)
+    }
+
+    /// Starts a read now that other work ends later (`ReadLease.end`). The front end's thread begins one before it
+    /// hands nodes it holds to background work: a change could otherwise land on that thread before the work starts
+    /// reading, and free the removed nodes (and the parents of the ones it holds) under it.
+    public func beginRead() -> ReadLease {
         let tree = state.withLock { state in
             state.readers += 1
             return state.tree
         }
-        defer { endRead() }
-        return try body(tree)
+        return ReadLease(tree: tree) { [self] in endRead() }
     }
 
     private func endRead() {

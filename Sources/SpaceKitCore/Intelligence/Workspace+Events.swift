@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 extension Workspace {
     /// The tree and the analysis as of one moment, for a front end to show.
@@ -7,6 +8,29 @@ extension Workspace {
         public let result: AnalysisResult?
         /// Rules being re-evaluated after their tool command ran (their cards show a spinner).
         public let refreshingRules: Set<String>
+    }
+
+    /// A read of the tree begun on one thread and ended on another (`Workspace.beginRead`). The tree doesn't change
+    /// until the lease ends; ending it more than once counts once, and a lease let go of without `end` ends then.
+    public final class ReadLease: Sendable {
+        /// The tree as it was when the read began.
+        public let tree: ScanTree?
+        private let ending: Mutex<(@Sendable () -> Void)?>
+
+        init(tree: ScanTree?, end: @escaping @Sendable () -> Void) {
+            self.tree = tree
+            ending = Mutex(end)
+        }
+
+        public func end() {
+            let end = ending.withLock { ending in
+                defer { ending = nil }
+                return ending
+            }
+            end?()
+        }
+
+        deinit { end() }
     }
 
     /// What a step did, for the front end to show and to fix its selection by.

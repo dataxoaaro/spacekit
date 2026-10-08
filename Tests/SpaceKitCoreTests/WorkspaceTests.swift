@@ -187,6 +187,39 @@ struct WorkspaceTests {
         #expect(workspace.read { $0?.root.size } == before - removed)
     }
 
+    @Test("A read begun on the front end's thread holds changes back until the work it was handed to ends it")
+    func readLease() throws {
+        let fixture = try Fixture()
+        let recorder = Recorder()
+        let workspace = Workspace(deliver: recorder.deliver)
+        workspace.show(try fixture.scanHome())
+        let c0 = fixture.tree.path("home/cache/c0")
+
+        // The map layout begins its read before it hands nodes to a background task, so a change that lands before
+        // that task starts can't take (and free) them.
+        let lease = workspace.beginRead()
+        workspace.apply(fixture.clean(["c0"]), context: fixture.context)
+        #expect(recorder.changes.isEmpty)
+        let seen = Mutex(false)
+        let background = Thread { seen.withLock { $0 = lease.tree?.node(at: c0) != nil } }
+        background.start()
+        while !background.isFinished { usleep(1_000) }
+        #expect(seen.withLock { $0 })
+        #expect(recorder.changes.isEmpty)
+
+        lease.end()
+        #expect(recorder.changes.count == 1)
+        // Ending twice counts once: the next change still finds no reader and lands straight away.
+        lease.end()
+        workspace.apply(fixture.clean(["c1"]), context: fixture.context)
+        #expect(recorder.changes.count == 2)
+        // A lease let go of without `end` still ends.
+        _ = workspace.beginRead()
+        workspace.apply(fixture.clean(["c2"]), context: fixture.context)
+        #expect(recorder.changes.count == 3)
+        workspace.read { #expect($0?.inconsistencies() == []) }
+    }
+
     @Test("Focus falls back to the nearest folder that's still there")
     func survivor() throws {
         let fixture = try Fixture()

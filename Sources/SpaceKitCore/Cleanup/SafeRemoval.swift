@@ -10,6 +10,11 @@ enum SafeRemoval {
     /// Nothing was removed: what is there isn't what was checked, or it can't be removed safely.
     struct Refused: LocalizedError {
         var errorDescription: String?
+
+        /// What is at `path` isn't what was checked.
+        static func changed(_ path: String) -> Refused {
+            Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+        }
     }
 
     /// Emptying a folder began and stopped part way, because a folder was moved while the walk was inside it.
@@ -43,7 +48,7 @@ enum SafeRemoval {
         var st = stat()
         guard currentPath(of: fd) == path, fstat(fd, &st) == 0, let pinned, RemovalTarget.Identity(st) == pinned else {
             close(fd)
-            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+            throw Refused.changed(path)
         }
         return fd
     }
@@ -55,7 +60,7 @@ enum SafeRemoval {
         var st = stat()
         guard fstatat(fd, target.name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { throw posixError(path) }
         guard let pinned = target.identity, RemovalTarget.Identity(st) == pinned else {
-            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+            throw Refused.changed(path)
         }
         var folder = stat()
         guard fstat(fd, &folder) == 0 else { throw posixError(target.directory ?? path) }
@@ -120,12 +125,12 @@ enum SafeRemoval {
         guard top >= 0 else {
             // Swapped for a file or a link since the check: that isn't the folder that was checked.
             guard errno == ENOTDIR || errno == ELOOP else { throw posixError(path) }
-            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+            throw Refused.changed(path)
         }
         var st = stat()
         guard fstat(top, &st) == 0, let pinned = target.identity, RemovalTarget.Identity(st) == pinned else {
             close(top)
-            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+            throw Refused.changed(path)
         }
         guard device(top) == volume else {
             close(top)

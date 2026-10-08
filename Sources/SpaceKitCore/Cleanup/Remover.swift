@@ -121,9 +121,7 @@ struct Remover: Sendable {
             do {
                 let left = try SafeRemoval.delete(target, in: fd, device: device)
                 return Removed(trashedTo: nil, leftOnOtherVolumes: left)
-            } catch let error as SafeRemoval.Incomplete {
-                throw Interrupted(cause: error)
-            } catch let error as SafeRemoval.Stopped {
+            } catch let error where error is SafeRemoval.Incomplete || error is SafeRemoval.Stopped {
                 throw Interrupted(cause: error)
             }
         case .trash where context.isAutomatic:

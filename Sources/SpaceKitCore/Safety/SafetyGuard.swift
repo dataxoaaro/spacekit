@@ -95,6 +95,8 @@ public struct SafetyGuard: Sendable {
     /// Reads the capacity of the volume holding a path. `capacities(readNowFor:)` swaps in one that keeps a run's readings.
     public private(set) var volumeCapacity: @Sendable (String) -> VolumeCapacity?
 
+    /// `home` and, when it differs, where its symlinks lead: resolved once, for every list and every message.
+    private let homes: [String]
     private let critical: [Location]
     private let sealed: [Location]
     private let personal: [Location]
@@ -124,6 +126,7 @@ public struct SafetyGuard: Sendable {
         // Resolved once, for every list: a home that is (or sits behind) a symlink is protected at its real location
         // too, whichever spelling an item arrives under.
         let homes = PathUtil.unique([home, PathUtil.realpath(home)].compactMap { $0 })
+        self.homes = homes
         func locations(_ list: (String) -> [String]) -> [Location] {
             PathUtil.unique(homes.flatMap(list)).map(Location.init)
         }
@@ -394,8 +397,7 @@ public struct SafetyGuard: Sendable {
 
     /// `path` with either spelling of home shown as `~`.
     private func abbreviated(_ path: String) -> String {
-        let real = PathUtil.realpath(home)
-        return [home, real].compactMap { $0 }.lazy.map { PathUtil.abbreviate(path, home: $0) }.first { $0 != path } ?? path
+        homes.lazy.map { PathUtil.abbreviate(path, home: $0) }.first { $0 != path } ?? path
     }
 }
 

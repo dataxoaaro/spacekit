@@ -71,17 +71,16 @@ extension CleanupExecutor {
             return .failed(reason: error.localizedDescription)
         }
         // A volume mounted inside the item stays, with the folders above it; the bytes still there weren't freed.
-        let left =
-            removed.leftOnOtherVolumes.isEmpty ? Measured(size: 0, freed: 0) : measure(target.resolvedPath, isFolder: true, fallback: 0)
-        let freed = measured.freed - min(measured.freed, left.freed)
+        let left = removed.leftOnOtherVolumes.isEmpty ? .zero : measure(target.resolvedPath, isFolder: true, fallback: 0)
+        let gone = measured.minus(left)
         reportLeft(removed.leftOnOtherVolumes, of: item, run: &run)
-        run.charge(size - min(size, left.size))
+        run.charge(gone.size)
         record(
             entry(
-                path: item.path, bytes: freed, method: method.journalMethod, ruleID: item.ruleID, context: context,
+                path: item.path, bytes: gone.freed, method: method.journalMethod, ruleID: item.ruleID, context: context,
                 trashedTo: removed.trashedTo),
             in: &run)
-        return .removed(bytes: freed, trashedTo: removed.trashedTo)
+        return .removed(bytes: gone.freed, trashedTo: removed.trashedTo)
     }
 
     /// A deletion that stopped part way: what's no longer there is charged, journaled and reported, so the budget
@@ -94,14 +93,13 @@ extension CleanupExecutor {
         reportLeft(error.leftOnOtherVolumes, of: item, run: &run)
         var st = stat()
         let path = target.resolvedPath
-        let left = lstat(path, &st) == 0 ? measure(path, isFolder: target.isFolder, fallback: before.size) : Measured(size: 0, freed: 0)
-        let gone = before.size - min(before.size, left.size)
-        let freed = before.freed - min(before.freed, left.freed)
-        guard gone > 0 else { return .failed(reason: reason) }
-        run.charge(gone)
-        run.report.partiallyFreed[item.path] = freed
-        record(entry(path: item.path, bytes: freed, method: .delete, ruleID: item.ruleID, context: context), in: &run)
-        return .failed(reason: "\(reason). \(ByteCount.format(freed)) of it was deleted")
+        let left = lstat(path, &st) == 0 ? measure(path, isFolder: target.isFolder, fallback: before.size) : .zero
+        let gone = before.minus(left)
+        guard gone.size > 0 else { return .failed(reason: reason) }
+        run.charge(gone.size)
+        run.report.partiallyFreed[item.path] = gone.freed
+        record(entry(path: item.path, bytes: gone.freed, method: .delete, ruleID: item.ruleID, context: context), in: &run)
+        return .failed(reason: "\(reason). \(ByteCount.format(gone.freed)) of it was deleted")
     }
 
     /// Folders inside `item` left because another volume is mounted on them, as warnings of the run.
@@ -197,6 +195,13 @@ extension CleanupExecutor {
     struct Measured {
         var size: UInt64
         var freed: UInt64
+
+        static let zero = Measured(size: 0, freed: 0)
+
+        /// What went of this when `left` of it is still there, never less than nothing.
+        func minus(_ left: Measured) -> Measured {
+            Measured(size: size - min(size, left.size), freed: freed - min(freed, left.freed))
+        }
     }
 
     /// Measures an item now. Folders are rescanned; a symlink counts as itself.

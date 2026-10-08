@@ -27,9 +27,12 @@ struct HardLinkGroup {
     }
 
     /// The link that should hold the bytes, or `nil` if none is left.
-    var ownerIndex: Int? {
+    var ownerIndex: Int? { ownerIndex { $0.path } }
+
+    /// `ownerIndex`, reading each link's folder path from `path` (which may remember them).
+    func ownerIndex(path: (DirNode) -> String) -> Int? {
         guard links.count > 1 else { return links.indices.first }
-        let folders: [String] = links.map { $0.node.path }
+        let folders: [String] = links.map { path($0.node) }
         return links.indices.min { a, b in
             HardLinkGroup.precedes(folder: folders[a], name: links[a].name, folder: folders[b], name: links[b].name)
         }

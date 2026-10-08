@@ -321,9 +321,17 @@ private final class ScanJob: @unchecked Sendable {
         let minFileSize = options.minFileSize
         var groups: [HardLinkKey: HardLinkGroup] = [:]
         groups.reserveCapacity(table.count)
+        // Many links share a folder; building its path once per folder keeps this pass cheap.
+        var folderPaths: [DirNode: String] = [:]
+        func path(of folder: DirNode) -> String {
+            if let known = folderPaths[folder] { return known }
+            let path = folder.path
+            folderPaths[folder] = path
+            return path
+        }
         for (key, entry) in table {
             var group = HardLinkGroup(size: entry.size, modified: entry.modified, links: entry.links)
-            guard let ownerIndex = group.ownerIndex else { continue }
+            guard let ownerIndex = group.ownerIndex(path: path(of:)) else { continue }
             let owner: HardLink = group.links[ownerIndex]
             var holder: DirNode = entry.credited
             var holderName: String = entry.creditedName

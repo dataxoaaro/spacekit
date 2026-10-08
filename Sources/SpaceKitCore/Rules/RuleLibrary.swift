@@ -50,16 +50,10 @@ public struct RuleLibrary: Sendable {
         var byID: [String: Rule] = [:]
         var builtinByID: [String: Rule] = [:]
         var order: [String] = []
-        var issues = builtin.issues
+        let read = sources(builtin: builtin, directories: directories)
+        var issues = read.issues
 
-        var sources = builtin.files.map { (file: $0, isBuiltin: true) }
-        for directory in directories.map({ PathUtil.standardize(PathUtil.expand($0)) }) {
-            let read = read(directory: directory)
-            issues += read.issues
-            sources += read.files.map { (file: $0, isBuiltin: false) }
-        }
-
-        for (file, isBuiltin) in sources {
+        for (file, isBuiltin) in read.sources {
             let parsed: [Rule]
             do {
                 parsed = try parse(yaml: file.yaml, source: file.source)
@@ -91,8 +85,29 @@ public struct RuleLibrary: Sendable {
             }
         }
 
-        var rules: [Rule] = []
-        for rule in order.compactMap({ byID[$0] }) {
+        let enabled = enabled(order.compactMap { byID[$0] }, disabled: disabled)
+        return RuleLibrary(rules: enabled.rules, issues: issues + enabled.issues, builtinIDs: Set(builtinByID.keys))
+    }
+
+    /// The built-in rule files, then the rule files in each of `directories`, with the problems reading them.
+    private static func sources(builtin: BuiltinRules, directories: [String]) -> (
+        sources: [(file: RuleFileText, isBuiltin: Bool)], issues: [RuleIssue]
+    ) {
+        var issues = builtin.issues
+        var sources = builtin.files.map { (file: $0, isBuiltin: true) }
+        for directory in directories.map({ PathUtil.standardize(PathUtil.expand($0)) }) {
+            let read = read(directory: directory)
+            issues += read.issues
+            sources += read.files.map { (file: $0, isBuiltin: false) }
+        }
+        return (sources, issues)
+    }
+
+    /// `rules` without the ones `disabled` names, except `protected` rules: those stay, with a warning.
+    private static func enabled(_ rules: [Rule], disabled: Set<String>) -> (rules: [Rule], issues: [RuleIssue]) {
+        var kept: [Rule] = []
+        var issues: [RuleIssue] = []
+        for rule in rules {
             if disabled.contains(rule.id) {
                 guard rule.safety.level == .protected else { continue }
                 issues.append(
@@ -100,9 +115,9 @@ public struct RuleLibrary: Sendable {
                         severity: .warning, source: rule.source ?? inlineSource, ruleID: rule.id,
                         message: "protected rules can't be disabled; it stays active (rules.disabled)"))
             }
-            rules.append(rule)
+            kept.append(rule)
         }
-        return RuleLibrary(rules: rules, issues: issues, builtinIDs: Set(builtinByID.keys))
+        return (kept, issues)
     }
 
     /// Checks rule files on disk the way loading them would: each rule on its own, and a rule with a built-in id

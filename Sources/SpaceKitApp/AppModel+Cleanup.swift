@@ -95,12 +95,16 @@ extension AppModel {
         // Tool commands free space their own way; re-evaluate just those rules.
         refreshFindings(ruleIDs: report.rulesToReevaluate)
 
-        let removedPaths = Set(removals.filter { $0.kind != .looseFiles }.map(\.path))
-        if let focus, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: focus.path) }) {
+        let removedPaths = Set(removals.filter { $0.kind != .looseFiles && !$0.partial }.map(\.path))
+        // A partly removed folder was rescanned: it keeps its node, but the folders inside it got new ones.
+        let rescannedPaths = removals.filter(\.partial).map(\.path)
+        let isGone: (String) -> Bool = { path in
+            removedPaths.contains { PathUtil.isAncestorOrEqual($0, of: path) }
+                || rescannedPaths.contains { PathUtil.isStrictAncestor($0, of: path) }
+        }
+        if let focus, isGone(focus.path) {
             var survivor = focus.parent
-            while let node = survivor, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: node.path) }) {
-                survivor = node.parent
-            }
+            while let node = survivor, isGone(node.path) { survivor = node.parent }
             refocus(on: survivor ?? tree?.root)
         }
         if !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) {
@@ -109,8 +113,8 @@ extension AppModel {
                     || (item.kind == .looseFiles && removals.contains { $0.kind == .looseFiles && $0.path == item.path })
             }
         }
-        if let path = selection?.path, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) { selection = nil }
-        if let path = hovered?.path, removedPaths.contains(where: { PathUtil.isAncestorOrEqual($0, of: path) }) { hovered = nil }
+        if let path = selection?.path, isGone(path) { selection = nil }
+        if let path = hovered?.path, isGone(path) { hovered = nil }
 
         refreshJournal()
         refreshVolumes()

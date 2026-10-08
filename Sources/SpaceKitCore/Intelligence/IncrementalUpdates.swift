@@ -9,18 +9,28 @@ public struct Removal: Sendable, Hashable {
     public var trashedTo: String?
     /// For loose files moved to the Trash: where each file went (the full path in the Trash).
     public var trashedFiles: [String]
+    /// The item's deletion failed part way: `bytes` of it were deleted and the rest is still at `path`.
+    public var partial: Bool
 
-    public init(path: String, kind: FindingItem.Kind, bytes: UInt64, trashedTo: String? = nil, trashedFiles: [String] = []) {
+    public init(
+        path: String, kind: FindingItem.Kind, bytes: UInt64, trashedTo: String? = nil, trashedFiles: [String] = [],
+        partial: Bool = false
+    ) {
         self.path = path
         self.kind = kind
         self.bytes = bytes
         self.trashedTo = trashedTo
         self.trashedFiles = trashedFiles
+        self.partial = partial
     }
 
-    /// Successful removals in a report (including zero-byte ones, so the tree still drops them).
+    /// Removals in a report: successful ones (including zero-byte ones, so the tree still drops them) and
+    /// items that were deleted only in part (see `CleanupReport.partiallyFreed`).
     public static func from(_ report: CleanupReport) -> [Removal] {
         report.items.compactMap { entry -> Removal? in
+            if let freed = report.partiallyFreed[entry.item.path], entry.outcome.isFailed {
+                return Removal(path: entry.item.path, kind: entry.item.kind, bytes: freed, partial: true)
+            }
             guard entry.outcome.isRemoved else { return nil }
             let trashedFiles: [String] = entry.item.kind == .looseFiles ? (report.trashedLooseFiles[entry.item.path] ?? []) : []
             return Removal(
@@ -30,9 +40,10 @@ public struct Removal: Sendable, Hashable {
     }
 
     /// Applies this removal to a tree: trashed items move into the Trash folder (if the tree has it),
-    /// deleted ones disappear. Returns true if the tree changed.
+    /// deleted ones disappear, and a partly deleted folder is rescanned. Returns true if the tree changed.
     @discardableResult
     public func apply(to tree: ScanTree) -> Bool {
+        if partial { return tree.rescan(path) }
         if kind == .looseFiles {
             let taken = tree.applyRemoval(of: path, looseFilesOnly: true)
             var placed = false
@@ -51,12 +62,13 @@ public struct Removal: Sendable, Hashable {
 
     /// True if this removal took away everything at `path` (the item itself or a folder containing it).
     func covers(_ path: String) -> Bool {
-        kind != .looseFiles && PathUtil.isAncestorOrEqual(self.path, of: path)
+        !partial && kind != .looseFiles && PathUtil.isAncestorOrEqual(self.path, of: path)
     }
 
     /// True if this removal took part of `item` (but not all of it). A loose-files item only holds the plain
     /// files directly in its folder, so only a removed file in that folder takes part of it.
     func isInside(_ item: FindingItem) -> Bool {
+        if partial && item.path == path { return true }
         switch (item.kind, kind) {
         case (.file, _): return false
         case (.looseFiles, .file): return PathUtil.parent(path) == item.path

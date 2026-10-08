@@ -7,6 +7,7 @@ import Testing
 /// Stands in for running tools: records every call and answers with what the test scripted, so trust and budget
 /// tests never start a real program.
 final class RecordingRunner: ProcessRunner {
+    let searchPath: [String]
     private let locator: @Sendable (String) -> String?
     private let respond: @Sendable (_ call: [String]) -> Shell.Result
     private let recorded = Mutex<[(call: [String], kind: Shell.RunKind)]>([])
@@ -19,7 +20,7 @@ final class RecordingRunner: ProcessRunner {
         let folder = tree.path("installed-tools")
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         for name in installed { try? Data("stand-in for \(name)\n".utf8).write(to: URL(fileURLWithPath: folder + "/" + name)) }
-        self.init(locate: { installed.contains($0) ? folder + "/" + $0 : nil }, respond: respond)
+        self.init(searchPath: [folder], locate: { installed.contains($0) ? folder + "/" + $0 : nil }, respond: respond)
     }
 
     /// Tools are found the way `Shell.which` finds them, in `searchPath`; still none is started.
@@ -27,10 +28,14 @@ final class RecordingRunner: ProcessRunner {
         searchPath: [String],
         respond: @escaping @Sendable (_ call: [String]) -> Shell.Result = { _ in Shell.Result(status: 0, output: "", timedOut: false) }
     ) {
-        self.init(locate: { Shell.which($0, in: searchPath) }, respond: respond)
+        self.init(searchPath: searchPath, locate: { Shell.which($0, in: searchPath) }, respond: respond)
     }
 
-    private init(locate: @escaping @Sendable (String) -> String?, respond: @escaping @Sendable (_ call: [String]) -> Shell.Result) {
+    private init(
+        searchPath: [String], locate: @escaping @Sendable (String) -> String?,
+        respond: @escaping @Sendable (_ call: [String]) -> Shell.Result
+    ) {
+        self.searchPath = searchPath
         self.locator = locate
         self.respond = respond
     }
@@ -150,7 +155,8 @@ struct CommandTrustTests {
         // setenv): a tool home, an XDG folder or a Homebrew setting would steer what a tool deletes. Only who and where.
         let automatic = Shell.toolEnvironment(from: parent, home: "/Users/tester", kind: .automatic)
         #expect(Set(automatic.keys) == ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
-        #expect(automatic["PATH"] == environment["PATH"] && automatic["HOME"] == "/Users/tester")
+        let fixed = Shell.automaticSearchPath(path, changeable: CommandTrust.changeablePart(of:))
+        #expect(automatic["PATH"] == fixed.joined(separator: ":") && fixed.contains("/usr/bin") && automatic["HOME"] == "/Users/tester")
     }
 
     @Test("The real runner hands a tool the cleaned environment, not SpaceKit's own")

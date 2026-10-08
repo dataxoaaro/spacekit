@@ -8,12 +8,23 @@ extension CommandTrust {
     /// How many symlinks the walk follows before it gives up, as the system does.
     static let symlinkLimit = 32
 
-    /// Why the tool found at `executable` doesn't start in an automatic run, or `nil` when it may. `changeable` finds
-    /// what the person could change on the way to it (`changeablePart(of:)`; tests stand in their own).
-    func automaticRefusal(at executable: String?, context: CleanupContext, changeable: (String) -> String?) -> String? {
-        guard context.isAutomatic, let executable, let part = changeable(executable) else { return nil }
-        return "\(TerminalText.sanitize(part)) can be replaced by any program of yours, so "
-            + "'\(TerminalText.sanitize(PathUtil.lastComponent(executable)))' runs only when you start it"
+    /// Why the tool `name` found at `executable` doesn't start in an automatic run, or `nil` when it may: the file, and
+    /// for a script every interpreter it starts, must be one nothing of the person's can change. A `#!/usr/bin/env` line
+    /// is followed on the PATH the run's tool gets: `searchPath` (where the runner looks) without the folders the person
+    /// could change. `changeable` finds what the person could change on the way to a file (`changeablePart(of:)`; tests
+    /// stand in their own).
+    func automaticRefusal(
+        _ name: String, at executable: String?, context: CleanupContext, searchPath: [String], changeable: (String) -> String?
+    ) -> String? {
+        guard context.isAutomatic, let executable else { return nil }
+        let folders = Shell.automaticSearchPath(searchPath, changeable: changeable)
+        let locate = { (name: String) in Shell.which(name, in: folders) }
+        let refusal = CommandTrust.programWalkRefusal(name, at: executable, locate: locate) { program in
+            changeable(program.path).map {
+                "\($0) can be replaced by any program of yours, so '\(program.name)' runs only when you start it"
+            }
+        }
+        return refusal.map(TerminalText.sanitize)
     }
 
     /// The first file, folder or symlink on the way to `path` that the person could change (`isChangeable`), following

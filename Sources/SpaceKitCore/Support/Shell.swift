@@ -82,21 +82,33 @@ public enum Shell {
     /// Parts of a name that mark a credential, which stays behind even under a kept prefix (HOMEBREW_GITHUB_API_TOKEN).
     static let credentialMarks = ["TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "AUTH", "CREDENTIAL"]
 
+    /// The folders of `folders` an automatic run's tools search: those nothing of the person's can change (`changeable`
+    /// finds what could). A tool that starts a helper by name, or a script `/usr/bin/env` starts, then finds only
+    /// programs no program of the person's put there.
+    static func automaticSearchPath(_ folders: [String], changeable: (String) -> String?) -> [String] {
+        folders.filter { changeable($0) == nil }
+    }
+
     /// The environment a tool runs with: for a manual run `keptVariables` and `keptPrefixes` from `environment`, minus
-    /// credentials, for an automatic run `automaticVariables` and `LC_*`; and PATH set to `searchPath`. Everything else
-    /// stays behind. A variable can point a tool somewhere else entirely
+    /// credentials, and PATH set to `searchPath`; for an automatic run `automaticVariables` and `LC_*`, and PATH set to
+    /// `automaticSearchPath` of it (`changeable` finds what the person could change; tests stand in their own). Everything
+    /// else stays behind. A variable can point a tool somewhere else entirely
     /// (DOCKER_HOST at another machine's daemon, OLLAMA_HOST at another server), load code into it (DYLD_*,
     /// NODE_OPTIONS) or hand it credentials (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often
     /// from an agent nobody watches. Every tool SpaceKit starts gets it, its own helpers too (launchctl, tmutil,
     /// osascript, open), so no caller can forget it.
-    public static func toolEnvironment(from environment: [String: String], home: String, kind: RunKind = .manual) -> [String: String] {
+    public static func toolEnvironment(
+        from environment: [String: String], home: String, kind: RunKind = .manual,
+        changeable: (String) -> String? = CommandTrust.changeablePart(of:)
+    ) -> [String: String] {
         var kept = environment.filter { name, _ in
             if kind == .automatic { return automaticVariables.contains(name) || name.hasPrefix("LC_") }
             guard keptVariables.contains(name) || keptPrefixes.contains(where: { name.hasPrefix($0) }) else { return false }
             let upper = name.uppercased()
             return !credentialMarks.contains { upper.contains($0) }
         }
-        kept["PATH"] = searchPath(environmentPATH: environment["PATH"], home: home).joined(separator: ":")
+        let folders = searchPath(environmentPATH: environment["PATH"], home: home)
+        kept["PATH"] = (kind == .automatic ? automaticSearchPath(folders, changeable: changeable) : folders).joined(separator: ":")
         return kept
     }
 

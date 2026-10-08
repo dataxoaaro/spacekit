@@ -236,12 +236,23 @@ public struct CleanupExecutor: Sendable {
     private func execute(
         _ plan: CleanupPlan, context: CleanupContext, review: ReviewRecord?, dryRun: Bool, onProgress: ProgressHandler?
     ) -> CleanupReport {
-        if let readMounts {
-            var current = self
-            current.readMounts = nil
-            current.safety = safety.mounted(readMounts())
-            return current.execute(plan, context: context, review: review, dryRun: dryRun, onProgress: onProgress)
-        }
+        // Read once per run, so every row is judged against the same disk: mounts since the guard was built, and the
+        // capacity each item's share of the disk is taken of, before this run removes anything.
+        var current = self
+        if let readMounts { current.safety = current.safety.mounted(readMounts()) }
+        current.safety = current.safety.capacities(readNowFor: CleanupExecutor.volumePaths(of: plan))
+        return current.executeRows(of: plan, context: context, review: review, dryRun: dryRun, onProgress: onProgress)
+    }
+
+    /// Where the guard reads the capacity for the plan's rows: the folder holding each item (and the folder of loose
+    /// files), and the folder holding each item a command names.
+    private static func volumePaths(of plan: CleanupPlan) -> [String] {
+        plan.items.flatMap { [PathUtil.parent($0.path), $0.path] } + plan.commands.compactMap(\.itemPath).map(PathUtil.parent)
+    }
+
+    private func executeRows(
+        of plan: CleanupPlan, context: CleanupContext, review: ReviewRecord?, dryRun: Bool, onProgress: ProgressHandler?
+    ) -> CleanupReport {
         var run = Run(report: CleanupReport(dryRun: dryRun), budget: context.isAutomatic ? maxBytesPerAutomaticRun : .max)
         let total = plan.items.count + plan.commands.count
         var completed = 0

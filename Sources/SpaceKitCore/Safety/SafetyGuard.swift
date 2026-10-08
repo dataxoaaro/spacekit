@@ -92,8 +92,8 @@ public struct SafetyGuard: Sendable {
     public let isRunningAsRoot: Bool
     /// Where pattern rules without their own `roots` look (the config's `scan.devRoots`).
     public let patternRoots: [String]
-    /// Reads the capacity of the volume holding a path.
-    public let volumeCapacity: @Sendable (String) -> VolumeCapacity?
+    /// Reads the capacity of the volume holding a path. `capacities(readNowFor:)` swaps in one that keeps a run's readings.
+    public private(set) var volumeCapacity: @Sendable (String) -> VolumeCapacity?
 
     private let critical: [Location]
     private let sealed: [Location]
@@ -156,6 +156,28 @@ public struct SafetyGuard: Sendable {
 
     private static func mountKeys(_ volumes: VolumeTable) -> [String] {
         volumes.volumes.map { PathUtil.comparisonKey($0.mountPoint) }
+    }
+
+    /// This guard with the capacity of every volume holding one of `paths` read once, now, and kept. A run judges each
+    /// item's share of the disk against the disk as it was when the run started: removing one item shrinks the used
+    /// space, which would otherwise make the next item a larger share than the review showed and skip it. A path on a
+    /// volume none of `paths` is on is read when it's judged.
+    func capacities(readNowFor paths: [String]) -> SafetyGuard {
+        let read = volumeCapacity
+        var readings: [dev_t: VolumeCapacity] = [:]
+        for path in paths {
+            guard let device = SafetyGuard.device(of: path), readings[device] == nil, let capacity = read(path) else { continue }
+            readings[device] = capacity
+        }
+        var fixed = self
+        fixed.volumeCapacity = { [readings] path in SafetyGuard.device(of: path).flatMap { readings[$0] } ?? read(path) }
+        return fixed
+    }
+
+    /// The device holding `path`, symlinks followed like a capacity reading follows them.
+    private static func device(of path: String) -> dev_t? {
+        var st = stat()
+        return stat(path, &st) == 0 ? st.st_dev : nil
     }
 
     // MARK: Built-in lists

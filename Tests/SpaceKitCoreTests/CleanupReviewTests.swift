@@ -165,6 +165,33 @@ struct CleanupReviewTests {
         #expect(onDisk(tree.path("home/a/Thing/z")))
     }
 
+    @Test("A run judges every item's share of the disk by the disk as it was when the run started")
+    func volumeShareReadOncePerRun() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/big/x", bytes: 40_960)
+        try tree.file("home/Projects/small/y", bytes: 16_384)
+        let big = tree.path("home/Projects/big")
+        var executor = sandboxExecutor(tree)
+        // Removing the big folder shrinks the disk's used space, so the small one becomes a larger share of it.
+        executor.safety = SafetyGuard(
+            home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false,
+            volumeCapacity: { _ in
+                let used: UInt64 = onDisk(big) ? 100_000 : 60_000
+                return VolumeCapacity(name: "Test", mountPoint: "/", total: 200_000, freeNow: 200_000 - used, available: 200_000 - used)
+            })
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: big, size: 40_960), CleanupItem(path: tree.path("home/Projects/small"), size: 16_384),
+            ], useTrash: false)
+        let review = CleanupReview(plan, executor: executor)
+        #expect(review.items.map { $0.verdict.reasons.contains("This holds 16% of the disk's used space") } == [false, true])
+
+        let report = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
+
+        #expect(report.items.map(\.outcome.isRemoved) == [true, true], "\(report.skipped)")
+        #expect(!report.hasProblems)
+    }
+
     @Test("An accepted volume share covers that share or less, not a larger one")
     func volumeShareBound() throws {
         let tree = try TempTree()

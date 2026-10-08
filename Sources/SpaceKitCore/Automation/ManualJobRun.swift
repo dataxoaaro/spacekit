@@ -5,8 +5,7 @@ import Foundation
 /// `prepare` evaluates the job now and says whether the run would go ahead or skip, and why. A suggestion's saved plan
 /// is narrowed to what the fresh evaluation still offers. `complete`, which exists only on a prepared run, executes the
 /// reviewed plan with the executor current then, records the job's run so its schedule moves on, and settles the
-/// suggestion. The app, the TUI and the
-/// CLI only show the prepared run, review its plan and ask.
+/// suggestion. The app, the TUI and the CLI only show the prepared run, review its plan and ask.
 public struct ManualJobRun: Sendable {
     /// The job's evaluation at `prepare` time.
     public let evaluation: JobEvaluation

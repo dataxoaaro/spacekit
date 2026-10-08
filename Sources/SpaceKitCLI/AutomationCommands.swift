@@ -233,7 +233,6 @@ struct JobsCommand: ParsableCommand {
         print("\(Output.safe(id)): \(enabled ? "on" : "off")")
     }
 
-    /// Prints bookkeeping a manual run couldn't save. Returns whether there was any.
     /// Reviews `run`'s plan with `executor`, the context's, and completes the run with that same executor once the person
     /// said go. `nil` when nothing ran.
     static func complete(

@@ -58,7 +58,7 @@ struct TreeWalk {
             if relist(current) { continue }
             let finished = stack.removeLast()
             guard let above = stack.last else {
-                removeFolder(finished, in: parent)
+                removeFolder(finished, in: parent, isItem: true)
                 return
             }
             current = try ascend(from: current, leaving: finished, to: above)
@@ -121,12 +121,13 @@ struct TreeWalk {
         return up
     }
 
-    /// Removes an emptied folder from the folder open as `parent`.
-    private mutating func removeFolder(_ finished: Frame, in parent: Int32) {
+    /// Removes an emptied folder from the folder open as `parent`. `isItem`: it is the item itself, not a folder inside it.
+    private mutating func removeFolder(_ finished: Frame, in parent: Int32, isItem: Bool = false) {
         if unlinkat(parent, finished.name, AT_REMOVEDIR) == 0 || errno == ENOENT { return }
         let code = errno
-        // Swapped for a link or a file after it was opened: what the handle reached is empty; drop the entry.
-        if code == ENOTDIR, unlinkat(parent, finished.name, 0) == 0 || errno == ENOENT { return }
+        // Swapped for a link or a file after it was opened: what the handle reached is empty; drop the entry. Inside
+        // the item that entry goes anyway; in the item's own place it is something else, outside the item, and stays.
+        if code == ENOTDIR, !isItem, unlinkat(parent, finished.name, 0) == 0 || errno == ENOENT { return }
         if finished.holdsVolume { holdVolume(finished.name) }
         // Left only because a volume is mounted below it: that isn't a failure.
         if finished.holdsVolume && !finished.failed && code == ENOTEMPTY { return }

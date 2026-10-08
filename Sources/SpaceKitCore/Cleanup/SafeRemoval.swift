@@ -71,28 +71,39 @@ enum SafeRemoval {
         return fstat(fd, &st) == 0 ? st.st_dev : nil
     }
 
-    /// Deletes `name` (recursively if it's a folder; a symlink is removed as a link) inside the folder open as `fd`,
-    /// never by path. Every step is relative to a handle opened with `O_NOFOLLOW`, so a folder swapped for a symlink
-    /// mid-way is removed as a link, a deep tree never hits `PATH_MAX`, and losing search permission on a folder above
-    /// doesn't matter.
+    /// Deletes the target's entry inside its folder, open as `fd`, never by path: recursively if the target is a
+    /// folder, as the entry itself otherwise (a symlink is removed as a link). Every step is relative to a handle opened
+    /// with `O_NOFOLLOW`, so a folder swapped for a symlink mid-way is removed as a link, a deep tree never hits
+    /// `PATH_MAX`, and losing search permission on a folder above doesn't matter.
+    ///
+    /// Only what the target pinned goes. A folder is emptied through a handle whose device and inode are the pinned
+    /// ones, so a folder renamed into the item's place after `verifyEntry` is refused; a file or a link is unlinked
+    /// without `AT_REMOVEDIR`, which can't remove a folder, so one swapped in for it stays.
     ///
     /// A folder whose device differs from `fd`'s is a volume mounted inside the item: it is left as it is, with
-    /// everything above it, and the rest is removed. Returns those folders' paths (under `directory`).
+    /// everything above it, and the rest is removed. Returns those folders' paths.
     ///
     /// Throws `Incomplete` when some entries couldn't be removed (everything else is gone), and `Refused` when the
-    /// item itself is another volume (nothing was removed) or a folder was moved while the walk was inside it (the
-    /// walk stops there).
-    static func delete(_ name: String, in fd: Int32, directory: String, device: @escaping DeviceReader = SafeRemoval.device(of:)) throws
-        -> [String]
-    {
-        let entry = Array(name.utf8CString)
-        let path = PathUtil.join(directory, name)
-        guard let volume = device(fd) else { throw posixError(directory) }
+    /// entry isn't what the target pinned or the item itself is another volume (nothing was removed), or a folder was
+    /// moved while the walk was inside it (the walk stops there).
+    static func delete(_ target: RemovalTarget, in fd: Int32, device: @escaping DeviceReader = SafeRemoval.device(of:)) throws -> [String] {
+        let entry = Array(target.name.utf8CString)
+        let path = target.resolvedPath
+        guard target.isFolder else {
+            guard unlinkat(fd, entry, 0) == 0 else { throw posixError(path) }
+            return []
+        }
+        guard let volume = device(fd) else { throw posixError(target.directory ?? path) }
         let top = openat(fd, entry, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard top >= 0 else {
-            // A file or a symlink: remove the entry itself, never what a link points to.
-            guard errno == ENOTDIR || errno == ELOOP, unlinkat(fd, entry, 0) == 0 else { throw posixError(path) }
-            return []
+            // Swapped for a file or a link since the check: that isn't the folder that was checked.
+            guard errno == ENOTDIR || errno == ELOOP else { throw posixError(path) }
+            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
+        }
+        var st = stat()
+        guard fstat(top, &st) == 0, let pinned = target.identity, RemovalTarget.Identity(st) == pinned else {
+            close(top)
+            throw Refused(errorDescription: "\(path) changed after it was checked; nothing was removed")
         }
         guard device(top) == volume else {
             close(top)

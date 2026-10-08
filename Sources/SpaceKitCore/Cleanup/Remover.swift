@@ -117,7 +117,7 @@ struct Remover: Sendable {
         switch method {
         case .delete:
             do {
-                let left = try SafeRemoval.delete(target.name, in: fd, directory: target.directory ?? "", device: device)
+                let left = try SafeRemoval.delete(target, in: fd, device: device)
                 return Removed(trashedTo: nil, leftOnOtherVolumes: left)
             } catch {
                 throw Interrupted(cause: error)

@@ -20,9 +20,18 @@ struct SafeRemovalTests {
     /// Deletes `name` inside `directory` through a handle to the pinned folder, the way `Remover` does once it has
     /// checked the target, so what `SafeRemoval` throws reaches the test as it is.
     static func delete(_ name: String, inDirectory directory: String) throws {
-        let fd = try SafeRemoval.openDirectory(directory, pinned: identity(directory))
+        try delete(target(name, in: directory))
+    }
+
+    static func delete(_ target: RemovalTarget) throws {
+        let fd = try SafeRemoval.openDirectory(try #require(target.directory), pinned: target.directoryIdentity)
         defer { close(fd) }
-        _ = try SafeRemoval.delete(name, in: fd, directory: directory)
+        _ = try SafeRemoval.delete(target, in: fd)
+    }
+
+    static func target(_ name: String, in directory: String) -> RemovalTarget {
+        let repositories = RemovalTarget.Repositories.recorded(isRepository: false, containsRepository: false)
+        return RemovalTarget.at(PathUtil.join(directory, name), home: directory, size: 0, repositories: repositories)
     }
 
     /// Deletes `relative` the way a cleanup does: through its removal target.
@@ -66,6 +75,34 @@ struct SafeRemovalTests {
         #expect(names(in: victim).count == count, "files outside the item were deleted")
         #expect(throws: Never.self) { try result.get() }
         #expect(!onDisk(tree.path("item")))
+    }
+
+    @Test("A file swapped for a folder after it was checked is never removed recursively")
+    func fileSwappedForFolder() throws {
+        let tree = try TempTree()
+        try tree.file("loose", bytes: 100)
+        try tree.file("victim/keep", bytes: 100)
+        let checked = SafeRemovalTests.target("loose", in: tree.root)
+        #expect(!checked.isFolder)
+        #expect(rename(tree.path("loose"), tree.path("loose-aside")) == 0)
+        #expect(rename(tree.path("victim"), tree.path("loose")) == 0)
+
+        #expect(throws: (any Error).self) { try SafeRemovalTests.delete(checked) }
+        #expect(onDisk(tree.path("loose/keep")))
+        #expect(onDisk(tree.path("loose-aside")))
+    }
+
+    @Test("A folder swapped for a file after it was checked is refused, and the file stays")
+    func folderSwappedForFile() throws {
+        let tree = try TempTree()
+        try tree.file("item/x", bytes: 100)
+        let checked = SafeRemovalTests.target("item", in: tree.root)
+        #expect(rename(tree.path("item"), tree.path("item-aside")) == 0)
+        try tree.file("item", bytes: 100)
+
+        #expect(throws: SafeRemoval.Refused.self) { try SafeRemovalTests.delete(checked) }
+        #expect(onDisk(tree.path("item")))
+        #expect(onDisk(tree.path("item-aside/x")))
     }
 
     @Test("A tree deeper than PATH_MAX is removed")

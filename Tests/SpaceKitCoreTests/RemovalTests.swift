@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SpaceKitCore
@@ -52,6 +53,60 @@ struct RemovalTests {
             #expect(onDisk(tree.path("home/victim/keep")))
             #expect(!onDisk(tree.path("home/.Trash/item")))
         }
+    }
+
+    /// The executor's `device` seam is read first when deletion starts, after the entry was checked: the swap lands in
+    /// the moment between that check and opening the folder to empty it.
+    @Test("A folder renamed into the item's place after the entry check is refused, not deleted")
+    func folderSwappedAfterEntryCheck() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/item/x", bytes: 100)
+        try tree.file("home/victim/keep", bytes: 100)
+        let flags = RaceFlags()
+        let item = tree.path("home/cache/item")
+        let aside = tree.path("home/cache/aside")
+        let victim = tree.path("home/victim")
+        var executor = sandboxExecutor(tree)
+        executor.device = { fd in
+            if !flags.swapped.exchange(true, ordering: .acquiringAndReleasing) {
+                _ = rename(item, aside)
+                _ = rename(victim, item)
+            }
+            return SafeRemoval.device(of: fd)
+        }
+        let checked = target(tree, "home/cache/item")
+
+        #expect(throws: (any Error).self) { try executor.remover.remove(checked, by: .delete) }
+        let swapped = flags.swapped.load(ordering: .acquiring)
+        #expect(swapped, "the swap never happened; the test proved nothing")
+        #expect(onDisk(tree.path("home/cache/item/keep")), "the folder swapped in isn't what was checked")
+        #expect(onDisk(tree.path("home/cache/aside/x")))
+    }
+
+    /// The second device read is the item's own handle, once it is open and checked: the item moves away and a file
+    /// takes its place before the walk empties it and removes its name.
+    @Test("A file put in the item's place while it is emptied stays")
+    func fileInItemsPlaceStays() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/item/x", bytes: 100)
+        let reads = Atomic<Int>(0)
+        let item = tree.path("home/cache/item")
+        let aside = tree.path("home/cache/aside")
+        var executor = sandboxExecutor(tree)
+        executor.device = { fd in
+            if reads.add(1, ordering: .acquiringAndReleasing).newValue == 2 {
+                _ = rename(item, aside)
+                FileManager.default.createFile(atPath: item, contents: Data([1]))
+            }
+            return SafeRemoval.device(of: fd)
+        }
+        let checked = target(tree, "home/cache/item")
+
+        // The item's contents went before its name turned out to be taken: a deletion that stopped part way.
+        #expect(throws: Remover.Interrupted.self) { try executor.remover.remove(checked, by: .delete) }
+        #expect(reads.load(ordering: .acquiring) >= 2, "the swap never happened; the test proved nothing")
+        #expect(onDisk(item), "the file in the item's place isn't the item")
+        #expect(!onDisk(tree.path("home/cache/aside/x")), "the item's own contents went")
     }
 
     @Test("A parent folder replaced after the check (A-B-A) is refused, even holding the same file")

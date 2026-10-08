@@ -134,7 +134,9 @@ public final class TUIApp {
         var mapMode = false
         var marked: [String: CleanupItem] = [:]
 
-        var result: AnalysisResult?
+        var result: AnalysisResult? {
+            didSet { settleSelections() }
+        }
         var analysis: Analysis? { result?.analysis }
         var aiReport: AIReport? { result?.aiReport }
         var analysisProgress: ScanProgress?
@@ -195,6 +197,8 @@ public final class TUIApp {
                 continue
             }
             let keys = terminal.readKeys(timeout: 0.08)
+            // A signal arriving while keys were awaited has restored the terminal too: don't act or draw on it.
+            guard terminal.heldSignal == nil else { continue }
             for key in keys where !state.quit { handle(key) }
             if !events.isEmpty || !keys.isEmpty || Date().timeIntervalSince(lastRender) > 0.12 {
                 render()

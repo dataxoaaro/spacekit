@@ -61,6 +61,22 @@ struct AnalysisResultTests {
         #expect(current.analysis.finding(ruleID: "cache")?.items.count == 2)
     }
 
+    @Test("An analysis is dated by the scan it read, which is newer than Explore's when it had to rescan")
+    func scanStarted() throws {
+        let (tree, rules, _) = try setUp()
+        let analyzer = StorageAnalyzer(library: RuleLibrary(rules: rules))
+        let beforeScan = Date()
+        let explore = try scan(tree.root)
+        #expect(explore.started >= beforeScan && explore.started <= Date())
+        let reused = AnalysisResult(try analyzer.analyzeSync(reusing: explore), rules: rules, activeModelWindow: .days(90))
+        #expect(reused.scanStarted == explore.started)
+
+        let partial = try scan(tree.path("models"))
+        let beforeAnalysis = Date()
+        let rescanned = AnalysisResult(try analyzer.analyzeSync(reusing: partial), rules: rules, activeModelWindow: .days(90))
+        #expect(rescanned.scanStarted >= beforeAnalysis)
+    }
+
     @Test("Only rules whose command removed something are re-evaluated")
     func rulesToReevaluate() {
         var report = CleanupReport(dryRun: false)

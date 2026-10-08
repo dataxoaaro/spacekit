@@ -11,13 +11,21 @@ public struct AnalysisResult: Sendable {
 
     /// `rules` is the whole active library (the index labels any folder, not only those with findings).
     /// `patternRoots`: the config's `scan.devRoots`, where pattern rules without their own roots apply.
-    public init(_ analysis: Analysis, rules: [Rule], activeModelWindow: Age, patternRoots: [String] = ["~"]) {
+    public init(_ analysis: Analysis, rules: [Rule], activeModelWindow: Age, patternRoots: [String] = ScanSettings.defaultDevRoots) {
         self.analysis = analysis
         self.rules = rules
         self.patternRoots = patternRoots
         aiReport = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: activeModelWindow)
-        ruleIndex = RuleIndex(rules: rules, findings: analysis.findings, patternRoots: patternRoots)
+        ruleIndex = AnalysisResult.index(rules, analysis, patternRoots)
     }
+
+    private static func index(_ rules: [Rule], _ analysis: Analysis, _ patternRoots: [String]) -> RuleIndex {
+        RuleIndex(rules: rules, findings: analysis.findings, patternRoots: patternRoots)
+    }
+
+    /// When the scan behind the findings began: the Explore scan's if the analysis reused it, its own otherwise.
+    /// Plans built from the findings are dated by it.
+    public var scanStarted: Date { analysis.tree.started }
 
     /// Drops what a cleanup removed from the findings, shrinking the analysis tree too when it's a separate scan
     /// from `exploreTree` (which the front end updates itself, see `Removal.apply(_:to:)`). Only call it while
@@ -28,7 +36,7 @@ public struct AnalysisResult: Sendable {
         if analysis.tree !== exploreTree { Removal.apply(removals, to: analysis.tree) }
         let touched = analysis.apply(removals)
         guard !touched.isEmpty else { return [] }
-        ruleIndex = RuleIndex(rules: rules, findings: analysis.findings, patternRoots: patternRoots)
+        ruleIndex = AnalysisResult.index(rules, analysis, patternRoots)
         if touched.contains(where: { id in rules.contains { $0.id == id && $0.ai != nil } }) {
             aiReport = AIInspector.report(findings: analysis.findings, tree: analysis.tree, activeWindow: aiReport.activeWindow)
         }
@@ -40,13 +48,13 @@ public struct AnalysisResult: Sendable {
     public mutating func merge(_ fresh: AnalysisResult, for ruleIDs: Set<String>) {
         analysis.replaceFindings(for: ruleIDs, with: fresh.analysis.findings)
         aiReport = aiReport.replacingModels(from: ruleIDs, with: fresh.aiReport)
-        ruleIndex = RuleIndex(rules: rules, findings: analysis.findings, patternRoots: patternRoots)
+        ruleIndex = AnalysisResult.index(rules, analysis, patternRoots)
     }
 
     /// Labels folders with a reloaded rule library.
     public mutating func reindex(rules: [Rule]) {
         self.rules = rules
-        ruleIndex = RuleIndex(rules: rules, findings: analysis.findings, patternRoots: patternRoots)
+        ruleIndex = AnalysisResult.index(rules, analysis, patternRoots)
     }
 }
 

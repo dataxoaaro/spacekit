@@ -13,10 +13,9 @@ extension TUIApp {
             return progressView(progress, title: "Looking for developer storage…", width: width, height: height)
         }
         guard let analysis = state.analysis else { return ["", "  Press r to analyse.".dim] }
-        let rows = devRows()
+        let rows = state.devRows
         guard !rows.isEmpty else { return ["", "  Nothing recognised. Rules live in rules/ and ~/.config/spacekit/rules.".dim] }
 
-        state.dev.selection = TUIApp.settle(state.dev.selection, on: rows.indices.filter { rows[$0].finding != nil })
         var lines: [String] = []
         lines.append(
             "  " + "Regenerable \(ByteCount.format(analysis.total(.safe)))".fg(ANSI.safe).bold + "   "
@@ -75,8 +74,7 @@ extension TUIApp {
                 + "   " + "Active (\(Int(report.activeWindow.days))d) \(ByteCount.format(report.active()))".dim
                 + "   " + "Unused \(Int(report.activeWindow.days))+ days \(ByteCount.format(report.unused()))".fg(ANSI.review))
         lines.append("")
-        let rows = aiRows()
-        state.ai.selection = TUIApp.settle(state.ai.selection, on: rows.indices.filter { rows[$0].model != nil })
+        let rows = state.aiRows
         let tools = Dictionary(report.tools.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         for index in state.ai.visibleRows(height - lines.count, count: rows.count) {
             let row = rows[index]

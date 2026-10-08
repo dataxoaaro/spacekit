@@ -36,13 +36,16 @@ extension ScanTree {
         }
         if let node = node(at: path), let parent = node.parent {
             detach(node, from: parent)
-            settleHardLinks(updateHardLinks { $0.node.isWithin(node) ? .drop : .keep })
+            let linked = hardLinks.linkedFolders(under: node)
+            settleHardLinks(updateHardLinks(linked.keys) { linked.folders.contains($0.node) ? .drop : .keep })
             return
         }
         guard let parent = node(at: PathUtil.parent(path)) else { return }
         let name = PathUtil.lastComponent(path)
-        guard takeFile(named: name, from: parent, hint: linkBytes(in: parent)[name] ?? hint) != nil else { return }
-        settleHardLinks(updateHardLinks { $0.node === parent && $0.name == name ? .drop : .keep })
+        let key: HardLinkKey? = hardLinks.links(in: parent)[name]
+        guard takeFile(named: name, from: parent, hint: linkBytes(key, in: parent, named: name) ?? hint) != nil else { return }
+        guard let key else { return }
+        settleHardLinks(updateHardLinks([key]) { $0.node === parent && $0.name == name ? .drop : .keep })
     }
 
     // MARK: Move
@@ -62,15 +65,17 @@ extension ScanTree {
             detach(node, from: parent)
             node.name = newName
             attach(node, to: target)
-            settleHardLinks(updateHardLinks { $0.node.isWithin(node) ? .recheck : .keep })
+            // The links keep their folders, which may now sort ahead of (or behind) the link holding the bytes.
+            settleHardLinks(hardLinks.linkedFolders(under: node).keys)
             return true
         }
         let name = PathUtil.lastComponent(path)
-        guard let parent = node(at: PathUtil.parent(path)),
-            let leaf = takeFile(named: name, from: parent, hint: linkBytes(in: parent)[name] ?? hint)
-        else { return false }
+        guard let parent = node(at: PathUtil.parent(path)) else { return false }
+        let key: HardLinkKey? = hardLinks.links(in: parent)[name]
+        guard let leaf = takeFile(named: name, from: parent, hint: linkBytes(key, in: parent, named: name) ?? hint) else { return false }
         putFile(FileLeaf(name: newName, size: leaf.size, modified: leaf.modified), into: target)
-        settleHardLinks(updateHardLinks { $0.node === parent && $0.name == name ? .move(target, newName) : .keep })
+        guard let key else { return true }
+        settleHardLinks(updateHardLinks([key]) { $0.node === parent && $0.name == name ? .move(target, newName) : .keep })
         return true
     }
 
@@ -92,8 +97,7 @@ extension ScanTree {
         }
         // Another link in the tree may already hold the bytes, so this one arrives empty and the order decides.
         let key = HardLinkKey(device: st.st_dev, inode: st.st_ino)
-        if hardLinks[key] == nil { hardLinks[key] = HardLinkGroup(size: size, modified: modified, links: []) }
-        hardLinks[key]?.links.append(HardLink(node: parent, name: name, hasBytes: false))
+        hardLinks.add([HardLink(node: parent, name: name, hasBytes: false)], to: key, size: size, modified: modified)
         putFile(FileLeaf(name: name, size: 0, modified: modified), into: parent)
         settleHardLinks([key])
         return true
@@ -110,7 +114,8 @@ extension ScanTree {
         guard !fresh.isMultiRoot, source.name == path || fresh.roots.first == path else { return }
         if let target = node(at: path) {
             // Drop the old contents' links before the nodes holding them can be freed.
-            var touched = updateHardLinks { $0.node.isWithin(target) ? .drop : .keep }
+            let old = hardLinks.linkedFolders(under: target)
+            var touched = updateHardLinks(old.keys) { old.folders.contains($0.node) ? .drop : .keep }
             let delta = (
                 bytes: Int64(source.size) - Int64(target.size),
                 files: Int64(source.fileCount) - Int64(target.fileCount),
@@ -205,7 +210,8 @@ extension ScanTree {
             remaining[name] = FileSize.allocated(st)
         }
         // A hard link weighs what the tree counts under it, which is 0 unless it holds the file's bytes.
-        for (name, bytes) in linkBytes(in: node) where remaining[name] != nil { remaining[name] = bytes }
+        let links = hardLinks.links(in: node)
+        for (name, key) in links where remaining[name] != nil { remaining[name] = linkBytes(key, in: node, named: name) }
         let files = node.files.filter { remaining[$0.name] != nil }
         let tracked = Set(node.files.map(\.name))
         let small = remaining.filter { !tracked.contains($0.key) }
@@ -222,7 +228,8 @@ extension ScanTree {
         node.directFileSize = directSize
         node.directFileCount = directCount
         adjust(from: node, bytes: -Int64(bytes), files: -Int64(count), dirs: 0)
-        settleHardLinks(updateHardLinks { $0.node === node && remaining[$0.name] == nil ? .drop : .keep })
+        let gone = Set(links.filter { remaining[$0.key] == nil }.values)
+        settleHardLinks(updateHardLinks(gone) { $0.node === node && remaining[$0.name] == nil ? .drop : .keep })
     }
 
     /// Removes a file from a folder's direct contents. Small files only exist as a total, so `hint` gives their size.
@@ -259,48 +266,42 @@ extension ScanTree {
 
     // MARK: Hard links
 
-    /// What the tree counts under each hard link directly in `node`: the file's size for the link holding it, 0
-    /// for the others.
-    private func linkBytes(in node: DirNode) -> [String: UInt64] {
-        var bytes: [String: UInt64] = [:]
-        for group in hardLinks.values {
-            for link in group.links where link.node === node { bytes[link.name] = link.hasBytes ? group.size : 0 }
-        }
-        return bytes
+    /// What the tree counts under the hard link `name` in `folder`, which names file `key`: the file's size if
+    /// the link holds it, 0 otherwise. `nil` if it isn't a hard link.
+    private func linkBytes(_ key: HardLinkKey?, in folder: DirNode, named name: String) -> UInt64? {
+        guard let key, let group = hardLinks[key] else { return nil }
+        guard let link = group.links.first(where: { $0.node === folder && $0.name == name }) else { return nil }
+        return link.hasBytes ? group.size : 0
     }
 
-    /// Applies `change` to every hard link and returns the groups it changed.
-    private func updateHardLinks(_ change: (HardLink) -> HardLinkChange) -> Set<HardLinkKey> {
-        var updates: [HardLinkKey: [HardLink]] = [:]
-        for (key, group) in hardLinks where group.links.contains(where: { change($0) != .keep }) {
+    /// Applies `change` to the links of each file in `keys` and returns the files that still exist.
+    private func updateHardLinks(_ keys: Set<HardLinkKey>, _ change: (HardLink) -> HardLinkChange) -> Set<HardLinkKey> {
+        var updated: Set<HardLinkKey> = []
+        for key in keys {
+            guard let group = hardLinks[key] else { continue }
             var links: [HardLink] = []
             for link in group.links {
                 switch change(link) {
-                case .keep, .recheck: links.append(link)
+                case .keep: links.append(link)
                 case .drop: break
                 case .move(let node, let name): links.append(HardLink(node: node, name: name, hasBytes: link.hasBytes))
                 }
             }
-            updates[key] = links
+            hardLinks.set(key, to: HardLinkGroup(size: group.size, modified: group.modified, links: links))
+            updated.insert(key)
         }
-        for (key, links) in updates { hardLinks[key]?.links = links }
-        return Set(updates.keys)
+        return updated
     }
 
     /// Takes in the hard links of `fresh`, a scan spliced into this tree whose root's files now live in `target`.
     private func adoptHardLinks(of fresh: ScanTree, filesOf source: DirNode, nowIn target: DirNode) -> Set<HardLinkKey> {
-        for (key, group) in fresh.hardLinks {
-            var links: [HardLink] = group.links
-            for index in links.indices where links[index].node === source {
-                links[index] = HardLink(node: target, name: links[index].name, hasBytes: links[index].hasBytes)
+        for (key, group) in fresh.hardLinks.groups {
+            let links: [HardLink] = group.links.map { link in
+                link.node === source ? HardLink(node: target, name: link.name, hasBytes: link.hasBytes) : link
             }
-            if hardLinks[key] == nil {
-                hardLinks[key] = HardLinkGroup(size: group.size, modified: group.modified, links: links)
-            } else {
-                hardLinks[key]?.links += links
-            }
+            hardLinks.add(links, to: key, size: group.size, modified: group.modified)
         }
-        return Set(fresh.hardLinks.keys)
+        return Set(fresh.hardLinks.groups.keys)
     }
 
     /// Moves each group's bytes to the link a rescan would credit, and forgets groups with no link left.
@@ -309,7 +310,7 @@ extension ScanTree {
         for key in keys {
             guard var group = hardLinks[key] else { continue }
             guard let owner = group.ownerIndex else {
-                hardLinks[key] = nil
+                hardLinks.set(key, to: nil)
                 continue
             }
             let size = group.size
@@ -326,7 +327,7 @@ extension ScanTree {
                 adjust(from: link.node, bytes: Int64(size), files: 0, dirs: 0)
                 group.links[owner].hasBytes = true
             }
-            hardLinks[key] = group
+            hardLinks.set(key, to: group)
         }
     }
 
@@ -355,10 +356,8 @@ extension ScanTree {
 }
 
 /// What a tree mutation did to one hard link.
-private enum HardLinkChange: Equatable {
+private enum HardLinkChange {
     case keep
-    /// Its folder moved, so it may now sort ahead of (or behind) the link holding the bytes.
-    case recheck
     /// Gone from the tree, along with any bytes it held.
     case drop
     /// Renamed or moved to another folder, along with any bytes it held.

@@ -54,7 +54,7 @@ export SPACEKIT_HOME=$SPACEKIT_SANDBOX/home SPACEKIT_CONFIG=$SPACEKIT_SANDBOX/co
 - **Performance matters.** The scanner and the rule engine run over millions of entries. Measure before and after (release builds: `swift build -c release`), and prefer incremental updates over recomputation (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - **Core stays UI-free.** `SpaceKitCore` must not import AppKit or SwiftUI, so the CLI, TUI and agent share it.
 - **Style.** Swift 6 language mode, strict concurrency, `swift-format` (`make lint`, `make format`). Match the surrounding code; comments explain *why*.
-- **Tests** use Swift Testing (`import Testing`). File-system tests use `TempTree` and never touch real user data. Cleanup tests build their executor with `sandboxExecutor` ([`CleanupExecutionTests.swift`](Tests/SpaceKitCoreTests/CleanupExecutionTests.swift)), which puts the home, the Trash and the journal inside the `TempTree`, so nothing reaches your real Trash.
+- **Tests** use Swift Testing (`import Testing`). File-system tests use `TempTree` and never touch real user data. Every cleanup test builds its executor with `sandboxExecutor` ([`CleanupExecutionTests.swift`](Tests/SpaceKitCoreTests/CleanupExecutionTests.swift)), which puts the home and the journal inside the `TempTree` and moves "trashed" items into its own `.Trash` with `sandboxTrash` ([`TestSupport.swift`](Tests/SpaceKitCoreTests/TestSupport.swift)), so nothing reaches your real Trash. Tests that move items to a Trash themselves use `sandboxTrash` too.
 
 ## UI screenshots (debug builds)
 

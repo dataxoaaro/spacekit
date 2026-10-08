@@ -1,5 +1,10 @@
 import Foundation
 
+extension ScanSettings {
+    /// Where pattern rules look for projects unless the config says otherwise: the home folder.
+    public static let defaultDevRoots: [String] = ["~"]
+}
+
 /// Answers "what is this folder?" for any path, so every view can label folders semantically.
 public struct RuleIndex: Sendable {
     private var exact: [String: Rule] = [:]
@@ -11,7 +16,7 @@ public struct RuleIndex: Sendable {
     private let scope: RuleScope
 
     /// `patternRoots`: where pattern rules without their own `roots` look (the config's `scan.devRoots`).
-    public init(rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home, patternRoots: [String] = ["~"]) {
+    public init(rules: [Rule], findings: [Finding] = [], home: String = PathUtil.home, patternRoots: [String] = ScanSettings.defaultDevRoots) {
         scope = RuleScope(home: home, patternRoots: patternRoots)
         for rule in rules {
             for pattern in rule.paths {

@@ -147,23 +147,27 @@ public final class ScanTree: @unchecked Sendable {
     /// The scanned paths. One element for a normal scan, several for a multi-root scan (where `root` is virtual).
     public let roots: [String]
     public let stats: ScanStats
+    /// When the scan began. Anything that changed on disk after this may not be reflected, so cleanup plans built
+    /// from the tree are dated by it.
+    public let started: Date
     public let options: ScanOptions
     /// Capacity of the volume containing the first root.
     public let capacity: VolumeCapacity?
     /// Every multiply-linked file in the tree, so a mutation that takes away the link holding a file's bytes can
     /// hand them to a surviving link.
-    var hardLinks: [HardLinkKey: HardLinkGroup]
+    var hardLinks: HardLinkTable
 
     init(
-        root: DirNode, roots: [String], stats: ScanStats, options: ScanOptions, capacity: VolumeCapacity?,
+        root: DirNode, roots: [String], stats: ScanStats, started: Date, options: ScanOptions, capacity: VolumeCapacity?,
         hardLinks: [HardLinkKey: HardLinkGroup] = [:]
     ) {
         self.root = root
         self.roots = roots
         self.stats = stats
+        self.started = started
         self.options = options
         self.capacity = capacity
-        self.hardLinks = hardLinks
+        self.hardLinks = HardLinkTable(hardLinks)
     }
 
     public var markers: MarkerRegistry { options.markers }
@@ -199,56 +203,12 @@ extension ScanTree {
     /// Bytes of multiply-linked files that also have links outside this tree. Removing the tree doesn't free them.
     func bytesLinkedOutside() -> UInt64 {
         var total: UInt64 = 0
-        for group in hardLinks.values {
+        for group in hardLinks.groups.values {
             guard let link = group.links.first else { continue }
             var st = stat()
             guard lstat(PathUtil.join(link.node.path, link.name), &st) == 0 else { continue }
             if Int(st.st_nlink) > group.links.count { total &+= group.size }
         }
         return total
-    }
-}
-
-/// Identifies a file whatever name it's reached by.
-struct HardLinkKey: Hashable, Sendable {
-    let device: Int32
-    let inode: UInt64
-}
-
-/// One name of a multiply-linked file.
-struct HardLink {
-    let node: DirNode
-    let name: String
-    /// The file's bytes are counted under exactly one of its links; the others count as files of 0 bytes.
-    var hasBytes: Bool
-}
-
-/// A file with several hard links in the tree.
-struct HardLinkGroup {
-    let size: UInt64
-    let modified: Int64
-    var links: [HardLink]
-
-    /// The order that picks the link holding the bytes: folder path first, then name. A scan and an in-place update
-    /// of the same disk must agree, whatever order the links were reached in.
-    static func precedes(folder: String, name: String, folder other: String, name otherName: String) -> Bool {
-        folder != other ? folder < other : name < otherName
-    }
-
-    /// The link that should hold the bytes, or `nil` if none is left.
-    var ownerIndex: Int? {
-        var owner: Int?
-        var ownerFolder = ""
-        for index in links.indices {
-            let folder: String = links[index].node.path
-            if let current = owner,
-                !HardLinkGroup.precedes(folder: folder, name: links[index].name, folder: ownerFolder, name: links[current].name)
-            {
-                continue
-            }
-            owner = index
-            ownerFolder = folder
-        }
-        return owner
     }
 }

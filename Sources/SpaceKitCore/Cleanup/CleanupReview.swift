@@ -44,15 +44,23 @@ public struct CleanupReview: Sendable {
     public let canChooseTrash: Bool
     /// Ids of items already in the Trash.
     private let trashed: Set<String>
+    /// Decides where items go, for the wording.
+    private let remover: Remover
     private var unticked: Set<Key> = []
 
     public init(_ plan: CleanupPlan, executor: CleanupExecutor) {
-        items = plan.itemsLargestFirst.map { Row(subject: $0, verdict: executor.verdict(for: $0, context: .manual), key: .item($0.id)) }
+        let remover = executor.remover
+        // One target per item, as the plan recorded it, for both the verdict and where the item ends up.
+        let targets = plan.itemsLargestFirst.map { ($0, remover.target(of: $0, probingRepositories: false)) }
+        items = targets.map { item, target in
+            Row(subject: item, verdict: executor.verdict(for: target, ruleID: item.ruleID, context: .manual), key: .item(item.id))
+        }
         commands = plan.commands.map { Row(subject: $0, verdict: executor.verdict(for: $0, context: .manual), key: .command($0.id)) }
         manualSteps = plan.manualSteps
         useTrash = plan.useTrash
         canChooseTrash = !executor.alwaysTrash
-        trashed = Set(plan.items.filter { executor.isInsideTrash($0.path, orTrashItself: $0.kind == .looseFiles) }.map(\.id))
+        trashed = Set(targets.filter { remover.isInsideTrash($1) }.map { $0.0.id })
+        self.remover = remover
     }
 
     // MARK: Selection
@@ -105,7 +113,7 @@ public struct CleanupReview: Sendable {
     public var disposal: Disposal {
         let selected = selectedItems
         if !selected.isEmpty && selected.allSatisfy({ trashed.contains($0.id) }) { return .deleteFromTrash }
-        return useTrash || !canChooseTrash ? .moveToTrash : .delete
+        return remover.method(inTrash: false, useTrash: useTrash, rule: nil, context: .manual) == .trash ? .moveToTrash : .delete
     }
 
     /// "1.2 GB will be moved to the Trash." `nil` with no item selected.

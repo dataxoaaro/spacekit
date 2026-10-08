@@ -17,6 +17,20 @@ struct SafeRemovalTests {
         (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
     }
 
+    /// Deletes `name` inside `directory` through a handle to the pinned folder, the way `Remover` does once it has
+    /// checked the target, so what `SafeRemoval` throws reaches the test as it is.
+    static func delete(_ name: String, inDirectory directory: String) throws {
+        let fd = try SafeRemoval.openDirectory(directory, pinned: identity(directory))
+        defer { close(fd) }
+        _ = try SafeRemoval.delete(name, in: fd, directory: directory)
+    }
+
+    /// Deletes `relative` the way a cleanup does: through its removal target.
+    func delete(_ relative: String, in tree: TempTree) throws {
+        let remover = sandboxExecutor(tree).remover
+        _ = try remover.remove(remover.target(of: CleanupItem(path: tree.path(relative), size: 0), probingRepositories: false), by: .delete)
+    }
+
     @Test("A subfolder swapped for a symlink mid-removal never leads the deletion outside the item")
     func swapRace() throws {
         let tree = try TempTree()
@@ -43,7 +57,7 @@ struct SafeRemovalTests {
             }
         }
         racer.start()
-        let result = Result { try SafeRemoval.delete("item", inDirectory: tree.root) }
+        let result = Result { try delete("item", in: tree) }
         flags.done.store(true, ordering: .releasing)
         while !racer.isFinished { usleep(1_000) }
 
@@ -73,7 +87,7 @@ struct SafeRemovalTests {
         close(file)
         close(fd)
 
-        try SafeRemoval.delete("deep", inDirectory: tree.root)
+        try delete("deep", in: tree)
         #expect(!onDisk(tree.path("deep")))
     }
 
@@ -81,12 +95,14 @@ struct SafeRemovalTests {
     func ancestorWithoutSearchPermission() throws {
         let tree = try TempTree()
         try tree.file("locked/parent/item/sub/file", bytes: 1_000)
-        let fd = try SafeRemoval.openDirectory(tree.path("locked/parent"))
+        let remover = sandboxExecutor(tree).remover
+        let target = remover.target(of: CleanupItem(path: tree.path("locked/parent/item"), size: 0), probingRepositories: false)
+        let fd = try remover.openDirectory(of: target)
         defer { close(fd) }
         #expect(chmod(tree.path("locked"), 0o600) == 0)
         defer { chmod(tree.path("locked"), 0o755) }
 
-        try SafeRemoval.delete("item", in: fd, directory: tree.path("locked/parent"))
+        _ = try remover.remove(target, in: fd, by: .delete)
         chmod(tree.path("locked"), 0o755)
         #expect(!onDisk(tree.path("locked/parent/item")))
     }
@@ -118,7 +134,7 @@ struct SafeRemovalTests {
             }
         }
         racer.start()
-        let result = Result { try SafeRemoval.delete("item", inDirectory: tree.root) }
+        let result = Result { try SafeRemovalTests.delete("item", inDirectory: tree.root) }
         flags.done.store(true, ordering: .releasing)
         while !racer.isFinished { usleep(1_000) }
 
@@ -140,7 +156,7 @@ struct SafeRemovalTests {
         var lowered = original
         lowered.rlim_cur = min(original.rlim_cur, 256)
         setrlimit(RLIMIT_NOFILE, &lowered)
-        let result = Result { try SafeRemoval.delete("n", inDirectory: tree.root) }
+        let result = Result { try SafeRemovalTests.delete("n", inDirectory: tree.root) }
         setrlimit(RLIMIT_NOFILE, &original)
 
         #expect(throws: Never.self) { try result.get() }
@@ -157,7 +173,7 @@ struct SafeRemovalTests {
         let failure = Mutex<String?>("not finished")
         let thread = Thread {
             do {
-                try SafeRemoval.delete("n", inDirectory: root)
+                try SafeRemovalTests.delete("n", inDirectory: root)
                 failure.withLock { $0 = nil }
             } catch {
                 failure.withLock { $0 = error.localizedDescription }
@@ -184,7 +200,7 @@ struct SafeRemovalTests {
 
         var thrown: Error?
         do {
-            try SafeRemoval.delete("item", inDirectory: tree.root)
+            try SafeRemovalTests.delete("item", inDirectory: tree.root)
         } catch {
             thrown = error
         }
@@ -220,8 +236,8 @@ struct SafeRemovalTests {
         try FileManager.default.createSymbolicLink(atPath: tree.path("item/filelink"), withDestinationPath: tree.path("outside/keep"))
         try tree.file("single", bytes: 100)
 
-        try SafeRemoval.delete("item", inDirectory: tree.root)
-        try SafeRemoval.delete("single", inDirectory: tree.root)
+        try delete("item", in: tree)
+        try delete("single", in: tree)
         #expect(!onDisk(tree.path("item")))
         #expect(!onDisk(tree.path("single")))
         #expect(onDisk(tree.path("outside/keep")))

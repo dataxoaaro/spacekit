@@ -174,8 +174,13 @@ struct JobsCommand: ParsableCommand {
 
             // Check custom folders against the guard up front.
             let automation = CleanupContext.automatic(JobRunner(context: context).automationContext(for: job))
+            let safetyGuard = context.safetyGuard
             for folder in job.paths {
-                let verdict = context.safetyGuard.evaluate(path: PathUtil.join(PathUtil.expand(folder), "item"), context: automation)
+                // Something the job might find inside the folder; only its location is known yet.
+                let inside = RemovalTarget.at(
+                    PathUtil.join(PathUtil.expand(folder), "item"), home: safetyGuard.home, size: 0,
+                    repositories: .recorded(isRepository: false, containsRepository: false))
+                let verdict = safetyGuard.evaluate(inside, rule: nil, context: automation)
                 if verdict.isBlocked {
                     Output.warn(Output.safe("Automatic runs won't clean inside \(folder): \(verdict.reasons.joined(separator: "; "))"))
                 }

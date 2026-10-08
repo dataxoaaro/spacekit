@@ -114,6 +114,8 @@ public struct CleanupExecutor: Sendable {
     var trash: @Sendable (String) throws -> String? = CleanupExecutor.moveToTrash
     /// Resolves the folder an item is removed from. Tests replace it to swap symlinks at the worst moment.
     var resolve: @Sendable (String) -> String? = PathUtil.realpath
+    /// Reads the device of a folder open while deleting. Tests can't mount a volume, so they replace it to stand one in.
+    var device: SafeRemoval.DeviceReader = SafeRemoval.device(of:)
 
     public static let commandTimeout: TimeInterval = 600
 
@@ -132,35 +134,14 @@ public struct CleanupExecutor: Sendable {
 
     /// Checks one item without touching it, using what the plan recorded about it.
     public func verdict(for item: CleanupItem, context: CleanupContext) -> SafetyVerdict {
-        verdict(
-            for: item, size: item.size, isRepository: item.isRepository, containsRepository: item.containsRepository, context: context)
+        verdict(for: remover.target(of: item, probingRepositories: false), ruleID: item.ruleID, context: context)
     }
 
-    /// `checkedDirectory`: the resolved folder the removal will act in. The item is judged there too, so the guard
-    /// has seen the exact location that changes, whatever a symlink in the item's path points at by then.
-    func verdict(
-        for item: CleanupItem, size: UInt64, isRepository: Bool, containsRepository: Bool, context: CleanupContext,
-        checkedDirectory: String? = nil
-    ) -> SafetyVerdict {
-        let rule = item.ruleID.flatMap { rules[$0] }
-        // Loose files are judged as "something inside the folder", not as the folder itself.
-        let path = item.kind == .looseFiles ? CleanupItem.looseFilesPath(in: item.path) : item.path
-        let name = item.kind == .looseFiles ? "*" : PathUtil.lastComponent(item.path)
-        var verdict = CleanupExecutor.judge(path, checked: checkedDirectory.map { PathUtil.join($0, name) }) { candidate in
-            safety.evaluate(
-                path: candidate, size: size, rule: rule, context: context, isRepository: isRepository,
-                containsRepository: containsRepository)
-        }
+    /// The guard's verdict on a removal target, refused outright while the config is invalid.
+    func verdict(for target: RemovalTarget, ruleID: String?, context: CleanupContext) -> SafetyVerdict {
+        var verdict = safety.evaluate(target, rule: ruleID.flatMap { rules[$0] }, context: context)
         refuseIfConfigInvalid(&verdict)
         return verdict
-    }
-
-    /// The verdict on `path` and, if it's spelled differently, on the same entry in the folder that was resolved
-    /// and checked: the guard sees the exact location that changes, whatever a symlink in `path` points at by then.
-    static func judge(_ path: String, checked: String?, _ evaluate: (String) -> SafetyVerdict) -> SafetyVerdict {
-        let verdict = evaluate(path)
-        guard let checked, checked != path else { return verdict }
-        return verdict.merging(evaluate(checked))
     }
 
     func refuseIfConfigInvalid(_ verdict: inout SafetyVerdict) {

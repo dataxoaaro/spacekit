@@ -22,10 +22,10 @@ extension CleanupExecutor {
         }
 
         if let itemPath = command.itemPath {
-            let item = safety.evaluate(
-                path: itemPath, size: command.estimatedBytes, rule: rule, context: context,
-                isRepository: RepositoryProbe.isRepository(itemPath), containsRepository: RepositoryProbe.containsRepository(itemPath))
-            verdict = verdict.merging(item)
+            let target = RemovalTarget.resolving(
+                itemPath, home: safety.home, size: command.estimatedBytes,
+                repositories: .probed(recordedRepository: false, recordedContains: false), resolve: resolve)
+            verdict = verdict.merging(safety.evaluate(target, rule: rule, context: context))
         } else {
             switch rule.safety.level {
             case .protected:

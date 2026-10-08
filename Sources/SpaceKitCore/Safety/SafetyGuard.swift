@@ -120,13 +120,22 @@ public struct SafetyGuard: Sendable {
         self.patternRoots = patternRoots
         self.volumeCapacity = volumeCapacity
         scope = RuleScope(home: home, patternRoots: patternRoots)
-        critical = SafetyGuard.criticalPaths(home: home).map(Location.init)
-        sealed = SafetyGuard.sealedTrees(home: home).map(Location.init)
-        personal = SafetyGuard.personalAreas(home: home).map(Location.init)
+        // Resolved once, for every list: a home that is (or sits behind) a symlink is protected at its real location
+        // too, whichever spelling an item arrives under.
+        let homes = SafetyGuard.unique([home, PathUtil.realpath(home)].compactMap { $0 })
+        func locations(_ list: (String) -> [String]) -> [Location] {
+            SafetyGuard.unique(homes.flatMap(list)).map(Location.init)
+        }
+        critical = locations(SafetyGuard.criticalPaths)
+        sealed = locations(SafetyGuard.sealedTrees)
+        personal = locations(SafetyGuard.personalAreas)
         // A protected path that is (or sits behind) a symlink is protected at its real location too.
-        userProtected = self.userProtectedPaths.flatMap { path in
-            [path, PathUtil.resolveParent(path), PathUtil.realpath(path)].compactMap { $0 }
-                .map { Location(path: path, key: PathUtil.comparisonKey($0)) }
+        userProtected = userProtectedPaths.flatMap { written in
+            homes.flatMap { home in
+                let path = PathUtil.expand(written, home: home)
+                return [path, PathUtil.resolveParent(path), PathUtil.realpath(path)].compactMap { $0 }
+                    .map { Location(path: path, key: PathUtil.comparisonKey($0)) }
+            }
         }
         mountKeys = volumes.volumes.map { PathUtil.comparisonKey($0.mountPoint) }
         protectedPatterns = self.protectedRules.map { rule in
@@ -196,29 +205,19 @@ public struct SafetyGuard: Sendable {
 
     // MARK: Evaluation
 
-    /// Decides whether `path` may be removed.
+    /// Decides whether `target` may be removed, from the facts it carries: its spellings, whether it is or contains a git
+    /// working copy, and its size (for the volume-share checks). The guard reads no file itself; `RemovalTarget` read
+    /// them, once, for the guard and the removal alike.
     ///
-    /// - Parameters:
-    ///   - size: bytes the removal would free, if known (enables the volume-share checks).
-    ///   - rule: the rule that produced the item, if any.
-    ///   - isRepository/containsRepository: git working copies at or below `path`, if known from a scan.
-    public func evaluate(
-        path rawPath: String,
-        size: UInt64? = nil,
-        rule: Rule? = nil,
-        context: CleanupContext,
-        isRepository: Bool = false,
-        containsRepository: Bool = false
-    ) -> SafetyVerdict {
+    /// - Parameter rule: the rule that produced the item, if any.
+    public func evaluate(_ target: RemovalTarget, rule: Rule?, context: CleanupContext) -> SafetyVerdict {
         var verdict = SafetyVerdict.allow
 
-        // `~name` would otherwise expand relative to the working directory.
-        guard rawPath.hasPrefix("/") || rawPath == "~" || rawPath.hasPrefix("~/") else {
+        // Relative and `~name` paths stay unexpanded in the target.
+        guard target.path.hasPrefix("/") else {
             return SafetyVerdict(decision: .block, reasons: ["Path must be absolute"])
         }
-        // Exactly as given: the executor removes this spelling, trailing spaces and all.
-        let path = PathUtil.expandArgument(rawPath, home: home)
-        let candidates = SafetyGuard.spellings(of: path)
+        let candidates = target.spellings
 
         if isRunningAsRoot {
             verdict.raise(.block, "SpaceKit never removes files while running as root (sudo)")
@@ -232,9 +231,9 @@ public struct SafetyGuard: Sendable {
         if let rule, rule.safety.level == .protected {
             verdict.raise(.block, "\(rule.name) is marked “Don't touch”")
         }
-        if isRepository {
+        if target.isRepository {
             verdict.raise(context.isAutomatic ? .block : .confirm, "This folder is a git repository (source code)")
-        } else if containsRepository && (rule == nil || rule!.safety.level != .safe) {
+        } else if target.containsRepository && (rule == nil || rule!.safety.level != .safe) {
             verdict.raise(context.isAutomatic ? .block : .confirm, "This folder contains git repositories")
         }
 
@@ -248,8 +247,8 @@ public struct SafetyGuard: Sendable {
             return personal.contains { PathUtil.isStrictAncestor($0.key, of: key) }
         }
 
-        if let size, let capacity = volumeCapacity(PathUtil.parent(path)), capacity.used > 0 {
-            let share = Double(size) / Double(capacity.used)
+        if target.size > 0, let capacity = volumeCapacity(PathUtil.parent(target.path)), capacity.used > 0 {
+            let share = Double(target.size) / Double(capacity.used)
             if context.isAutomatic {
                 if share > SafetyGuard.maxAutomaticVolumeShare {
                     let percent = Int(share * 100)
@@ -302,22 +301,6 @@ public struct SafetyGuard: Sendable {
         return verdict
     }
 
-    /// The spellings `path` is checked under: as given, with symlinked parents resolved (a link can't smuggle a
-    /// protected folder in under another name), and, unless the item is itself a symlink, as stored on disk.
-    /// The final component of a symlink is not resolved: removing a symlink removes the link, not its target.
-    static func spellings(of path: String) -> [String] {
-        var result = [path]
-        func add(_ spelling: String?) {
-            if let spelling, !result.contains(spelling) { result.append(spelling) }
-        }
-        add(PathUtil.resolveParent(path))
-        var st = stat()
-        if lstat(path, &st) == 0, st.st_mode & S_IFMT != S_IFLNK {
-            add(PathUtil.realpath(path))
-        }
-        return result
-    }
-
     /// Checks that can never be overridden.
     private func checkHardLimits(_ path: String, into verdict: inout SafetyVerdict) {
         let key = PathUtil.comparisonKey(path)
@@ -333,18 +316,18 @@ public struct SafetyGuard: Sendable {
             verdict.raise(
                 .block,
                 critical.key == key
-                    ? "\(PathUtil.abbreviate(critical.path, home: home)) is a protected system or home location"
-                    : "Removing this would also remove \(PathUtil.abbreviate(critical.path, home: home)), which is protected")
+                    ? "\(abbreviated(critical.path)) is a protected system or home location"
+                    : "Removing this would also remove \(abbreviated(critical.path)), which is protected")
         }
         if let sealed = sealed.first(where: { PathUtil.isAncestorOrEqual($0.key, of: key) }) {
-            verdict.raise(.block, "\(PathUtil.abbreviate(sealed.path, home: home)) and everything inside it are never removed")
+            verdict.raise(.block, "\(abbreviated(sealed.path)) and everything inside it are never removed")
         }
         if mountKeys.contains(key) || mountKeys.contains(where: { $0 != "/" && PathUtil.isStrictAncestor(key, of: $0) }) {
             verdict.raise(.block, "This is (or contains) a mounted volume")
         }
         for protected in userProtected
         where PathUtil.isAncestorOrEqual(protected.key, of: key) || PathUtil.isAncestorOrEqual(key, of: protected.key) {
-            verdict.raise(.block, "Protected in your configuration: \(PathUtil.abbreviate(protected.path, home: home))")
+            verdict.raise(.block, "Protected in your configuration: \(abbreviated(protected.path))")
         }
         if parts.contains(".git") {
             verdict.raise(.block, "Git metadata is never removed")
@@ -357,6 +340,18 @@ public struct SafetyGuard: Sendable {
             if located || parts.contains(where: { protected.names.contains(String($0)) }) {
                 verdict.raise(.block, "Protected by rule “\(protected.rule.name)”")
             }
+        }
+    }
+
+    /// `path` with either spelling of home shown as `~`.
+    private func abbreviated(_ path: String) -> String {
+        let real = PathUtil.realpath(home)
+        return [home, real].compactMap { $0 }.lazy.map { PathUtil.abbreviate(path, home: $0) }.first { $0 != path } ?? path
+    }
+
+    private static func unique(_ paths: [String]) -> [String] {
+        paths.reduce(into: []) { result, path in
+            if !result.contains(path) { result.append(path) }
         }
     }
 }

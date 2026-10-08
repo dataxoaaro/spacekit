@@ -1,0 +1,260 @@
+import Foundation
+import Testing
+
+@testable import SpaceKitCore
+
+/// The removal module: one target per item, read from the disk once, is what the guard judges and what leaves.
+/// Anything that changed at its path after that (a symlink swapped in, a different folder put in its place, a volume
+/// mounted inside it) is refused or left, never followed.
+@Suite("Removal: one resolved target")
+struct RemovalTests {
+    let manual = CleanupContext.manual
+
+    func target(_ tree: TempTree, _ relative: String, probing: Bool = true) -> RemovalTarget {
+        sandboxExecutor(tree).remover.target(of: CleanupItem(path: tree.path(relative), size: 0), probingRepositories: probing)
+    }
+
+    @Test("The target pins what is at the path, where it is resolved, and the guard's facts")
+    func targetFacts() throws {
+        let tree = try TempTree()
+        try tree.file("real/app/.git/HEAD", bytes: 10)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("link"), withDestinationPath: tree.path("real"))
+
+        let probed = target(tree, "link/app")
+        #expect(probed.path == tree.path("link/app"))
+        #expect(probed.resolvedPath == tree.path("real/app"))
+        #expect(probed.spellings.contains(tree.path("real/app")))
+        #expect(probed.isFolder)
+        #expect(probed.isRepository, "probed on the disk although the item recorded none")
+        var st = stat()
+        #expect(lstat(tree.path("real/app"), &st) == 0)
+        #expect(probed.identity == RemovalTarget.Identity(st))
+
+        let recorded = target(tree, "link/app", probing: false)
+        #expect(!recorded.isRepository, "a review uses what the scan recorded")
+        #expect(target(tree, "missing").identity == nil)
+    }
+
+    @Test("An item swapped for a symlink after it was checked is refused, by delete and by Trash")
+    func itemSwappedForSymlink() throws {
+        for method in [Remover.Method.delete, .trash] {
+            let tree = try TempTree()
+            try tree.file("home/cache/item/x", bytes: 100)
+            try tree.file("home/victim/keep", bytes: 100)
+            let remover = sandboxExecutor(tree).remover
+            let checked = target(tree, "home/cache/item")
+
+            try FileManager.default.removeItem(atPath: tree.path("home/cache/item"))
+            try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache/item"), withDestinationPath: tree.path("home/victim"))
+
+            #expect(throws: (any Error).self) { try remover.remove(checked, by: method) }
+            #expect(onDisk(tree.path("home/cache/item")), "the link stays: it isn't what was checked")
+            #expect(onDisk(tree.path("home/victim/keep")))
+            #expect(!onDisk(tree.path("home/.Trash/item")))
+        }
+    }
+
+    @Test("A parent folder replaced after the check (A-B-A) is refused, even holding the same file")
+    func parentSwappedAndBack() throws {
+        let tree = try TempTree()
+        try tree.file("parent/item", bytes: 100)
+        try tree.directory("elsewhere")
+        let remover = sandboxExecutor(tree).remover
+        let checked = target(tree, "parent/item")
+
+        // A: the checked folder moves away. B: a symlink stands in for it. A': a new folder with a hard link to the
+        // same file, so the item itself still matches.
+        #expect(rename(tree.path("parent"), tree.path("parent-old")) == 0)
+        try FileManager.default.createSymbolicLink(atPath: tree.path("parent"), withDestinationPath: tree.path("elsewhere"))
+        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete) }
+        #expect(unlink(tree.path("parent")) == 0)
+        try tree.directory("parent")
+        #expect(link(tree.path("parent-old/item"), tree.path("parent/item")) == 0)
+
+        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete) }
+        #expect(onDisk(tree.path("parent/item")))
+        #expect(onDisk(tree.path("parent-old/item")))
+    }
+
+    /// A test can't mount a volume, so it stands one in through the executor's device seam: the folder named `mnt`
+    /// reads as being on another device, the way a volume mounted there after the guard's check would.
+    @Test("A folder on another volume inside the item is left and reported; the rest is removed")
+    func mountedSubtreeLeft() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/keep/x", bytes: 1_000)
+        try tree.file("home/Projects/old/mnt/disk/y", bytes: 1_000)
+        var executor = sandboxExecutor(tree)
+        executor.device = { fd in
+            var st = stat()
+            guard fstat(fd, &st) == 0 else { return nil }
+            return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
+        }
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 2_000)], useTrash: false)
+        let report = manualRun(plan, with: executor)
+
+        #expect(onDisk(tree.path("home/Projects/old/mnt/disk/y")), "nothing on the other volume is touched")
+        #expect(!onDisk(tree.path("home/Projects/old/keep")))
+        #expect(report.items.first?.outcome.isRemoved == true)
+        #expect(report.warnings.contains { $0.contains("old/mnt") && $0.contains("another volume") })
+    }
+
+    @Test("A volume and an entry that can't be removed in one item: both stay and are reported, the rest is journaled")
+    func mountedSubtreeAndLockedEntry() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/keep/x", bytes: 1_000)
+        try tree.file("home/Projects/old/locked/z", bytes: 1_000)
+        try tree.file("home/Projects/old/mnt/disk/y", bytes: 1_000)
+        let locked = tree.path("home/Projects/old/locked/z")
+        #expect(chflags(locked, UInt32(UF_IMMUTABLE)) == 0)
+        defer { chflags(locked, 0) }
+        var executor = sandboxExecutor(tree)
+        executor.device = { fd in
+            var st = stat()
+            guard fstat(fd, &st) == 0 else { return nil }
+            return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
+        }
+        let gone = tree.allocated("home/Projects/old/keep/x")
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 3_000)], useTrash: false)
+        let report = manualRun(plan, with: executor)
+
+        #expect(!onDisk(tree.path("home/Projects/old/keep")))
+        #expect(onDisk(locked))
+        #expect(onDisk(tree.path("home/Projects/old/mnt/disk/y")))
+        guard case .failed(let reason) = report.items.first?.outcome else {
+            Issue.record("expected a failure, got \(String(describing: report.items.first?.outcome))")
+            return
+        }
+        #expect(reason.contains("locked/z"), "the failure names the entry that couldn't be removed, not the volume")
+        #expect(report.warnings.contains { $0.contains("old/mnt") && $0.contains("another volume") })
+        #expect(report.partiallyFreed[tree.path("home/Projects/old")] == gone)
+        #expect(journalEntries(tree).map(\.bytes) == [gone])
+    }
+
+    @Test("A target that changed before anything was deleted is refused as such, not as a deletion that stopped part way")
+    func refusedBeforeDeleting() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/item/a", bytes: 1_000)
+        let remover = sandboxExecutor(tree).remover
+        let checked = target(tree, "home/cache/item")
+        try FileManager.default.removeItem(atPath: tree.path("home/cache/item"))
+        try tree.file("home/cache/item/b", bytes: 1_000)
+
+        #expect(throws: SafeRemoval.Refused.self) { try remover.remove(checked, by: .delete) }
+        #expect(onDisk(tree.path("home/cache/item/b")))
+    }
+
+    @Test("An item that is itself on another volume than its folder is refused")
+    func mountedItemRefused() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/mnt/y", bytes: 1_000)
+        var executor = sandboxExecutor(tree)
+        executor.device = { fd in
+            var st = stat()
+            guard fstat(fd, &st) == 0 else { return nil }
+            return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
+        }
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/mnt"), size: 1_000)], useTrash: false)
+        let report = manualRun(plan, with: executor)
+        #expect(onDisk(tree.path("home/Projects/mnt/y")))
+        #expect(report.items.first?.outcome.isRemoved == false)
+    }
+
+    @Test("A move to the Trash that took something other than the checked item is reported, not called removed")
+    func trashVerifiedAfterwards() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        try tree.file("home/Projects/other/y", bytes: 1_000)
+        var executor = sandboxExecutor(tree)
+        let move = executor.trash
+        let aside = tree.path("home/Projects/moved-aside")
+        let other = tree.path("home/Projects/other")
+        // The swap lands in the moment between the identity check and the move.
+        executor.trash = { path in
+            try FileManager.default.moveItem(atPath: path, toPath: aside)
+            try FileManager.default.moveItem(atPath: other, toPath: path)
+            return try move(path)
+        }
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000)], useTrash: true)
+        let report = manualRun(plan, with: executor)
+        let outcome = try #require(report.items.first?.outcome)
+        #expect(!outcome.isRemoved)
+        #expect(report.failures.first?.reason.contains(".Trash") == true, "says where the wrong item went")
+        #expect(journalEntries(tree).isEmpty)
+    }
+
+    @Test("A move to the Trash of the checked item records where it went")
+    func trashMovesCheckedItem() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000)], useTrash: true)
+        let report = manualRun(plan, with: sandboxExecutor(tree))
+        #expect(report.items.first?.outcome.trashedTo == tree.path("home/.Trash/old"))
+        #expect(onDisk(tree.path("home/.Trash/old/x")))
+    }
+
+    @Test("One place decides Trash or delete")
+    func trashOrDelete() throws {
+        let tree = try TempTree()
+        try tree.file("home/cache/a", bytes: 10)
+        try tree.file("home/.Trash/b", bytes: 10)
+        let safe = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let review = cacheRule(tree, level: .review, paths: ["home/cache"])
+        let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
+        var executor = sandboxExecutor(tree)
+        let item = target(tree, "home/cache/a")
+        let trashed = target(tree, "home/.Trash/b")
+
+        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: manual) == .delete)
+        #expect(executor.remover.method(for: item, useTrash: true, rule: safe, context: manual) == .trash)
+        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: automatic) == .delete)
+        #expect(executor.remover.method(for: item, useTrash: false, rule: review, context: automatic) == .trash)
+        #expect(executor.remover.method(for: trashed, useTrash: true, rule: nil, context: manual) == .delete)
+        #expect(executor.remover.method(for: trashed, useTrash: true, rule: nil, context: automatic) == nil)
+        executor.alwaysTrash = true
+        #expect(executor.remover.method(for: item, useTrash: false, rule: safe, context: manual) == .trash)
+        #expect(executor.remover.method(for: trashed, useTrash: false, rule: safe, context: manual) == .delete)
+    }
+}
+
+@Suite("Safety guard: facts from the removal target")
+struct SafetyGuardTargetTests {
+    let manual = CleanupContext.manual
+
+    @Test("The guard judges the repository and size facts the target carries")
+    func readsTargetFacts() throws {
+        let tree = try TempTree()
+        try tree.directory("home/Projects/app/.git")
+        let guardian = SafetyGuard(
+            home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false,
+            volumeCapacity: { _ in VolumeCapacity(name: "Test", mountPoint: "/", total: 2000, freeNow: 1000, available: 1000) })
+        let path = tree.path("home/Projects/app")
+        let probed = RemovalTarget.at(
+            path, home: guardian.home, size: 0, repositories: .probed(recordedRepository: false, recordedContains: false))
+        #expect(guardian.evaluate(probed, rule: nil, context: manual).reasons.contains("This folder is a git repository (source code)"))
+
+        let large = RemovalTarget.at(
+            path, home: guardian.home, size: 300, repositories: .recorded(isRepository: false, containsRepository: false))
+        #expect(guardian.evaluate(large, rule: nil, context: manual).reasons.contains { $0.contains("of the disk's used space") })
+    }
+
+    @Test("A symlinked home is protected at its real location by the built-in lists and your own")
+    func symlinkedHome() throws {
+        let tree = try TempTree()
+        for folder in ["real/Documents", "real/.ssh", "real/Library/Caches/app", "real/Downloads"] { try tree.directory(folder) }
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home"), withDestinationPath: tree.path("real"))
+        let guardian = SafetyGuard(
+            home: tree.path("home"), userProtectedPaths: ["~/Work/archive"], volumes: emptyVolumes, isRunningAsRoot: false)
+        func verdict(_ relative: String) -> SafetyVerdict {
+            let target = RemovalTarget.at(
+                tree.path(relative), home: guardian.home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
+            return guardian.evaluate(target, rule: nil, context: manual)
+        }
+        #expect(verdict("real").isBlocked)
+        #expect(verdict("real/Documents").isBlocked)
+        #expect(verdict("real/.ssh/id_ed25519").isBlocked)
+        #expect(verdict("real/Library/Caches").isBlocked)
+        #expect(verdict("real/Work/archive/2020").isBlocked, "a protected path that doesn't exist yet, under the real home")
+        #expect(verdict("real/Downloads/x.dmg").reasons == ["This is personal data, not a cache"])
+        #expect(!verdict("real/Library/Caches/app").isBlocked)
+    }
+}

@@ -4,7 +4,8 @@ import Foundation
 /// time. For the folders above the current one it keeps only their identity (device and inode), and it climbs back
 /// through `..`, checking that it arrives in the folder it came from. If a folder was moved elsewhere meanwhile, the
 /// walk stops instead of carrying on in the new parent. Entries that can't be removed are left and counted, and the
-/// walk carries on with the rest.
+/// walk carries on with the rest. A folder on another device than the item is a volume mounted inside it: the walk
+/// never enters it, and leaves it with the folders above it.
 struct TreeWalk {
     /// A folder the walk is inside, from the item down to the current one.
     struct Frame {
@@ -18,17 +19,26 @@ struct TreeWalk {
         var kept: Set<[CChar]> = []
         /// Something in here couldn't be removed and is already counted, so the folder itself isn't counted again.
         var failed = false
+        /// A volume is mounted somewhere below, so the folder stays without that being a failure.
+        var holdsVolume = false
         var passes = 1
     }
 
     /// The item's path, for messages.
     let root: String
+    /// The item's device. A folder on another one is a mounted volume.
+    let volume: dev_t
+    let device: SafeRemoval.DeviceReader
     private(set) var firstFailure: (path: String, code: Int32)?
     private(set) var failureCount = 0
+    /// Folders left because another volume is mounted on them.
+    private(set) var leftOnOtherVolumes: [String] = []
     private var stack: [Frame] = []
 
-    init(root: String) {
+    init(root: String, volume: dev_t, device: @escaping SafeRemoval.DeviceReader) {
         self.root = root
+        self.volume = volume
+        self.device = device
     }
 
     /// Empties the folder `name` (open as `top`) and removes it from `parent`. Closes `top`.
@@ -40,6 +50,13 @@ struct TreeWalk {
         while let index = stack.indices.last {
             if let entry = stack[index].pending.popLast() {
                 if let child = visit(entry, in: current) {
+                    let childDevice = device(child)
+                    guard childDevice == volume else {
+                        let code = errno
+                        close(child)
+                        if childDevice == nil { keep(entry, code: code) } else { leaveMounted(entry) }
+                        continue
+                    }
                     close(current)
                     current = child
                     let inside = frame(for: child, name: entry)
@@ -104,9 +121,26 @@ struct TreeWalk {
     /// Removes an emptied folder from the folder open as `parent`.
     private mutating func removeFolder(_ finished: Frame, in parent: Int32) {
         if unlinkat(parent, finished.name, AT_REMOVEDIR) == 0 || errno == ENOENT { return }
+        let code = errno
         // Swapped for a link or a file after it was opened: what the handle reached is empty; drop the entry.
-        if errno == ENOTDIR, unlinkat(parent, finished.name, 0) == 0 || errno == ENOENT { return }
-        keep(finished.name, code: errno, counted: finished.failed)
+        if code == ENOTDIR, unlinkat(parent, finished.name, 0) == 0 || errno == ENOENT { return }
+        if finished.holdsVolume { holdVolume(finished.name) }
+        // Left only because a volume is mounted below it: that isn't a failure.
+        if finished.holdsVolume && !finished.failed && code == ENOTEMPTY { return }
+        keep(finished.name, code: code, counted: finished.failed)
+    }
+
+    /// Leaves `entry` of the current folder, a volume mounted inside the item, as it is.
+    private mutating func leaveMounted(_ entry: [CChar]) {
+        leftOnOtherVolumes.append(path(of: entry))
+        holdVolume(entry)
+    }
+
+    /// Marks the current folder as holding a mounted volume at or below its entry `entry`, which stays.
+    private mutating func holdVolume(_ entry: [CChar]) {
+        guard let index = stack.indices.last else { return }
+        stack[index].kept.insert(entry)
+        stack[index].holdsVolume = true
     }
 
     private mutating func frame(for fd: Int32, name: [CChar]) -> Frame {

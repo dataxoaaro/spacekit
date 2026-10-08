@@ -413,8 +413,9 @@ struct ExecutionMechanicsTests {
         let tree = try TempTree()
         try tree.directory("real")
         try FileManager.default.createSymbolicLink(atPath: tree.path("link"), withDestinationPath: tree.path("real"))
-        #expect(throws: (any Error).self) { _ = try SafeRemoval.openDirectory(tree.path("link")) }
-        let fd = try SafeRemoval.openDirectory(tree.path("real"))
+        let real = identity(tree.path("real"))
+        #expect(throws: (any Error).self) { _ = try SafeRemoval.openDirectory(tree.path("link"), pinned: real) }
+        let fd = try SafeRemoval.openDirectory(tree.path("real"), pinned: real)
         close(fd)
     }
 
@@ -423,7 +424,7 @@ struct ExecutionMechanicsTests {
         let tree = try TempTree()
         try tree.directory("a")
         try tree.directory("b")
-        #expect(throws: (any Error).self) { _ = try SafeRemoval.openDirectory(tree.path("a"), expecting: tree.path("b")) }
+        #expect(throws: (any Error).self) { _ = try SafeRemoval.openDirectory(tree.path("a"), pinned: identity(tree.path("b"))) }
     }
 }
 

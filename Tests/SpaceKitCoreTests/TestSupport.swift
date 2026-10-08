@@ -90,3 +90,22 @@ func withUmask<T>(_ mask: mode_t, _ body: () throws -> T) throws -> T {
         return try body()
     }
 }
+
+extension SafetyGuard {
+    /// The guard's verdict on `path` as the disk has it now, with the facts a test names. Production code builds the
+    /// target itself and must say what it knows about repositories and size; tests default them.
+    func check(
+        _ path: String, size: UInt64 = 0, rule: Rule? = nil, context: CleanupContext, isRepository: Bool = false,
+        containsRepository: Bool = false
+    ) -> SafetyVerdict {
+        let target = RemovalTarget.at(
+            path, home: home, size: size, repositories: .recorded(isRepository: isRepository, containsRepository: containsRepository))
+        return evaluate(target, rule: rule, context: context)
+    }
+}
+
+/// What a removal target would pin for `path`: its device and inode, not following a final symlink.
+func identity(_ path: String) -> RemovalTarget.Identity? {
+    var st = stat()
+    return lstat(path, &st) == 0 ? RemovalTarget.Identity(st) : nil
+}

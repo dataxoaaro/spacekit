@@ -126,8 +126,12 @@ struct CleanCommand: ParsableCommand {
         let isFolder = (st.st_mode & S_IFMT) == S_IFDIR
         let kind: FindingItem.Kind = isFolder ? .directory : .file
         let rule = index.rule(for: path)
-        // Ask the guard before measuring, so `clean /` doesn't scan the whole disk just to refuse.
-        if context.safetyGuard.evaluate(path: path, rule: rule, context: .manual).isBlocked {
+        // Ask the guard before measuring, so `clean /` doesn't scan the whole disk just to refuse. Size and repositories
+        // don't block by hand; the review and the executor judge them once they're known.
+        let safetyGuard = context.safetyGuard
+        let unmeasured = RemovalTarget.at(
+            path, home: safetyGuard.home, size: 0, repositories: .recorded(isRepository: false, containsRepository: false))
+        if safetyGuard.evaluate(unmeasured, rule: rule, context: .manual).isBlocked {
             return CleanupItem(path: path, kind: kind, size: 0, ruleID: rule?.id, scanStarted: scanStarted)
         }
         var options = context.scanOptions

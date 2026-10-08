@@ -65,9 +65,9 @@ extension CleanupExecutor {
         if run.dryRun { return .wouldRemove(bytes: size) }
         guard resolve(directory) == checkedDirectory else { return CleanupExecutor.changedWhileChecking(directory) }
 
+        let name = PathUtil.lastComponent(item.path)
+        var trashedTo: String?
         do {
-            let name = PathUtil.lastComponent(item.path)
-            var trashedTo: String?
             switch removal {
             case .delete:
                 try SafeRemoval.delete(name, inDirectory: checkedDirectory)
@@ -75,16 +75,35 @@ extension CleanupExecutor {
                 try SafeRemoval.verifyUnchanged(checkedDirectory)
                 trashedTo = try trash(PathUtil.join(checkedDirectory, name)) ?? trashDirectory
             }
-            run.charge(size)
-            record(
-                entry(
-                    path: item.path, bytes: measured.freed, method: removal.journalMethod, ruleID: item.ruleID, context: context,
-                    trashedTo: trashedTo),
-                in: &run)
-            return .removed(bytes: measured.freed, trashedTo: trashedTo)
         } catch {
-            return .failed(reason: error.localizedDescription)
+            // Moving to the Trash is all or nothing; a deletion may have removed part of the item before it stopped.
+            guard removal == .delete else { return .failed(reason: error.localizedDescription) }
+            return partlyDeleted(item, before: measured, isFolder: isFolder, error: error, context: context, run: &run)
         }
+        run.charge(size)
+        record(
+            entry(
+                path: item.path, bytes: measured.freed, method: removal.journalMethod, ruleID: item.ruleID, context: context,
+                trashedTo: trashedTo),
+            in: &run)
+        return .removed(bytes: measured.freed, trashedTo: trashedTo)
+    }
+
+    /// A deletion that stopped part way: what's no longer there is charged, journaled and reported, so the budget
+    /// and the totals match the disk. The item still counts as failed, with what was deleted in the reason.
+    private func partlyDeleted(
+        _ item: CleanupItem, before: Measured, isFolder: Bool, error: Error, context: CleanupContext, run: inout Run
+    ) -> CleanupOutcome {
+        let reason = error.localizedDescription
+        var st = stat()
+        let left = lstat(item.path, &st) == 0 ? measure(item.path, isFolder: isFolder, fallback: before.size) : Measured(size: 0, freed: 0)
+        let gone = before.size - min(before.size, left.size)
+        let freed = before.freed - min(before.freed, left.freed)
+        guard gone > 0 else { return .failed(reason: reason) }
+        run.charge(gone)
+        run.report.partiallyFreed[item.path] = freed
+        record(entry(path: item.path, bytes: freed, method: .delete, ruleID: item.ruleID, context: context), in: &run)
+        return .failed(reason: "\(reason). \(ByteCount.format(freed)) of it was deleted")
     }
 
     /// Removes the plain files directly inside the checked folder, leaving subfolders alone. Each file is checked

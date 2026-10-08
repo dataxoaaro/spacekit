@@ -49,10 +49,16 @@ public struct CleanupReport: Sendable {
     public var warnings: [String] = []
     /// Trash destinations of loose files moved to the Trash, keyed by the folder (the loose-files item's `path`).
     public var trashedLooseFiles: [String: [String]] = [:]
+    /// Bytes deleted from items that failed part way, keyed by the item's `path`. Their outcome is `.failed`; these
+    /// bytes are gone all the same, so they count in `freedBytes` and were journaled and charged to the budget.
+    public var partiallyFreed: [String: UInt64] = [:]
 
     /// Everything taken off its original location, including what went to the Trash.
     public var freedBytes: UInt64 {
-        items.reduce(0) { $0 &+ $1.outcome.freedBytes } &+ commands.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let itemBytes = items.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let commandBytes = commands.reduce(0) { $0 &+ $1.outcome.freedBytes }
+        let partialBytes = partiallyFreed.values.reduce(0, &+)
+        return itemBytes &+ commandBytes &+ partialBytes
     }
 
     /// Moved to the Trash: still using disk space until the Trash is emptied.

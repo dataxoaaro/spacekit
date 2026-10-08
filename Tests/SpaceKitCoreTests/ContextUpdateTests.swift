@@ -21,6 +21,13 @@ private struct ConfigFixture {
 
     func text() throws -> String { try String(contentsOfFile: file, encoding: .utf8) }
 
+    /// `context`'s executor, moving what it trashes into the temp tree's own `.Trash`, never the real one.
+    func executor(of context: SpaceKitContext) -> CleanupExecutor {
+        var executor = context.executor
+        executor.trash = sandboxTrash(home: tree.root)
+        return executor
+    }
+
     /// A user rule that only a library loaded after this call contains.
     func addRule(_ id: String) throws {
         try "id: \(id)\nname: \(id)\npath: ~/.\(id)/cache\nsafety: safe\naction: remove\n"
@@ -36,13 +43,13 @@ struct ContextUpdateTests {
         try fixture.tree.file("work/old/x", bytes: 1_000)
         let context = SpaceKitContext.load(paths: fixture.paths)
         let plan = CleanupPlan(items: [CleanupItem(path: fixture.tree.path("work/old"), size: 1_000)], useTrash: false)
-        let reviewed = CleanupReview(plan, executor: context.executor).acknowledge(acceptingWarnings: true)
+        let reviewed = CleanupReview(plan, executor: fixture.executor(of: context)).acknowledge(acceptingWarnings: true)
 
         let reread = context.rereadingConfig()
-        #expect(!reread.executor.execute(reviewed, dryRun: true).reviewOutdated, "nothing changed, so the review holds")
+        #expect(!fixture.executor(of: reread).execute(reviewed, dryRun: true).reviewOutdated, "nothing changed, so the review holds")
 
         let changed = try context.applying { $0.safety.protectedPaths = ["~/Work"] }
-        let refused = changed.executor.execute(reviewed, dryRun: true)
+        let refused = fixture.executor(of: changed).execute(reviewed, dryRun: true)
         #expect(refused.reviewOutdated)
         #expect(refused.items.map(\.outcome) == [.skipped(reason: CleanupExecutor.outdatedReview, kind: .changedSinceReview)])
     }

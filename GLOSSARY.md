@@ -50,7 +50,7 @@
 
 **Workspace**: the Explore tree a person looks at in the app or the TUI, with its analysis (`Workspace`); the only place that changes the tree after the scan, waiting for every reader first. _Avoid_: session, model, tree store.
 
-**Reader**: work on a thread other than the front end's that reads the workspace's tree, inside `Workspace.read` or during a read lease, such as an analysis or the map layout; changes wait until none is left. The front end's own thread reads the tree directly, since changes run only there. _Avoid_: lock holder.
+**Reader**: background work, such as an analysis or the map layout, that reads the workspace's tree inside `Workspace.read` or during a read lease; changes wait until none is left, and the front end's own thread, where changes run, is never one. _Avoid_: lock holder.
 
 **Read lease**: a read of the workspace's tree that the front end's thread begins and the background work it hands nodes to ends (`Workspace.beginRead`, `ReadLease`), so no change can land in between. _Avoid_: lock, token.
 
@@ -102,6 +102,6 @@
 
 **Suggestion**: a cleanup plan a `suggest` job prepared, waiting for a person to approve or dismiss it. _Avoid_: pending cleanup, proposal.
 
-**Approval**: a manual job run of a suggestion: its plan, narrowed to what the job's conditions still allow, reviewed and run; with nothing left (nothing still eligible, or everything left blocked), approving dismisses it without a run. Either way it records the job's last run. The job's size threshold doesn't hold it back: it held when the suggestion was made, and approving is the person's go-ahead. _Avoid_: acceptance (that's for warnings).
+**Approval**: a manual job run of a suggestion that reviews and runs its plan, narrowed to what the job's conditions still allow and not held back by the job's size threshold, or dismisses it without a run when nothing is left (nothing still eligible, or everything left blocked), recording the job's last run either way. _Avoid_: acceptance (that's for warnings).
 
 **Settling a suggestion**: what an approval does with it afterwards: dismiss it when nothing eligible is left, otherwise keep it narrowed to what's left with the problems the run hit. _Avoid_: cleanup of suggestions.

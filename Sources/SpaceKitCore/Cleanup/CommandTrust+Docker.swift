@@ -17,6 +17,12 @@ extension CommandTrust {
 
     /// `buildx` drivers that build inside a Docker daemon; the daemon's endpoint then says where.
     static let localBuilderDrivers: Set<String> = ["docker", "docker-container"]
+    /// How an endpoint served through a unix socket on this Mac starts.
+    static let localSocketScheme = "unix://"
+    /// How a refusal of a builder elsewhere ends.
+    static let localBuilderOnly = "SpaceKit only prunes a builder in a Docker running on this Mac"
+    /// How a refusal ends when the selected builder can't be told.
+    static let builderUnknown = "so SpaceKit can't tell where docker builder acts"
 
     /// Why `arguments`, a `docker` command, would act somewhere other than this Mac, or `nil`.
     func dockerRefusal(_ arguments: [String], docker: DockerCLI) -> String? {
@@ -24,7 +30,7 @@ extension CommandTrust {
         switch active {
         case .failure(let problem):
             return "Couldn't tell which Docker the active context uses (docker context inspect: \(problem))"
-        case .success(let endpoint) where !endpoint.hasPrefix("unix://"):
+        case .success(let endpoint) where !endpoint.hasPrefix(CommandTrust.localSocketScheme):
             return "The active Docker context points at \(endpoint.isEmpty ? "no endpoint" : CommandTrust.shown(endpoint)), "
                 + "not at a socket on this Mac; SpaceKit only cleans a Docker running on this Mac (docker context use)"
         case .success:
@@ -54,7 +60,7 @@ extension CommandTrust {
         let name = CommandTrust.shown(builder.name)
         guard CommandTrust.localBuilderDrivers.contains(builder.driver) else {
             return "The selected buildx builder \(name) uses the \(CommandTrust.shown(builder.driver)) driver, which builds outside this "
-                + "Mac's Docker; SpaceKit only prunes a builder in a Docker running on this Mac (docker buildx use)"
+                + "Mac's Docker; \(CommandTrust.localBuilderOnly) (docker buildx use)"
         }
         guard !builder.endpoints.isEmpty else { return "The selected buildx builder \(name) has no nodes to check" }
         for endpoint in builder.endpoints {
@@ -69,11 +75,10 @@ extension CommandTrust {
         let listed = docker.ask(["buildx", "ls", "--format", "json"])
         if listed.status == 0 && !listed.timedOut {
             guard let builders = BuildxBuilder.list(listed.output) else {
-                return .failure(
-                    Unanswered("Couldn't read the builders docker buildx ls listed, so SpaceKit can't tell where docker builder acts"))
+                return .failure(Unanswered("Couldn't read the builders docker buildx ls listed, \(builderUnknown)"))
             }
             guard let builder = builders.first(where: \.isCurrent) else {
-                return .failure(Unanswered("docker buildx ls shows no selected builder, so SpaceKit can't tell where docker builder acts"))
+                return .failure(Unanswered("docker buildx ls shows no selected builder, \(builderUnknown)"))
             }
             return .success(builder)
         }
@@ -102,17 +107,17 @@ extension CommandTrust {
     /// looked up the same way as the active one.
     private func nodeRefusal(_ endpoint: String, builder: String, docker: DockerCLI) -> String? {
         let shownEndpoint = CommandTrust.shown(endpoint)
-        if endpoint.hasPrefix("unix://") { return nil }
+        if endpoint.hasPrefix(CommandTrust.localSocketScheme) { return nil }
         guard !endpoint.isEmpty, !endpoint.contains("://"), !endpoint.hasPrefix("-") else {
             return "The selected buildx builder \(builder) runs at \(shownEndpoint), not at a socket on this Mac; "
-                + "SpaceKit only prunes a builder in a Docker running on this Mac"
+                + CommandTrust.localBuilderOnly
         }
         switch CommandTrust.dockerEndpoint(of: endpoint, docker: docker) {
         case .failure(let problem):
             return "Couldn't tell where the context \(shownEndpoint) of buildx builder \(builder) points (\(problem))"
-        case .success(let host) where !host.hasPrefix("unix://"):
+        case .success(let host) where !host.hasPrefix(CommandTrust.localSocketScheme):
             return "The selected buildx builder \(builder) uses the context \(shownEndpoint) at \(CommandTrust.shown(host)), "
-                + "not a socket on this Mac; SpaceKit only prunes a builder in a Docker running on this Mac"
+                + "not a socket on this Mac; \(CommandTrust.localBuilderOnly)"
         case .success:
             return nil
         }

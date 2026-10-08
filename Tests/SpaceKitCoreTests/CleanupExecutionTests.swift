@@ -494,6 +494,36 @@ struct CheckedLocationTests {
         let confirmed = manualRun(known, with: executor)
         #expect(confirmed.items.first?.outcome.isRemoved == true)
     }
+
+    @Test("A loose file refused at removal time is reported as changed since the review, never dropped quietly")
+    func refusedLooseFileReported() throws {
+        let tree = try TempTree()
+        try tree.file("home/stuff/a.log", bytes: 1_000)
+        let secret = try tree.file("home/stuff/secret.log", bytes: 1_000)
+        waitForClockTick()
+        // The review judges the folder's files as a whole; only the run checks each file, and this one is protected.
+        let executor = sandboxExecutor(tree, protectedPaths: [secret])
+        func plan(_ names: [String]) -> CleanupPlan {
+            CleanupPlan(
+                items: [
+                    CleanupItem(
+                        path: tree.path("home/stuff"), kind: .looseFiles, size: 2_000, looseFileNames: names, scanStarted: Date())
+                ], useTrash: false)
+        }
+
+        let alone = manualRun(plan(["secret.log"]), with: executor)
+        let skipped = try #require(alone.skipped.first)
+        #expect(skipped.reason.hasPrefix(CleanupExecutor.changedSinceReview))
+        #expect(skipped.reason.contains("secret.log"))
+        #expect(alone.hasProblems)
+
+        let both = manualRun(plan(["a.log", "secret.log"]), with: executor)
+        #expect(both.items.first?.outcome.isRemoved == true)
+        #expect(both.warnings.contains { $0.contains("secret.log") && $0.contains(CleanupExecutor.changedSinceReview) })
+        #expect(both.hasProblems)
+        #expect(!onDisk(tree.path("home/stuff/a.log")))
+        #expect(onDisk(secret))
+    }
 }
 
 @Suite("Cleanup execution: bytes a removal actually frees")

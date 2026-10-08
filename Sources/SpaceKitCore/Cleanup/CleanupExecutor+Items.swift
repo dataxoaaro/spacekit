@@ -135,12 +135,16 @@ extension CleanupExecutor {
         var removedCount = 0
         var overBudgetCount = 0
         var failures: [String] = []
+        // Files the check at removal time refused: the review judged the folder's files as a whole, so a refusal of one
+        // file is news to the person and is reported, never dropped.
+        var refusals: [(path: String, outcome: CleanupOutcome)] = []
         for name in names {
             var st = stat()
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             let file = target.entry(name, stat: st, namedIn: item.path)
             guard !file.changed(after: scanStarted) else { continue }
-            guard CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), reviewed: reviewed) == nil else {
+            if let refused = CleanupExecutor.refusal(verdict(for: file, ruleID: item.ruleID, context: context), reviewed: reviewed) {
+                refusals.append((file.path, refused))
                 continue
             }
             // A file with another hard link keeps its bytes on disk: charged to the budget, but not freed.
@@ -166,14 +170,23 @@ extension CleanupExecutor {
         }
 
         let budgetNote = overBudgetCount > 0 ? "\(overBudgetCount) loose files over this run's budget were left" : nil
+        let refused = refusals.compactMap { path, outcome -> String? in
+            guard case .skipped(let reason, _) = outcome else { return nil }
+            return "Left \(PathUtil.abbreviate(path, home: safety.home)): \(reason)"
+        }
         guard removedCount > 0 else {
             if let first = failures.first {
+                run.report.warnings += refused
                 return .failed(reason: first + (failures.count > 1 ? " (and \(failures.count - 1) more)" : ""))
+            }
+            if let first = refusals.first, case .skipped(let reason, let kind) = first.outcome {
+                let more = refusals.count > 1 ? " and \(refusals.count - 1) more" : ""
+                return .skipped(reason: "\(reason) (\(PathUtil.abbreviate(first.path, home: safety.home))\(more))", kind: kind)
             }
             if let budgetNote { return .skipped(reason: budgetNote, kind: .overBudget) }
             return .skipped(reason: "None of the files from the reviewed plan are left", kind: .gone)
         }
-        run.report.warnings += failures
+        run.report.warnings += failures + refused
         if !trashLocations.isEmpty { run.report.trashedLooseFiles[item.path] = trashLocations }
         if let budgetNote { run.report.warnings.append("\(PathUtil.abbreviate(item.path, home: safety.home)): \(budgetNote)") }
         return .removed(bytes: totalFreed, trashedTo: method == .trash ? trashLocations.first.map(PathUtil.parent) : nil)

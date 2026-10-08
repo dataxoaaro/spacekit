@@ -24,7 +24,7 @@
 
 **Plain tool name**: a `safety.allowedCommands` entry made only of ASCII letters, digits, `.`, `_`, `+` and `-`, so the file system's case and Unicode folding can't turn it into another program's name. _Avoid_: safe name, ASCII name.
 
-**Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, DEVELOPER_DIR, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; nothing else. _Avoid_: sanitized env.
+**Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; nothing else. _Avoid_: sanitized env.
 
 **Process runner**: the port the executor finds and runs tools through (`ProcessRunner`); `SystemProcessRunner` starts real processes, tests use a recording runner. _Avoid_: shell (tools never run in one).
 

@@ -116,7 +116,7 @@ struct CommandTrustTests {
         #expect(refused("/usr/local/bin/mytool", builtin: false, .manual))
     }
 
-    @Test("Tools get a cleaned environment: PATH, HOME, locale, tool homes, Homebrew settings and DEVELOPER_DIR stay; the rest goes")
+    @Test("Tools get a cleaned environment: PATH, HOME, locale, tool homes and Homebrew settings stay; the rest goes")
     func cleanedEnvironment() {
         let parent = [
             "PATH": "/usr/bin:relative", "HOME": "/Users/tester", "USER": "tester", "LOGNAME": "tester", "LANG": "en_US.UTF-8",
@@ -131,11 +131,14 @@ struct CommandTrustTests {
             "HOMEBREW_NO_CLEANUP_FORMULAE": "llvm,python@3.12", "HOMEBREW_CLEANUP_MAX_AGE_DAYS": "365", "HOMEBREW_NO_AUTO_UPDATE": "1",
             "HOMEBREW_GITHUB_API_TOKEN": "ghp_y", "HOMEBREW_DOCKER_REGISTRY_BASIC_AUTH_TOKEN": "b", "HOMEBREW_ARTIFACT_PASSWORD": "p",
             "HOMEBREW_BOTTLE_SECRET": "s", "HOMEBREW_API_KEY": "k", "HOMEBREW_GITHUB_PACKAGES_AUTH": "a",
-            // Which Xcode simctl and xcrun use, so the simulators SpaceKit measured are the ones cleaned.
-            "DEVELOPER_DIR": "/Applications/Xcode-beta.app/Contents/Developer",
+            // Picks the developer folder xcrun starts tools from: one of the person's own folders would get SpaceKit's Full
+            // Disk Access.
+            "DEVELOPER_DIR": "/Users/tester/Developer",
         ]
         let environment = Shell.toolEnvironment(from: parent, home: "/Users/tester")
-        let droppedMarks = ["DOCKER", "OLLAMA_HOST", "TOKEN", "AWS", "DYLD", "NODE", "SSH", "PATH", "PASSWORD", "SECRET", "KEY", "AUTH"]
+        let droppedMarks = [
+            "DEVELOPER", "DOCKER", "OLLAMA_HOST", "TOKEN", "AWS", "DYLD", "NODE", "SSH", "PATH", "PASSWORD", "SECRET", "KEY", "AUTH",
+        ]
         for kept in parent.keys where !droppedMarks.contains(where: { kept.contains($0) }) {
             #expect(environment[kept] == parent[kept], "\(kept)")
         }
@@ -143,7 +146,7 @@ struct CommandTrustTests {
             "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "OLLAMA_HOST", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "HF_TOKEN",
             "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "SSH_AUTH_SOCK", "HOMEBREW_GITHUB_API_TOKEN",
             "HOMEBREW_DOCKER_REGISTRY_BASIC_AUTH_TOKEN", "HOMEBREW_ARTIFACT_PASSWORD", "HOMEBREW_BOTTLE_SECRET", "HOMEBREW_API_KEY",
-            "HOMEBREW_GITHUB_PACKAGES_AUTH",
+            "HOMEBREW_GITHUB_PACKAGES_AUTH", "DEVELOPER_DIR",
         ] {
             #expect(environment[dropped] == nil, "\(dropped)")
         }

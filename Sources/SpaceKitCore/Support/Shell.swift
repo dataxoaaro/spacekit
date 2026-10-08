@@ -64,11 +64,12 @@ public enum Shell {
     /// How long a tool gets to exit after SIGTERM before it (and its process group) gets SIGKILL.
     static let terminationGrace: TimeInterval = 1
 
-    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, the variables
-    /// that move a tool's own cache, so a tool cleans the cache SpaceKit measured, and DEVELOPER_DIR, the Xcode whose
-    /// simulators `xcrun simctl` cleans.
+    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, and the
+    /// variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured. DEVELOPER_DIR isn't one:
+    /// it picks the folder `xcrun` starts developer tools from, so any process of the person's could set it (through
+    /// `launchctl setenv`) to a folder of its own and have its program run with SpaceKit's Full Disk Access.
     static let keptVariables: Set<String> = [
-        "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "DEVELOPER_DIR",
+        "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
         "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "npm_config_cache", "NPM_CONFIG_CACHE", "PNPM_HOME",
         "YARN_CACHE_FOLDER", "GRADLE_USER_HOME", "OLLAMA_MODELS",
     ]

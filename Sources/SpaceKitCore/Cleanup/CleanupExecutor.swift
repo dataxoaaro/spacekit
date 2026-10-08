@@ -267,7 +267,9 @@ public struct CleanupExecutor: Sendable {
     ///
     /// A reviewed row may need confirmation only for reasons the review showed and the person accepted. A reason it
     /// didn't show (a repository that appeared, a folder that grew past the share of the disk it was shown with, a
-    /// block such as a volume mounted since) skips the row as changed since the review, which counts as a problem.
+    /// block such as a volume mounted since) skips the row as changed since the review, which counts as a problem. So
+    /// does a row whose shown warnings the person didn't accept (`--yes` without `--accept-warnings`): it was selected
+    /// and left undone.
     static func refusal(_ verdict: SafetyVerdict, reviewed: ReviewRecord.Row?) -> CleanupOutcome? {
         let reasons = verdict.reasons.joined(separator: "; ")
         switch verdict.decision {
@@ -280,13 +282,17 @@ public struct CleanupExecutor: Sendable {
             guard let reviewed else { return .skipped(reason: "Needs confirmation: " + reasons) }
             let unseen = verdict.reasons.filter { !reviewed.showed($0) }
             if !unseen.isEmpty { return .skipped(reason: changedSinceReview + unseen.joined(separator: "; ")) }
-            return reviewed.accepted ? nil : .skipped(reason: "Needs confirmation: " + reasons)
+            return reviewed.accepted ? nil : .skipped(reason: notAccepted + reasons)
         }
     }
 
     /// Starts the skip reason of a row that changed after the review: it gained a reason the review didn't show, or
     /// isn't at the location the review judged. Reports treat it as a problem, because the person never saw that.
     public static let changedSinceReview = "Changed since you reviewed it: "
+
+    /// Starts the skip reason of a reviewed row whose warnings the person saw and didn't accept. Reports treat it as a
+    /// problem: the row was selected and didn't run.
+    public static let notAccepted = "Warnings not accepted: "
 
     /// Why every row of a plan reviewed with another executor is skipped.
     public static let settingsChanged = changedSinceReview + "SpaceKit's settings changed after the review. Review it again."

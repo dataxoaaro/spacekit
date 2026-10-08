@@ -32,11 +32,45 @@ struct CleanupReviewTests {
         #expect(review.warningCount == 1)
 
         let unacknowledged = executor.execute(review.acknowledge(acceptingWarnings: false), dryRun: false)
-        #expect(unacknowledged.skipped.first?.reason.hasPrefix("Needs confirmation: ") == true)
+        #expect(unacknowledged.skipped.first?.reason.hasPrefix(CleanupExecutor.notAccepted) == true)
+        #expect(unacknowledged.hasProblems, "a selected row left undone counts")
         #expect(onDisk(tree.path("home/Projects/old/x")))
 
         let acknowledged = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: false)
         #expect(acknowledged.items.first?.outcome.isRemoved == true)
+    }
+
+    @Test("Items and commands left because their warnings weren't accepted are reported alike, as problems")
+    func notAcceptedRowsAreProblems() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        try tree.file("home/cache/a/y", bytes: 1_000)
+        var tool = Rule(
+            id: "tool", name: "Tool", paths: [], safety: SafetySpec(level: .review), action: ActionSpec(command: ["swift", "--version"]))
+        tool.isBuiltin = true
+        let cache = cacheRule(tree, level: .safe, paths: ["home/cache"])
+        let executor = sandboxExecutor(tree, rules: [tool, cache])
+        let plan = CleanupPlan(
+            items: [
+                CleanupItem(path: tree.path("home/Projects/old"), size: 1_000),
+                CleanupItem(path: tree.path("home/cache/a"), size: 1_000, ruleID: "cache"),
+            ],
+            commands: [PlannedCommand(ruleID: "tool", arguments: ["swift", "--version"], estimatedBytes: 1)], useTrash: false)
+
+        let report = executor.execute(CleanupReview(plan, executor: executor).acknowledge(acceptingWarnings: false), dryRun: true)
+
+        let item = try #require(report.items.first { $0.item.path.hasSuffix("old") })
+        let command = try #require(report.commands.first)
+        let unknown = "No SpaceKit rule recognises this; make sure you don't need it"
+        #expect(item.outcome == .skipped(reason: CleanupExecutor.notAccepted + unknown))
+        #expect(command.outcome.isSkipped)
+        if case .skipped(let reason) = command.outcome { #expect(reason.hasPrefix(CleanupExecutor.notAccepted)) }
+        #expect(report.items.contains { $0.item.ruleID == "cache" && $0.outcome.isWouldRemove })
+        #expect(report.hasProblems)
+
+        let allowed = CleanupPlan(items: [CleanupItem(path: tree.path("home/cache/a"), size: 1_000, ruleID: "cache")], useTrash: false)
+        let allowedReview = CleanupReview(allowed, executor: executor)
+        #expect(!executor.execute(allowedReview.acknowledge(acceptingWarnings: false), dryRun: true).hasProblems)
     }
 
     @Test("Commands that need confirmation run only once acknowledged")
@@ -50,7 +84,7 @@ struct CleanupReviewTests {
         let review = CleanupReview(plan, executor: executor)
         #expect(review.commands.first?.needsAcknowledgement == true)
         let refused = executor.execute(review.acknowledge(acceptingWarnings: false), dryRun: true)
-        #expect(refused.unfinishedCommands.first?.reason.hasPrefix("Needs confirmation: ") == true)
+        #expect(refused.unfinishedCommands.first?.reason.hasPrefix(CleanupExecutor.notAccepted) == true)
         let accepted = executor.execute(review.acknowledge(acceptingWarnings: true), dryRun: true)
         #expect(accepted.unfinishedCommands.isEmpty)
         #expect(accepted.commands.map(\.outcome) == [.wouldRemove(bytes: 1)])

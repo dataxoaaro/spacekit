@@ -20,7 +20,7 @@ struct CleanCommand: ParsableCommand {
             and skipped. On a terminal you're asked after the preview, and answering yes accepts its warnings. --yes
             runs without asking, but only what the guard allows outright; items with warnings (paths no rule
             recognises, review rules, repositories) also need --accept-warnings. The exit status is nonzero when
-            anything failed or a warning was raised.
+            anything failed, a row's warnings weren't accepted or a warning was raised.
             """
     )
 

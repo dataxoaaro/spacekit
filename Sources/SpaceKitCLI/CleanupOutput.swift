@@ -100,9 +100,10 @@ enum CleanupOutput {
     /// it), else through `executor`. Returns the report, or `nil` when nothing ran.
     ///
     /// Warnings are accepted only here, after the preview printed them: by `--accept-warnings` next to `--yes`, or by
-    /// answering the question when `interactive`. `--yes` alone runs only what the guard allows outright. With `json`,
-    /// stdout carries only JSON: the plan alone without `--yes`, else the plan and the result; the preview then goes
-    /// to stderr.
+    /// answering the question when `interactive`. `--yes` alone runs only what the guard allows outright; the rows with
+    /// warnings are still handed to the executor, which reports each as not accepted, so the result lists them and the
+    /// command exits nonzero (`exitIfProblems`). With `json`, stdout carries only JSON: the plan alone without `--yes`,
+    /// else the plan and the result, always; the preview then goes to stderr.
     static func session(
         _ plan: CleanupPlan, executor: CleanupExecutor, acknowledgement: AcknowledgementOptions, json: Bool, interactive: Bool,
         heading: String = "Cleanup preview", verb: String = "Clean", hint: String, run: ((ReviewedPlan) -> CleanupReport)? = nil
@@ -116,7 +117,8 @@ enum CleanupOutput {
         Output.emit([heading.bold] + planLines(review), toStandardError: json)
         guard !review.isEmpty else {
             Output.emit(["Nothing in this plan can be removed.".dim], toStandardError: json)
-            if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
+            // Here `json` comes with `--yes`: the result says nothing ran.
+            if let planJSON { try Output.json(RunJSON(plan: planJSON, result: ReportJSON(CleanupReport(dryRun: false)))) }
             return nil
         }
         Output.emit([""] + summaryLines(review), toStandardError: json)
@@ -132,12 +134,8 @@ enum CleanupOutput {
         }
         if review.needsAcknowledgement && !acceptingWarnings {
             let count = review.warningCount
-            let note = "\(count) item\(count == 1 ? "" : "s") with warnings left alone; add --accept-warnings to remove them too."
+            let note = "\(count) with warnings not accepted, so left alone; add --accept-warnings to run them too."
             Output.emit([note.fg(ANSI.review)], toStandardError: json)
-            guard count < review.selectedItems.count + review.selectedCommands.count else {
-                if let planJSON { try Output.json(RunJSON(plan: planJSON)) }
-                return nil
-            }
         }
         let reviewed = review.acknowledge(acceptingWarnings: acceptingWarnings)
         let report = run?(reviewed) ?? executor.execute(reviewed, dryRun: false)

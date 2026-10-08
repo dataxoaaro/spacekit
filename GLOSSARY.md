@@ -66,6 +66,8 @@
 
 **Reviewed location**: where the review judged an item: its path with the folder's symlinks resolved, and the folder and the item by device and inode (`RemovalTarget.Location`); a reviewed row runs only while the item is still there. _Avoid_: checked path.
 
+**Not accepted**: a reviewed row skipped because the person didn't accept the warnings the review showed for it (`--yes` without `--accept-warnings`); like a changed row, it counts as a problem. _Avoid_: needs confirmation (that's an automatic run's skip, where nobody was asked).
+
 **Changed since review**: a reviewed row skipped because its check at removal time raised a reason the review didn't show (a new warning, a larger share of the disk, a block) or the item isn't at its reviewed location; it counts as a problem. _Avoid_: stale row, unreviewed warning.
 
 **Automatic plan**: the plan `JobRunner` hands the executor for an automatic run (`AutomaticPlan`); it acknowledges nothing. _Avoid_: scheduled plan.

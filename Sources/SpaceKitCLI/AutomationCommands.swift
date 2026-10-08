@@ -249,8 +249,8 @@ struct JobsCommand: ParsableCommand {
                 Without --scheduled the job cleans now, whatever its mode, with the checks of a cleanup you start yourself:
                 the preview lists what will go and any warnings. --yes runs what the guard allows outright; items with
                 warnings also need --accept-warnings. A job below its size threshold is skipped with the reason unless you
-                add --force. The run is recorded as the job's last run. The exit status is nonzero when anything failed or
-                a warning was raised.
+                add --force. The run is recorded as the job's last run. The exit status is nonzero when anything failed, a
+                row's warnings weren't accepted or a warning was raised.
                 """
         )
         @OptionGroup var global: GlobalOptions
@@ -420,7 +420,7 @@ struct SuggestionsCommand: ParsableCommand {
                 need --accept-warnings. Approving records the job's last run. Afterwards the suggestion is dismissed when
                 nothing in it is left to clean (also when nothing in it still met the job's conditions, so nothing ran);
                 otherwise it's kept with what's left and the problems the run hit. The exit status is nonzero when anything
-                failed or a warning was raised.
+                failed, a row's warnings weren't accepted or a warning was raised.
                 """
         )
         @OptionGroup var global: GlobalOptions

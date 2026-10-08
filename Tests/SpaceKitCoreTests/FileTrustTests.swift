@@ -104,10 +104,12 @@ struct FileTrustTests {
         #expect(release.issues.isEmpty)
         #expect(!release.files.isEmpty && release.files.allSatisfy { $0.source.hasPrefix("built-in rules/") })
 
-        // A folder standing in for them is held to the same rules as any rule file.
+        // A folder standing in for them is held to the same rules as any rule file. With its only file refused it
+        // has no rules, so the embedded ones stay.
         let debug = BuiltinRules.standard(environment: environment, debugBuild: true)
-        #expect(debug.files.isEmpty)
-        #expect(debug.issues.map(\.message) == ["not loaded: it can be changed by other users (group or world writable)"])
+        #expect(!debug.files.contains { $0.source == file })
+        #expect(debug.issues.first?.message == "not loaded: it can be changed by other users (group or world writable)")
+        #expect(debug.issues.count == 2)
         #expect(FileTrust.problem(with: file, owners: FileTrust.owners(user: getuid() &+ 4_242)) == "is owned by another user")
     }
 

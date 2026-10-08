@@ -405,6 +405,23 @@ struct BuiltinRulesTests {
         let unset = BuiltinRules.standard(environment: ["SPACEKIT_RULES_DIR": ""], debugBuild: true)
         #expect(unset.files.map(\.source) == BuiltinRules.embedded.files.map(\.source))
     }
+
+    @Test("A debug SPACEKIT_RULES_DIR that is missing or holds no rules is an error, and the embedded rules stay")
+    func rulesDirectoryWithoutRules() throws {
+        let tree = try TempTree()
+        try tree.directory("empty")
+        try tree.directory("comments")
+        try "# nothing here yet\n".write(toFile: tree.path("comments/draft.yaml"), atomically: true, encoding: .utf8)
+        for directory in ["missing", "empty", "comments"] {
+            let builtin = BuiltinRules.standard(environment: ["SPACEKIT_RULES_DIR": tree.path(directory)], debugBuild: true)
+            #expect(builtin.files.map(\.source) == BuiltinRules.embedded.files.map(\.source), "\(directory)")
+            #expect(builtin.issues.contains { $0.severity == .error && $0.message.contains("SPACEKIT_RULES_DIR") }, "\(directory)")
+            #expect(builtin.origin.hasPrefix(BuiltinRules.embedded.origin), "\(directory)")
+            let library = RuleLibrary.load(builtin: builtin, directories: [])
+            #expect(library.rules.contains { $0.isBuiltin && $0.safety.level == .protected }, "\(directory)")
+            #expect(library.issues.contains { $0.severity == .error }, "\(directory)")
+        }
+    }
 }
 
 @Suite("Rule scaffold and rule folders")

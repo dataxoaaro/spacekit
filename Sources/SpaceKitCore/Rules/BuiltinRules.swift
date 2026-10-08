@@ -52,9 +52,22 @@ public struct BuiltinRules: Sendable {
 
     static func standard(environment: [String: String], debugBuild: Bool) -> BuiltinRules {
         guard debugBuild, let directory = environment["SPACEKIT_RULES_DIR"], !directory.isEmpty else { return .embedded }
+        let shown = PathUtil.abbreviate(directory)
         let read = RuleLibrary.read(directory: PathUtil.standardize(PathUtil.expand(directory)))
+        let ruleCount = read.files.reduce(0) { count, file in
+            count + ((try? RuleLibrary.parse(yaml: file.yaml, source: file.source))?.count ?? 0)
+        }
+        // A mistyped or empty folder would otherwise load no built-in rules, and the protected ones would go with them
+        // without a word.
+        guard ruleCount > 0 else {
+            let issue = RuleIssue(
+                severity: .error, source: directory,
+                message: "$SPACEKIT_RULES_DIR has no rules to load (missing, empty or unreadable folder); the embedded rules are used")
+            return BuiltinRules(
+                files: embedded.files, issues: read.issues + [issue],
+                origin: "\(embedded.origin); $SPACEKIT_RULES_DIR \(shown) has no rules (debug build)")
+        }
         return BuiltinRules(
-            files: read.files, issues: read.issues,
-            origin: "$SPACEKIT_RULES_DIR \(PathUtil.abbreviate(directory)) (debug build; the embedded rules are not used)")
+            files: read.files, issues: read.issues, origin: "$SPACEKIT_RULES_DIR \(shown) (debug build; the embedded rules are not used)")
     }
 }

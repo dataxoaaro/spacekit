@@ -97,8 +97,8 @@ public struct Rule: Codable, Sendable, Identifiable, Hashable {
     public var tags: [String]
     /// File the rule was loaded from (not part of the schema).
     public var source: String?
-    /// Loaded from SpaceKit's own rule directory (not part of the schema). Only built-in rules may run
-    /// `CommandTrust.trustedCommands` without the user listing them in `safety.allowedCommands`.
+    /// One of SpaceKit's own rules, compiled into the binary (`BuiltinRules`; not part of the schema). Only built-in
+    /// rules may run `CommandTrust.trustedCommands` without the user listing them in `safety.allowedCommands`.
     public var isBuiltin = false
 
     public static func == (lhs: Rule, rhs: Rule) -> Bool { lhs.id == rhs.id }

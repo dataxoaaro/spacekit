@@ -143,7 +143,10 @@ private struct RuleDetail: View {
                 if let source = rule.source {
                     HStack {
                         Text(PathUtil.abbreviate(source)).font(.caption).foregroundStyle(.secondary)
-                        Button("Reveal") { model.reveal(source) }.buttonStyle(.link).font(.caption)
+                        // Built-in rules are compiled into SpaceKit; there's no file to reveal.
+                        if !rule.isBuiltin {
+                            Button("Reveal") { model.reveal(source) }.buttonStyle(.link).font(.caption)
+                        }
                     }
                 }
                 if rule.safety.level != .protected && rule.action.isCleanable {

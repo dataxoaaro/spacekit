@@ -5,38 +5,50 @@ import Testing
 
 @Suite("Rule loading")
 struct RuleLoadingTests {
-    /// A built-in rule directory and a user rule directory in a temporary tree.
+    /// A built-in rule file and a user rule directory in a temporary tree.
     struct Folders {
         let tree: TempTree
-        var builtin: String { tree.path("builtin") }
         var user: String { tree.path("user") }
+
+        static let builtin = BuiltinRules(files: [
+            RuleFileText(
+                source: "built-in rules/base.yaml",
+                yaml: """
+                    group: Base
+                    category: developer.cache
+                    rules:
+                      - id: base.keys
+                        name: Keys
+                        path: ~/.base-keys
+                        safety: protected
+                      - id: base.models
+                        name: Models
+                        path: ~/.base/models
+                        safety: review
+                        exclusions: [active_projects]
+                        policy:
+                          threshold: 10GB
+                          olderThan: 30d
+                        action: remove
+                      - id: base.cache
+                        name: Cache
+                        path: ~/.base/cache
+                        safety: safe
+                        action:
+                          command: [brew, cleanup]
+                      - id: base.builds
+                        name: Builds
+                        match:
+                          names: [build, out]
+                          sibling: [Makefile]
+                        safety: safe
+                        action: remove
+                    """)
+        ])
 
         init() throws {
             tree = try TempTree()
-            try tree.directory("builtin")
             try tree.directory("user")
-            try write(
-                "builtin/base.yaml",
-                """
-                group: Base
-                category: developer.cache
-                rules:
-                  - id: base.keys
-                    name: Keys
-                    path: ~/.base-keys
-                    safety: protected
-                  - id: base.models
-                    name: Models
-                    path: ~/.base/models
-                    safety: review
-                    action: remove
-                  - id: base.cache
-                    name: Cache
-                    path: ~/.base/cache
-                    safety: safe
-                    action:
-                      command: [brew, cleanup]
-                """)
         }
 
         func write(_ relative: String, _ text: String) throws {
@@ -44,7 +56,7 @@ struct RuleLoadingTests {
         }
 
         func load(disabled: Set<String> = []) -> RuleLibrary {
-            RuleLibrary.load(builtinDirectory: builtin, directories: [user], disabled: disabled)
+            RuleLibrary.load(builtin: Folders.builtin, directories: [user], disabled: disabled)
         }
     }
 
@@ -77,8 +89,11 @@ struct RuleLoadingTests {
     @Test("A user rule can't lower a built-in rule's safety level, but may raise it")
     func loweredSafety() throws {
         let folders = try Folders()
-        try folders.write("user/a.yaml", "id: base.models\nname: Models\npath: ~/.base/models\nsafety: safe\naction: remove\n")
-        try folders.write("user/b.yaml", "id: base.cache\nname: Cache\npath: ~/.base/cache\nsafety: review\naction: remove\n")
+        try folders.write(
+            "user/a.yaml",
+            "id: base.models\nname: Models\npath: ~/.base/models\nexclusions: [active_projects]\nsafety: safe\naction: remove\n")
+        try folders.write(
+            "user/b.yaml", "id: base.cache\nname: Cache\npath: ~/.base/cache\nsafety: review\naction:\n  command: [brew, cleanup]\n")
         let library = folders.load()
         #expect(library.rule(id: "base.models")?.safety.level == .review)
         #expect(library.rule(id: "base.models")?.isBuiltin == true)
@@ -95,6 +110,27 @@ struct RuleLoadingTests {
         try folders.write("user/b.yaml", "id: base.models\nname: Models\npath: ~/.base/models\nsafety: safe\naction: remove\n")
         let library = folders.load()
         #expect(library.rule(id: "base.models")?.safety.level == .protected)
+    }
+
+    @Test("rules validate <file> judges a file the way loading it would, overrides of built-in rules included")
+    func checkFiles() throws {
+        let folders = try Folders()
+        try folders.write("user/wider.yaml", "id: base.cache\nname: Cache\npath: ~/.base/cache\nsafety: review\naction: remove\n")
+        try folders.write(
+            "user/mine.yaml", "id: mine.cache\nname: Mine\npath: ~/.mine/cache\nsafety: safe\naction:\n  command: [brew, cleanup]\n")
+        let wider = RuleLibrary.check(files: [folders.tree.path("user/wider.yaml")], builtin: Folders.builtin)
+        #expect(wider.rules.count == 1)
+        #expect(wider.issues.isEmpty)
+        try folders.write("user/lower.yaml", "id: base.models\nname: Models\npath: ~/.base/models\nsafety: safe\naction: remove\n")
+        let lower = RuleLibrary.check(files: [folders.tree.path("user/lower.yaml")], builtin: Folders.builtin)
+        #expect(lower.issues.contains { $0.severity == .error && $0.message.contains("lower the safety level") })
+        let mine = RuleLibrary.check(files: [folders.tree.path("user/mine.yaml")], builtin: Folders.builtin)
+        #expect(!mine.issues.contains { $0.severity == .error })
+        #expect(mine.issues.contains { $0.message.contains("allowedCommands") })
+        let asBuiltin = RuleLibrary.check(files: [folders.tree.path("user/mine.yaml")], asBuiltin: true, builtin: Folders.builtin)
+        #expect(asBuiltin.issues.isEmpty)
+        let missing = RuleLibrary.check(files: [folders.tree.path("user/missing.yaml")], builtin: Folders.builtin)
+        #expect(missing.issues.contains { $0.severity == .error })
     }
 
     @Test("rules.disabled never disables a protected rule")
@@ -151,7 +187,8 @@ struct RuleLoadingTests {
     @Test("Command executables must be bare names; user rules need allowedCommands")
     func commandValidation() {
         func issues(_ command: [String], builtin: Bool = false) -> [RuleIssue] {
-            var rule = Rule(id: "c", name: "C", paths: ["~/.c/cache"], safety: SafetySpec(level: .safe), action: ActionSpec(command: command))
+            var rule = Rule(
+                id: "c", name: "C", paths: ["~/.c/cache"], safety: SafetySpec(level: .safe), action: ActionSpec(command: command))
             rule.isBuiltin = builtin
             return RuleLibrary(rules: [rule]).validate()
         }
@@ -184,21 +221,65 @@ struct RuleLoadingTests {
     }
 }
 
-@Suite("Built-in rule directory")
-struct BuiltinDirectoryTests {
-    @Test("Only debug builds look for rules in the source checkout they were built from")
-    func sourceCheckoutIsDebugOnly() {
-        let checkout = PathUtil.standardize(RuleLibrary.sourceCheckoutRules)
-        #expect(RuleLibrary.builtinCandidates(environment: [:], debugBuild: true).contains(checkout))
-        #expect(!RuleLibrary.builtinCandidates(environment: [:], debugBuild: false).contains(checkout))
+@Suite("Built-in rules")
+struct BuiltinRulesTests {
+    /// Tests/SpaceKitCoreTests/RuleLoadingTests.swift → <repo>/rules
+    static let repositoryRules = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("rules").path
+
+    @Test("Every embedded rule parses and validates without errors, and its commands use trusted tools")
+    func embeddedRulesAreValid() {
+        let library = RuleLibrary.load(builtin: .embedded, directories: [])
+        #expect(library.rules.count > 100)
+        #expect(library.issues.isEmpty, "\(library.issues.map(\.description).joined(separator: "\n"))")
+        #expect(library.validate().isEmpty)
+        #expect(library.rules.allSatisfy { $0.isBuiltin })
+        let ids = library.rules.map(\.id)
+        #expect(Set(ids).count == ids.count, "rule ids must be unique")
     }
 
-    @Test("Only debug builds take the built-in library from SPACEKIT_RULES_DIR")
-    func rulesDirectoryOverrideIsDebugOnly() {
-        let environment = ["SPACEKIT_RULES_DIR": "/private/tmp/planted-rules"]
-        #expect(RuleLibrary.builtinCandidates(environment: environment, debugBuild: true).first == "/private/tmp/planted-rules")
-        #expect(!RuleLibrary.builtinCandidates(environment: environment, debugBuild: false).contains("/private/tmp/planted-rules"))
-        #expect(!RuleLibrary.builtinCandidates(environment: ["SPACEKIT_RULES_DIR": ""], debugBuild: true).contains("/"))
+    @Test("The embedded rules are exactly the repository's rules/ folder")
+    func embeddedMatchesRepository() throws {
+        let onDisk = RuleLibrary.read(directory: BuiltinRulesTests.repositoryRules)
+        #expect(onDisk.issues.isEmpty)
+        let prefix = BuiltinRulesTests.repositoryRules + "/"
+        let repository = onDisk.files.map { ("built-in rules/" + $0.source.dropFirst(prefix.count), $0.yaml) }
+        #expect(repository.map(\.0) == BuiltinRules.embedded.files.map(\.source))
+        #expect(repository.map(\.1) == BuiltinRules.embedded.files.map(\.yaml))
+    }
+
+    @Test("Credentials stay protected with no rules folder anywhere on disk")
+    func credentialsWithoutFolders() throws {
+        let library = RuleLibrary.load(builtin: .embedded, directories: [])
+        let protected = Set(library.rules.filter { $0.safety.level == .protected }.flatMap(\.paths))
+        for path in [
+            "~/.netrc", "~/.git-credentials", "~/.npmrc", "~/.docker/config.json", "~/.azure", "~/.aws", "~/.kube",
+            "~/.config/gh", "~/.pypirc", "~/.cargo/credentials.toml",
+        ] {
+            #expect(protected.contains(path), "\(path)")
+        }
+        let guardian = testGuard(rules: library.rules)
+        for path in ["/Users/tester/.netrc", "/Users/tester/.npmrc", "/Users/tester/.docker/config.json", "/Users/tester/.azure/creds"] {
+            #expect(guardian.check(path, context: .manual).isBlocked, "\(path)")
+        }
+        #expect(guardian.check("/Users/tester/.docker", context: .manual).isBlocked, "a folder holding credentials")
+    }
+
+    @Test("Release builds ignore SPACEKIT_RULES_DIR; debug builds use it in place of the embedded rules")
+    func rulesDirectoryOverrideIsDebugOnly() throws {
+        let tree = try TempTree()
+        try tree.directory("rules")
+        try "id: dev.cache\nname: Dev\npath: ~/.dev/cache\nsafety: safe\naction: remove\n".write(
+            toFile: tree.path("rules/dev.yaml"), atomically: true, encoding: .utf8)
+        let environment = ["SPACEKIT_RULES_DIR": tree.path("rules")]
+        let release = BuiltinRules.standard(environment: environment, debugBuild: false)
+        #expect(release.files.map(\.source) == BuiltinRules.embedded.files.map(\.source))
+        let debug = BuiltinRules.standard(environment: environment, debugBuild: true)
+        #expect(debug.files.map(\.source) == [tree.path("rules/dev.yaml")])
+        #expect(debug.origin.contains("SPACEKIT_RULES_DIR"))
+        #expect(RuleLibrary.load(builtin: debug, directories: []).rule(id: "dev.cache")?.isBuiltin == true)
+        let unset = BuiltinRules.standard(environment: ["SPACEKIT_RULES_DIR": ""], debugBuild: true)
+        #expect(unset.files.map(\.source) == BuiltinRules.embedded.files.map(\.source))
     }
 }
 
@@ -227,7 +308,7 @@ struct RuleScaffoldTests {
         let context = SpaceKitContext(paths: paths, config: config, library: RuleLibrary(rules: []))
         #expect(context.ruleDirectories == ["/tmp/sk/extra", paths.userRulesDirectory])
         config.rules.directories = [paths.userRulesDirectory]
-        #expect(SpaceKitContext(paths: paths, config: config, library: RuleLibrary(rules: [])).ruleDirectories == [paths.userRulesDirectory])
+        #expect(
+            SpaceKitContext(paths: paths, config: config, library: RuleLibrary(rules: [])).ruleDirectories == [paths.userRulesDirectory])
     }
 }
-

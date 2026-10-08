@@ -38,55 +38,45 @@ public struct RuleLibrary: Sendable {
     /// it, except that a built-in `protected` rule can't be replaced and a replacement can't have a lower safety
     /// level than the built-in rule. Rules with validation errors are reported in `issues` but not loaded, and
     /// `disabled` never turns off a `protected` rule.
-    public static func load(
-        builtinDirectory: String? = RuleLibrary.builtinDirectory,
-        directories: [String] = [],
-        disabled: Set<String> = []
-    ) -> RuleLibrary {
+    public static func load(builtin: BuiltinRules = .standard, directories: [String] = [], disabled: Set<String> = []) -> RuleLibrary {
         var byID: [String: Rule] = [:]
         var builtinByID: [String: Rule] = [:]
         var order: [String] = []
-        var issues: [RuleIssue] = []
+        var issues = builtin.issues
 
-        let builtin = builtinDirectory.map(PathUtil.standardize)
-        var sources: [(directory: String, isBuiltin: Bool)] = builtin.map { [($0, true)] } ?? []
-        for directory in directories.map({ PathUtil.standardize(PathUtil.expand($0)) }) where directory != builtin {
-            sources.append((directory, false))
+        var sources = builtin.files.map { (file: $0, isBuiltin: true) }
+        for directory in directories.map({ PathUtil.standardize(PathUtil.expand($0)) }) {
+            let read = read(directory: directory)
+            issues += read.issues
+            sources += read.files.map { (file: $0, isBuiltin: false) }
         }
 
-        let builtinOwners = FileTrust.builtinOwners()
-        for (directory, isBuiltin) in sources {
-            for file in yamlFiles(in: directory) {
-                if let problem = FileTrust.problem(with: file, owners: isBuiltin ? builtinOwners : FileTrust.owners()) {
-                    issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
+        for (file, isBuiltin) in sources {
+            let parsed: [Rule]
+            do {
+                parsed = try parse(yaml: file.yaml, source: file.source)
+            } catch {
+                issues.append(RuleIssue(severity: .error, source: file.source, message: DecodingErrorText.describe(error)))
+                continue
+            }
+            for var rule in parsed {
+                rule.isBuiltin = isBuiltin
+                let ruleIssues = RuleLibrary.issues(for: rule)
+                issues += ruleIssues
+                if ruleIssues.contains(where: { $0.severity == .error }) { continue }
+                if !isBuiltin, let problem = builtinByID[rule.id].flatMap({ overrideProblem(builtin: $0, replacement: rule) }) {
+                    issues.append(RuleIssue(severity: .error, source: file.source, ruleID: rule.id, message: problem))
                     continue
                 }
-                let parsed: [Rule]
-                do {
-                    parsed = try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file)
-                } catch {
-                    issues.append(RuleIssue(severity: .error, source: file, message: DecodingErrorText.describe(error)))
-                    continue
+                if let existing = byID[rule.id] {
+                    let origin = PathUtil.abbreviate(existing.source ?? "<inline>")
+                    issues.append(
+                        RuleIssue(severity: .warning, source: file.source, ruleID: rule.id, message: "replaces the rule from \(origin)"))
+                } else {
+                    order.append(rule.id)
                 }
-                for var rule in parsed {
-                    rule.isBuiltin = isBuiltin
-                    let ruleIssues = RuleLibrary.issues(for: rule)
-                    issues += ruleIssues
-                    if ruleIssues.contains(where: { $0.severity == .error }) { continue }
-                    if let problem = builtinByID[rule.id].flatMap({ overrideProblem(builtin: $0, replacement: rule) }) {
-                        issues.append(RuleIssue(severity: .error, source: file, ruleID: rule.id, message: problem))
-                        continue
-                    }
-                    if let existing = byID[rule.id] {
-                        let origin = PathUtil.abbreviate(existing.source ?? "<inline>")
-                        issues.append(
-                            RuleIssue(severity: .warning, source: file, ruleID: rule.id, message: "replaces the rule from \(origin)"))
-                    } else {
-                        order.append(rule.id)
-                    }
-                    byID[rule.id] = rule
-                    if isBuiltin { builtinByID[rule.id] = rule }
-                }
+                byID[rule.id] = rule
+                if isBuiltin { builtinByID[rule.id] = rule }
             }
         }
 
@@ -116,44 +106,54 @@ public struct RuleLibrary: Sendable {
         return nil
     }
 
-    /// Where the built-in rule library lives, searched in this order: in debug builds only, `$SPACEKIT_RULES_DIR`;
-    /// the app bundle's `Resources/rules`, `<prefix>/share/spacekit/rules` next to the executable (Homebrew,
-    /// `make install`), the bundle's resources when the CLI runs from `SpaceKit.app/Contents/Helpers`, a `rules`
-    /// folder beside the executable, and, in debug builds only, the `rules/` folder of the source checkout the
-    /// binary was built from.
-    public static var builtinDirectory: String? {
-        builtinCandidates(environment: ProcessInfo.processInfo.environment, debugBuild: isDebugBuild).first { path in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    /// Checks rule files on disk the way loading them would: each rule on its own, and a rule with a built-in id
+    /// against the built-in rule it would replace. `asBuiltin` judges them as built-in rules instead, for
+    /// contributors checking a file in the repository's `rules/` folder before they build.
+    public static func check(files: [String], asBuiltin: Bool = false, builtin: BuiltinRules = .standard) -> (
+        rules: [Rule], issues: [RuleIssue]
+    ) {
+        let library = load(builtin: builtin)
+        var rules: [Rule] = []
+        var issues: [RuleIssue] = []
+        for file in files {
+            do {
+                rules += try parse(yaml: try String(contentsOfFile: file, encoding: .utf8), source: file).map { rule in
+                    var rule = rule
+                    rule.isBuiltin = asBuiltin
+                    return rule
+                }
+            } catch {
+                issues.append(RuleIssue(severity: .error, source: file, message: DecodingErrorText.describe(error)))
+            }
         }
+        issues += RuleLibrary(rules: rules).validate()
+        if !asBuiltin {
+            for rule in rules {
+                guard let original = library.rule(id: rule.id), original.isBuiltin else { continue }
+                if let problem = overrideProblem(builtin: original, replacement: rule) {
+                    issues.append(RuleIssue(severity: .error, source: rule.source ?? "<inline>", ruleID: rule.id, message: problem))
+                }
+            }
+        }
+        return (rules, issues)
     }
 
-    /// Rules found in the built-in directory get built-in trust (their commands may run trusted tools, also in
-    /// automatic runs). A release binary must not grant that to a folder an environment variable names, which
-    /// any process that can set the agent's environment controls, nor to whatever sits at the path it was
-    /// compiled from on some build machine.
-    #if DEBUG
-        static let isDebugBuild = true
-    #else
-        static let isDebugBuild = false
-    #endif
-
-    static func builtinCandidates(environment: [String: String], debugBuild: Bool) -> [String] {
-        var candidates: [String] = []
-        if debugBuild, let env = environment["SPACEKIT_RULES_DIR"], !env.isEmpty { candidates.append(env) }
-        if let resources = Bundle.main.resourceURL?.path { candidates.append(resources + "/rules") }
-        let executable = URL(fileURLWithPath: CommandLine.arguments.first ?? "").resolvingSymlinksInPath().deletingLastPathComponent().path
-        candidates.append(executable + "/../share/spacekit/rules")
-        candidates.append(executable + "/../Resources/rules")  // SpaceKit.app/Contents/Helpers/spacekit
-        candidates.append(executable + "/rules")
-        if debugBuild { candidates.append(sourceCheckoutRules) }
-        return candidates.map(PathUtil.standardize)
-    }
-
-    /// Sources/SpaceKitCore/Rules/RuleLibrary.swift → <repo>/rules
-    static var sourceCheckoutRules: String {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("rules").path
+    /// The text of every rule file in `directory`, except files other users could have changed (`FileTrust`).
+    static func read(directory: String) -> (files: [RuleFileText], issues: [RuleIssue]) {
+        var files: [RuleFileText] = []
+        var issues: [RuleIssue] = []
+        for file in yamlFiles(in: directory) {
+            if let problem = FileTrust.problem(with: file) {
+                issues.append(RuleIssue(severity: .error, source: file, message: "not loaded: it \(problem)"))
+                continue
+            }
+            do {
+                files.append(RuleFileText(source: file, yaml: try String(contentsOfFile: file, encoding: .utf8)))
+            } catch {
+                issues.append(RuleIssue(severity: .error, source: file, message: DecodingErrorText.describe(error)))
+            }
+        }
+        return (files, issues)
     }
 
     static func yamlFiles(in directory: String) -> [String] {

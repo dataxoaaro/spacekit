@@ -256,8 +256,7 @@ struct DoctorCommand: ParsableCommand {
         checks.append(
             Check(
                 check: "Rules", ok: errors.isEmpty,
-                detail: "\(context.library.rules.count) loaded from "
-                    + (RuleLibrary.builtinDirectory.map { PathUtil.abbreviate($0) } ?? "nowhere")
+                detail: "\(context.library.rules.count) loaded, built-in: \(BuiltinRules.standard.origin)"
                     + (errors.isEmpty ? "" : ", \(errors.count) errors (spacekit rules validate)")))
         let agent = LaunchAgent(paths: context.paths).status()
         checks.append(

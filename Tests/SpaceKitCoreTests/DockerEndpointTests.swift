@@ -212,10 +212,14 @@ struct DockerEndpointTests {
             let remote = run(builderPrune, ScriptedDocker(context: context("tcp://build.example.com:2376"), version: missing))
             #expect(skipReason(remote.outcome)?.contains("tcp://build.example.com:2376") == true)
         }
-        // buildx there but broken, or no answer: SpaceKit can't tell which builder runs.
+        // buildx there but broken, or no answer: SpaceKit can't tell which builder runs. Only docker's own line on standard
+        // error says the plugin is missing: not the words on standard output or inside another line.
         let failures = [
             Shell.Result(status: 1, output: "", timedOut: false, errors: "fork/exec docker-buildx: permission denied\n"),
             Shell.Result(status: -2, output: "", timedOut: true),
+            Shell.Result(status: 1, output: "docker: 'buildx' is not a docker command.\n", timedOut: false),
+            Shell.Result(
+                status: 1, output: "", timedOut: false, errors: "buildx: plugin says docker: unknown command: docker buildx elsewhere\n"),
         ]
         for failure in failures {
             let result = run(builderPrune, ScriptedDocker(version: failure))

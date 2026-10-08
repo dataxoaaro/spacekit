@@ -26,7 +26,7 @@
 
 **Plain tool name**: a `safety.allowedCommands` entry made only of ASCII letters, digits, `.`, `_`, `+` and `-`, so the file system's case and Unicode folding can't turn it into another program's name. _Avoid_: safe name, ASCII name.
 
-**Tool environment**: the cleaned environment every program SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH (the search folders the person can't change), HOME, user, locale and TMPDIR, plus the isolation variables (`Shell.RunKind`). _Avoid_: sanitized env.
+**Tool environment**: the cleaned environment every tool command SpaceKit starts runs with (`Shell.toolEnvironment`): PATH, HOME, user, locale, TMPDIR, XDG, Homebrew's settings and the variables that move a tool's own cache, minus any name that marks a credential; in an automatic run only PATH (the search folders the person can't change), user and locale from the environment, HOME and TMPDIR from the system, plus the isolation variables (`Shell.RunKind`). The editor `spacekit config edit` opens is the one program that gets the person's whole environment. _Avoid_: sanitized env.
 
 **Changeable program**: a tool whose file, or a folder or symlink on the way to it, the person owns or can write (`CommandTrust.changeablePart`), such as anything in `~/.local/bin` or a Homebrew prefix they own, or a script whose `#!` interpreter is one; automatic runs don't start one. _Avoid_: user-writable tool, untrusted binary.
 

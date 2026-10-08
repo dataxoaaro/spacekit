@@ -59,13 +59,33 @@ public enum Shell {
         /// A person: their review showed the command, and the tool cleans the cache SpaceKit measured for them.
         case manual
         /// The background agent, with nobody watching. Any process of the person's can set the agent's variables
-        /// (`launchctl setenv`), so a tool keeps only who and where the person is: no tool home, `XDG_*` folder or
-        /// Homebrew setting that would steer what the tool deletes.
+        /// (`launchctl setenv`), so a tool keeps only who the person is and their locale: no tool home, `XDG_*` folder
+        /// or Homebrew setting that would steer what the tool deletes. HOME and TMPDIR, which decide where each tool's
+        /// default cache is, come from the system instead.
         case automatic
     }
 
-    /// Variables an automatic run's tool keeps: who and where the person is, and their locale (`LC_*` too).
-    static let automaticVariables: Set<String> = ["HOME", "USER", "LOGNAME", "LANG", "TMPDIR"]
+    /// Variables an automatic run's tool keeps: who the person is, and their locale (`LC_*` too). HOME and TMPDIR are
+    /// set, never kept (`automaticFolders`).
+    static let automaticVariables: Set<String> = ["USER", "LOGNAME", "LANG"]
+
+    /// HOME and TMPDIR for an automatic run: SpaceKit's own home (`home`, from the password database) and the person's
+    /// temporary folder as the system names it (`userTemporaryFolder`). A planted HOME would move every tool's default
+    /// cache, the folder it cleans, to a folder of someone else's choosing.
+    static func automaticFolders(home: String) -> [String: String] {
+        var folders = ["HOME": home]
+        folders["TMPDIR"] = userTemporaryFolder
+        return folders
+    }
+
+    /// The person's temporary folder (`confstr(_CS_DARWIN_USER_TEMP_DIR)`), which no variable moves; `nil` if the system
+    /// doesn't say, and the tool then uses `/tmp`.
+    static var userTemporaryFolder: String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
+        guard length > 0, length <= buffer.count else { return nil }
+        return String(cString: buffer)
+    }
 
     /// An empty folder only root can change, handed to an automatic run's tools as their settings folder. A fresh
     /// temporary folder would be the person's own, which a program of theirs could fill before the tool reads it.
@@ -100,16 +120,19 @@ public enum Shell {
     static let credentialMarks = ["TOKEN", "PASSWORD", "PASSWD", "SECRET", "KEY", "AUTH", "CREDENTIAL"]
 
     /// The folders of `folders` an automatic run's tools search: those nothing of the person's can change (`changeable`
-    /// finds what could). A tool that starts a helper by name, or a script `/usr/bin/env` starts, then finds only
-    /// programs no program of the person's put there.
+    /// finds what could). Only each folder is judged, not the programs in it: an entry can still lead to a program the
+    /// person can change (a link in `/usr/local/bin` into an app in `/Applications`). So the program `/usr/bin/env`
+    /// starts for a script is judged on its own (`CommandTrust.automaticRefusal`). A helper a tool starts by name isn't,
+    /// and no built-in rule's command is known to start one: xcrun, which would look on this PATH for a tool its
+    /// developer folder lacks, runs only when the folder has the tool (`CommandTrust.settingsRefusal`).
     static func automaticSearchPath(_ folders: [String], changeable: (String) -> String?) -> [String] {
         folders.filter { changeable($0) == nil }
     }
 
     /// The environment a tool runs with: for a manual run `keptVariables` and `keptPrefixes` from `environment`, minus
-    /// credentials, and PATH set to `searchPath`; for an automatic run `automaticVariables` and `LC_*`, PATH set to
-    /// `automaticSearchPath` of it (`changeable` finds what the person could change; tests stand in their own) and
-    /// `isolationVariables`. Everything else stays behind. A variable can point a tool somewhere else entirely
+    /// credentials, and PATH set to `searchPath`; for an automatic run `automaticVariables` and `LC_*`, HOME and TMPDIR
+    /// from `automaticFolders(home:)`, PATH set to `automaticSearchPath` of it (`changeable` finds what the person could
+    /// change; tests stand in their own) and `isolationVariables`. Everything else stays behind. A variable can point a tool somewhere else entirely
     /// (DOCKER_HOST at another machine's daemon, OLLAMA_HOST at another server), load code into it (DYLD_*,
     /// NODE_OPTIONS) or hand it credentials (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often
     /// from an agent nobody watches. Every tool SpaceKit starts gets it, its own helpers too (launchctl, tmutil,
@@ -130,7 +153,7 @@ public enum Shell {
             return kept
         }
         kept["PATH"] = automaticSearchPath(folders, changeable: changeable).joined(separator: ":")
-        return kept.merging(isolationVariables) { _, isolated in isolated }
+        return kept.merging(automaticFolders(home: home)) { _, set in set }.merging(isolationVariables) { _, isolated in isolated }
     }
 
     /// Runs a tool and waits until it has exited and closed its output, or until `timeout`. A tool that is still

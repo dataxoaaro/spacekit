@@ -133,6 +133,59 @@ extension CommandTrustTests {
         #expect(manual["npm_config_cache"] == "/Users/tester/.npm-elsewhere")
     }
 
+    /// A whole rule's command cleans its folders by the tool's own lights, so a symlink on the way would have it clean
+    /// wherever the link leads, with nobody watching.
+    @Test("A whole rule's command doesn't run automatically when a folder on the way to the rule's paths is a symlink")
+    func symlinkedRulePaths() throws {
+        let tree = try TempTree()
+        try tree.directory("home/fixed/go-build")
+        try tree.directory("home/Documents/go-build")
+        try tree.directory("home/Documents/data")
+        try tree.directory("home/tools/real/data")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache"), withDestinationPath: tree.path("home/Documents"))
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/tools/linked"), withDestinationPath: tree.path("home/Documents"))
+        let cases: [(paths: [String], linked: String?)] = [
+            (["~/fixed/go-build"], nil), (["~/cache/go-build"], "~/cache"), (["~/fixed/go-build", "~/tools/*/data"], "~/tools/linked"),
+            // Outside the home folder, the system's own links (/tmp) are on the way to everything.
+            (["/tmp/spacekit-no-such-cache"], nil),
+        ]
+        let command = ["go", "clean", "-cache"]
+        for (paths, linked) in cases {
+            let rules = [rule("go", builtin: true, command: command, paths: paths)]
+            let plan = CleanupPlan(commands: [PlannedCommand(ruleID: "go", arguments: command, estimatedBytes: 1)])
+            let runner = RecordingRunner(installed: ["go"], in: tree)
+            let executor = executor(tree, rules: rules, runner: runner)
+            let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
+            let reason = skipReason(report.commands.first?.outcome)
+            if let linked {
+                let expected = "\(linked), on the way to a folder rule go cleans, is a symlink"
+                #expect(reason?.contains(expected) == true, "\(paths): \(reason ?? "ran")")
+                #expect(runner.calls.isEmpty)
+                // By hand, the person reviews the command and starts it.
+                #expect(manualRun(plan, with: executor).commands.first?.outcome.isRemoved == true)
+            } else {
+                #expect(reason == nil, "\(paths): \(reason ?? "")")
+            }
+        }
+    }
+
+    /// HOME decides where each tool's default cache is, the folder it cleans, and any process of the person's can set
+    /// the agent's variables. So an automatic run's tool gets SpaceKit's own home and the system's temporary folder.
+    @Test("An automatic run's HOME and TMPDIR come from SpaceKit, never from the environment it was started with")
+    func automaticHomeAndTemporaryFolder() throws {
+        let parent = ["PATH": "/usr/bin", "HOME": "/Users/planted", "TMPDIR": "/Users/planted/tmp/", "USER": "tester"]
+        let automatic = Shell.toolEnvironment(from: parent, home: "/Users/tester", kind: .automatic)
+        let temporary = try #require(Shell.userTemporaryFolder)
+        #expect(automatic["HOME"] == "/Users/tester")
+        #expect(automatic["TMPDIR"] == temporary && temporary.hasPrefix("/") && !temporary.contains("planted"))
+        #expect(automatic["USER"] == "tester")
+        // A person starts a manual run, and its tool cleans the cache SpaceKit measured with their own variables.
+        let manual = Shell.toolEnvironment(from: parent, home: "/Users/tester")
+        #expect(manual["HOME"] == "/Users/planted" && manual["TMPDIR"] == "/Users/planted/tmp/")
+        // The home SpaceKit runs with is the password database's, whatever the environment says.
+        #expect(PathUtil.resolveHome(environment: ["HOME": "/Users/planted"], honorsOverride: false) == PathUtil.accountHome)
+    }
+
     @Test("The real runner starts an automatic run's tool in the root folder, with the isolation variables")
     func realRunnerIsolates() {
         let automatic = Shell.run("/bin/pwd", [], timeout: 10, environment: [:], kind: .automatic)
@@ -180,28 +233,56 @@ extension CommandTrustTests {
         #expect(manualRun(plan, with: executor).commands.allSatisfy { skipReason($0.outcome) == nil })
     }
 
-    /// xcrun starts developer tools from the folder `xcode-select` chose; Docker loads plugins from system folders, and
-    /// reads its settings from the empty folder an automatic run hands it. Each must be one you can't change.
-    @Test("xcrun's developer folder, Docker's plugin folders and the empty settings folder must be ones you can't change")
+    /// xcrun starts developer tools from the folder `xcode-select` chose, and looks elsewhere for one that folder lacks;
+    /// Docker loads plugins from system folders, and reads its settings from the empty folder an automatic run hands it.
+    /// Each must be one you can't change.
+    @Test("xcrun's developer folder and tool, Docker's plugin folders and the empty settings folder must be ones you can't change")
     func toolFolders() throws {
         let tree = try TempTree()
+        try program(tree, "Xcode/Developer/usr/bin/simctl")
+        try tree.directory("CommandLineTools/usr/bin")
+        let xcode = tree.path("xcode_select_link")
+        let commandLineTools = tree.path("clt_link")
+        try FileManager.default.createSymbolicLink(atPath: xcode, withDestinationPath: tree.path("Xcode/Developer"))
+        try FileManager.default.createSymbolicLink(atPath: commandLineTools, withDestinationPath: tree.path("CommandLineTools"))
         let commands = [["xcrun", "simctl", "delete", "unavailable"], ["docker", "image", "prune", "--all", "--force"]]
         let rules = commands.map { rule($0[0], builtin: true, command: $0) }
         let plan = CleanupPlan(commands: commands.map { PlannedCommand(ruleID: $0[0], arguments: $0, estimatedBytes: 1) })
         let docker = ScriptedDocker()
-        func reasons(changeable: @escaping @Sendable (String) -> String?) -> [String] {
+        func reasons(developer: String = xcode, changeable: @escaping @Sendable (String) -> String?) -> [String] {
             let runner = RecordingRunner(installed: ["xcrun", "docker"], in: tree, respond: docker.respond)
-            let report = executor(tree, rules: rules, runner: runner, changeable: changeable)
-                .execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
+            var executor = executor(tree, rules: rules, runner: runner, changeable: changeable)
+            executor.developerFolderLink = developer
+            let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
             return report.commands.map { skipReason($0.outcome) ?? "ran" }
         }
         #expect(reasons { _ in nil } == ["ran", "ran"])
-        let developer = reasons { $0 == "/var/db/xcode_select_link/usr/bin" ? "/Applications" : nil }
-        #expect(developer[0].contains("xcrun starts developer tools from") && developer[0].contains("/Applications"), "\(developer)")
+        let xcodeFolder = tree.path("Xcode")
+        let developer = reasons { $0 == xcode + "/usr/bin" ? xcodeFolder : nil }
+        #expect(developer[0].contains("xcrun starts developer tools from") && developer[0].contains(xcodeFolder), "\(developer)")
+        let simctl = reasons { $0 == xcode + "/usr/bin/simctl" ? $0 : nil }
+        #expect(simctl[0].contains("xcrun would start \(xcode)/usr/bin/simctl"), "\(simctl)")
+        // The Command Line Tools have no simulators: xcrun would look for simctl on the PATH instead.
+        let withoutSimctl = reasons(developer: commandLineTools) { _ in nil }
+        #expect(withoutSimctl[0].contains("has no 'simctl'") && withoutSimctl[0].hasSuffix("so 'xcrun' runs only when you start it"))
+        let unselected = reasons(developer: tree.path("no-such-link")) { _ in nil }
+        #expect(unselected[0].contains("\(tree.path("no-such-link")) is missing") && !unselected[0].contains("replaced"), "\(unselected)")
         // /usr/lib is on every Mac; /usr/lib/docker isn't, so its nearest folder decides who could create it.
         let plugins = reasons { $0 == "/usr/lib" ? "/usr/lib" : nil }
         #expect(plugins[1].contains("/usr/lib/docker/cli-plugins") && plugins[1].hasSuffix("so 'docker' runs only when you start it"))
         let settings = reasons { $0 == Shell.emptyFolder ? Shell.emptyFolder : nil }
         #expect(settings[1].contains("empty folder \(Shell.emptyFolder)"), "\(settings)")
+    }
+
+    @Test("A Docker plugin folder holding a plugin you can change keeps docker out of automatic runs")
+    func changeableDockerPlugin() throws {
+        let tree = try TempTree()
+        try program(tree, "plugins/docker-buildx")
+        let plugin = tree.path("plugins/docker-buildx")
+        let folders = [tree.path("plugins")]
+        #expect(CommandTrust.dockerFoldersRefusal(changeable: { _ in nil }, pluginFolders: folders) == nil)
+        let refusal = CommandTrust.dockerFoldersRefusal(changeable: { $0 == plugin ? plugin : nil }, pluginFolders: folders)
+        let expected = "docker loads plugins from \(tree.path("plugins")), and \(plugin) can be changed"
+        #expect(refusal?.contains(expected) == true, "\(refusal ?? "")")
     }
 }

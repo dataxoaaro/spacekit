@@ -167,6 +167,9 @@ public struct CleanupExecutor: Sendable {
     /// What the person could change on the way to a tool, which keeps it out of automatic runs. Tests can't make files
     /// they don't own, so they replace it to stand in the system's folders.
     var changeable: @Sendable (String) -> String? = CommandTrust.changeablePart(of:)
+    /// The link to the developer folder xcrun starts tools from. Tests can't choose the system's, so they stand in a link
+    /// of their own.
+    var developerFolderLink = CommandTrust.developerFolderLink
     /// Reads the mount table at the start of each run. The guard keeps the table it was built with, and a context
     /// (with its guard) lives as long as the app or TUI does; a run reads it again so a volume mounted since is still a
     /// mount point the guard refuses. `nil` keeps the guard's own table: tests hand the guard theirs.

@@ -4,6 +4,12 @@ import Testing
 
 @testable import SpaceKitCore
 
+/// The bytes of a stand-in for a compiled program called `name`: a Mach-O header's first word, so the program walk
+/// takes it for one the system loads, and then text. Nothing ever starts it.
+func machOStandIn(_ name: String) -> Data {
+    Data([0xCF, 0xFA, 0xED, 0xFE]) + Data(" stand-in for \(name)\n".utf8)
+}
+
 /// Stands in for running tools: records every call and answers with what the test scripted, so trust and budget
 /// tests never start a real program.
 final class RecordingRunner: ProcessRunner {
@@ -19,7 +25,7 @@ final class RecordingRunner: ProcessRunner {
     ) {
         let folder = tree.path("installed-tools")
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-        for name in installed { try? Data("stand-in for \(name)\n".utf8).write(to: URL(fileURLWithPath: folder + "/" + name)) }
+        for name in installed { try? machOStandIn(name).write(to: URL(fileURLWithPath: folder + "/" + name)) }
         self.init(searchPath: [folder], locate: { installed.contains($0) ? folder + "/" + $0 : nil }, respond: respond)
     }
 
@@ -201,15 +207,13 @@ struct CommandTrustTests {
         #expect(runner.kinds == [.manual])
     }
 
-    /// Writes an executable file to `relative` in `tree`: a script when `text` starts with `#!`, otherwise a stand-in
-    /// for a compiled program. Nothing runs it: the recording runner only finds it.
+    /// Writes an executable file to `relative` in `tree`: a script with `text` (from `#!` on), or without it a stand-in
+    /// for a compiled program (`machOStandIn`). Nothing runs it: the recording runner only finds it.
     @discardableResult
-    func program(_ tree: TempTree, _ relative: String, _ text: String = "\u{CF}\u{FA}\u{ED}\u{FE} stand-in", mode: mode_t = 0o755) throws
-        -> String
-    {
+    func program(_ tree: TempTree, _ relative: String, _ text: String? = nil, mode: mode_t = 0o755) throws -> String {
         let path = tree.path(relative)
         try FileManager.default.createDirectory(atPath: PathUtil.parent(path), withIntermediateDirectories: true)
-        try text.write(toFile: path, atomically: false, encoding: .utf8)
+        try (text.map { Data($0.utf8) } ?? machOStandIn("program")).write(to: URL(fileURLWithPath: path))
         #expect(chmod(path, mode) == 0)
         return path
     }
@@ -402,12 +406,14 @@ struct CommandTrustTests {
             PlannedCommand(ruleID: "xcrun", arguments: simulators, estimatedBytes: 1),
         ])
         // The file system as it is: the test's own folder is yours, /usr/bin is the system's. Which developer folder this
-        // Mac's xcode-select chose isn't what this tests.
+        // Mac's xcode-select chose isn't what this tests, so a developer folder of the test's own stands in for the system's.
+        try program(tree, "Developer/usr/bin/simctl")
+        let developer = tree.path("xcode_select_link")
+        try FileManager.default.createSymbolicLink(atPath: developer, withDestinationPath: tree.path("Developer"))
         let runner = RecordingRunner(searchPath: [tree.path("bin"), "/usr/bin"])
-        let changeable: @Sendable (String) -> String? = {
-            $0.hasPrefix(CommandTrust.developerFolderLink) ? nil : CommandTrust.changeablePart(of: $0)
-        }
-        let executor = executor(tree, rules: [tidy, xcrun], runner: runner, allowed: ["tidy"], changeable: changeable)
+        let changeable: @Sendable (String) -> String? = { $0.hasPrefix(developer) ? nil : CommandTrust.changeablePart(of: $0) }
+        var executor = executor(tree, rules: [tidy, xcrun], runner: runner, allowed: ["tidy"], changeable: changeable)
+        executor.developerFolderLink = developer
         let report = executor.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j")), dryRun: false)
         let reason = skipReason(report.commands.first?.outcome) ?? "ran"
         // The temporary folder the test's own folder is in is already yours.

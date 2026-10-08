@@ -34,10 +34,13 @@ extension CleanupExecutor {
         }
         for reason in commandTrust.refusals(command, rule: rule, context: context) { verdict.raise(.block, reason) }
         if let refusal = commandTrust.programRefusal(command, rule: rule, at: executable, runner: runner) { verdict.raise(.block, refusal) }
-        let name = command.arguments.first ?? ""
         let automatic = commandTrust.automaticRefusal(
-            name, at: executable, context: context, searchPath: runner.searchPath, changeable: changeable)
+            command.arguments, at: executable, context: context, searchPath: runner.searchPath, changeable: changeable,
+            developerFolderLink: developerFolderLink)
         if let refusal = automatic {
+            verdict.raise(.block, refusal)
+        }
+        if item == nil, context.isAutomatic, let refusal = CommandTrust.linkedPathRefusal(rule, home: safety.home) {
             verdict.raise(.block, refusal)
         }
         if let warning = commandTrust.ownRuleWarning(command, rule: rule, context: context, at: executable) {

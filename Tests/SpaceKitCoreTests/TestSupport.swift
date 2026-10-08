@@ -110,3 +110,12 @@ func identity(_ path: String) -> RemovalTarget.Identity? {
     var st = stat()
     return lstat(path, &st) == 0 ? RemovalTarget.Identity(st) : nil
 }
+
+/// A developer folder with `simctl` in `tree`, and a link to it like `/var/db/xcode_select_link`, for an executor's
+/// `developerFolderLink`: which developer folder this Mac's xcode-select chose isn't what a test is about.
+func standInDeveloperFolder(_ tree: TempTree) throws -> String {
+    try tree.file("Developer/usr/bin/simctl", bytes: 16)
+    let link = tree.path("xcode_select_link")
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: tree.path("Developer"))
+    return link
+}

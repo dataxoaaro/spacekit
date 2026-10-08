@@ -67,12 +67,15 @@ extension CommandTrust {
         switch header {
         case .compiled:
             return nil
+        case .notLoadable:
+            return "'\(program.name)' at \(real) is neither a program macOS loads nor a #! script, and env would run it with "
+                + "/bin/sh, so SpaceKit can't tell which program runs"
         case .unclear(let why):
             return "'\(program.name)' at \(real) starts with #! but \(why), so SpaceKit can't tell which program runs it"
-        case .script(let interpreter, let argument):
-            let shown = "#!" + interpreter + (argument.map { " " + $0 } ?? "")
+        case .script(let interpreter, let arguments):
+            let shown = "#!" + ([interpreter] + arguments).joined(separator: " ")
             let next = Interpreted(name: program.name, path: real, shown: shown)
-            return interpreterRefusal(interpreter, argument, of: next, locate: locate, judge: judge, depth: depth)
+            return interpreterRefusal(interpreter, arguments, of: next, locate: locate, judge: judge, depth: depth)
         }
     }
 
@@ -83,9 +86,9 @@ extension CommandTrust {
         let shown: String
     }
 
-    /// Why the interpreter a script's `#!` line names, with its one `argument`, may not run it, or `nil`.
+    /// Why the interpreter a script's `#!` line names, with the `arguments` that follow it there, may not run it, or `nil`.
     private static func interpreterRefusal(
-        _ interpreter: String, _ argument: String?, of script: Interpreted, locate: (String) -> String?,
+        _ interpreter: String, _ arguments: [String], of script: Interpreted, locate: (String) -> String?,
         judge: (WalkedProgram) -> String?, depth: Int
     ) -> String? {
         let about = "'\(script.name)' at \(script.path) is a script"
@@ -96,7 +99,7 @@ extension CommandTrust {
             if let refusal = judge(WalkedProgram(name: "env", path: interpreter, isEnv: true)) {
                 return "\(about) (\(script.shown)); \(refusal)"
             }
-            guard let program = envProgram(argument) else {
+            guard let program = envProgram(arguments) else {
                 return "\(about) that env starts with options SpaceKit can't follow (\(script.shown))"
             }
             guard let found = program.hasPrefix("/") ? program : locate(program) else {
@@ -112,28 +115,18 @@ extension CommandTrust {
     }
 }
 
-/// How macOS's `env` reads the one argument a `#!` line hands it.
+/// How macOS's `env` reads the arguments a `#!` line hands it.
 extension CommandTrust {
-    /// The program `env` starts given `argument`, the rest of a `#!/usr/bin/env` line, which the kernel hands it as one
-    /// word; `nil` when that can't be told with certainty or names no program. env reads the word with getopt: `-i`, `-v`
-    /// and `-0` take no value, `-u`, `-L` and `-U` take the rest of the word, `-S` splits the rest into more words that
-    /// are read the same way, and after the options the first word that isn't `NAME=value` is the program. Without `-S`
-    /// nothing is left after an option's value but the script's own path, so env would start the script again: `nil`.
-    /// `-P` (another search path), quotes, escapes, `${VAR}`, and unknown or long options give `nil` too, so a script
-    /// SpaceKit can't follow is refused.
-    static func envProgram(_ argument: String?) -> String? {
-        guard let argument else { return nil }
-        guard argument.hasPrefix("-") else { return argument.contains("=") ? nil : argument }
-        guard case .splits(let rest)? = envOption(argument.dropFirst()), let words = envSplit(rest), !words.isEmpty else {
-            return nil
-        }
-        return envProgram(splitWords: words)
-    }
-
-    /// The program env starts from the words `-S` split off: options as getopt reads them, up to `--` or the first word
-    /// that isn't one, then `NAME=value` words, then the program.
-    private static func envProgram(splitWords: [String]) -> String? {
-        var words = splitWords[...]
+    /// The program `env` starts given `arguments`, the words after `/usr/bin/env` on a `#!` line, which the kernel split
+    /// at spaces and tabs; `nil` when that can't be told with certainty or names no program. env reads the words with
+    /// getopt (`0C:iP:S:u:v` on macOS): `-i`, `-v` and `-0` take no value, `-u` takes the rest of its word or the next
+    /// word, `-S` splits the rest of its word (or the next word) at spaces and tabs into words that are read next, and
+    /// `--` or the first word that isn't an option ends the options. Then `NAME=value` words are skipped and the next
+    /// word is the program. With no word left, env would start the script itself again: `nil`. `-P` and `-C` (another
+    /// search path or folder), a lone `-`, quotes, escapes, `${VAR}` and `#` in what `-S` splits, and unknown or long
+    /// options give `nil` too, so a script SpaceKit can't follow is refused.
+    static func envProgram(_ arguments: [String]) -> String? {
+        var words = arguments[...]
         while let word = words.first, word.hasPrefix("-") {
             words = words.dropFirst()
             if word == "--" { break }
@@ -161,13 +154,14 @@ extension CommandTrust {
     }
 
     /// What one cluster of `env` options (`-iv`, `-uNAME`, `-Sperl`) leaves to read, or `nil` for one SpaceKit doesn't
-    /// follow: an unknown letter (a space after an option is one), or `-P`, which searches another path.
+    /// follow: a letter macOS's env doesn't know (`-L` and `-U` are FreeBSD's), `-P`, which searches another path, or
+    /// `-C`, which starts the program in another folder.
     private static func envOption(_ letters: Substring) -> EnvOption? {
         for (index, letter) in letters.enumerated() {
             let rest = String(letters.dropFirst(index + 1))
             switch letter {
             case "i", "v", "0": continue
-            case "u", "L", "U": return rest.isEmpty ? .takesNext : .noValue
+            case "u": return rest.isEmpty ? .takesNext : .noValue
             case "S": return .splits(rest)
             default: return nil
             }
@@ -185,10 +179,14 @@ extension CommandTrust {
 
 /// The start of a program file, as far as which program runs it goes, read the way the macOS kernel reads it.
 enum ProgramHeader: Equatable {
-    /// Not a script: the system loads it itself.
+    /// A Mach-O program (or a universal one), which the system loads itself.
     case compiled
-    /// A script: the interpreter its `#!` line names and the one argument the kernel hands it, if any.
-    case script(interpreter: String, argument: String?)
+    /// Neither a Mach-O program nor a `#!` script. Started directly, the kernel refuses it. `env`, like any `execvp`
+    /// caller, then runs it with `/bin/sh` instead, which SpaceKit doesn't follow, so the walk refuses it.
+    case notLoadable
+    /// A script: the interpreter its `#!` line names and the arguments the kernel hands it, the rest of the line split
+    /// at spaces and tabs.
+    case script(interpreter: String, arguments: [String])
     /// Starts with `#!`, but not with a line the kernel runs (it then refuses the file, while `env` would hand it to
     /// `/bin/sh`): why.
     case unclear(String)
@@ -205,14 +203,22 @@ enum ProgramHeader: Equatable {
         let count = read(fd, &bytes, bytes.count)
         guard count >= 0 else { return nil }
         guard count >= 2, bytes[0] == UInt8(ascii: "#"), bytes[1] == UInt8(ascii: "!") else {
-            self = .compiled
+            self = count >= 4 && ProgramHeader.machOMagic.contains(Array(bytes[0..<4])) ? .compiled : .notLoadable
             return
         }
         self = ProgramHeader(line: bytes[2..<count])
     }
 
-    /// The kernel's reading: the line ends at the first newline or `#`, which must come within `lineLimit` bytes;
-    /// spaces and tabs around it go; the interpreter runs to the first space or tab, and the rest is one argument.
+    /// How a Mach-O file starts, as the bytes on disk: 32- and 64-bit, either byte order, and universal files.
+    static let machOMagic: Set<[UInt8]> = [
+        [0xFE, 0xED, 0xFA, 0xCE], [0xCE, 0xFA, 0xED, 0xFE], [0xFE, 0xED, 0xFA, 0xCF], [0xCF, 0xFA, 0xED, 0xFE],
+        [0xCA, 0xFE, 0xBA, 0xBE], [0xBE, 0xBA, 0xFE, 0xCA], [0xCA, 0xFE, 0xBA, 0xBF], [0xBF, 0xBA, 0xFE, 0xCA],
+    ]
+
+    /// The kernel's reading (`exec_shell_imgact`, then `exec_extract_strings`): the line ends at the first newline or
+    /// `#`, which must come within `lineLimit` bytes; spaces and tabs around it go; the interpreter runs to the first
+    /// space or tab, and the rest is split at spaces and tabs into one argument per word, as `man env` describes for
+    /// Darwin (other systems hand over the rest as one argument).
     private init(line bytes: ArraySlice<UInt8>) {
         let isSpace = { (byte: UInt8) in byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t") }
         guard let end = bytes.firstIndex(where: { $0 == UInt8(ascii: "\n") || $0 == UInt8(ascii: "#") }) else {
@@ -229,8 +235,7 @@ enum ProgramHeader: Equatable {
             self = .unclear("its first line holds bytes that aren't text")
             return
         }
-        let interpreter = text.prefix { $0 != " " && $0 != "\t" }
-        let argument = text[interpreter.endIndex...].drop { $0 == " " || $0 == "\t" }
-        self = .script(interpreter: String(interpreter), argument: argument.isEmpty ? nil : String(argument))
+        let words = text.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        self = .script(interpreter: words[0], arguments: Array(words.dropFirst()))
     }
 }

@@ -8,15 +8,18 @@ extension CommandTrust {
     /// How many symlinks the walk follows before it gives up, as the system does.
     static let symlinkLimit = 32
 
-    /// Why the tool `name` found at `executable` doesn't start in an automatic run, or `nil` when it may: the file, and
-    /// for a script every interpreter it starts, must be one nothing of the person's can change. A `#!/usr/bin/env` line
-    /// is followed on the PATH the run's tool gets: `searchPath` (where the runner looks) without the folders the person
-    /// could change. `changeable` finds what the person could change on the way to a file (`changeablePart(of:)`; tests
-    /// stand in their own).
+    /// Why the command `arguments`, whose tool is found at `executable`, doesn't start in an automatic run, or `nil` when
+    /// it may: the file, and for a script every interpreter it starts, must be one nothing of the person's can change,
+    /// and the tool's settings must be left behind (`settingsRefusal`). A `#!/usr/bin/env` line is followed on the PATH
+    /// the run's tool gets: `searchPath` (where the runner looks) without the folders the person could change.
+    /// `changeable` finds what the person could change on the way to a file (`changeablePart(of:)`; tests stand in their
+    /// own), and `developerFolderLink` is xcrun's developer folder link.
     func automaticRefusal(
-        _ name: String, at executable: String?, context: CleanupContext, searchPath: [String], changeable: (String) -> String?
+        _ arguments: [String], at executable: String?, context: CleanupContext, searchPath: [String],
+        changeable: (String) -> String?, developerFolderLink: String = CommandTrust.developerFolderLink
     ) -> String? {
         guard context.isAutomatic, let executable else { return nil }
+        let name = arguments.first ?? ""
         let folders = Shell.automaticSearchPath(searchPath, changeable: changeable)
         let locate = { (name: String) in Shell.which(name, in: folders) }
         let refusal = CommandTrust.programWalkRefusal(name, at: executable, locate: locate) { program in
@@ -24,7 +27,47 @@ extension CommandTrust {
                 "\($0) can be replaced by any program of yours, so '\(program.name)' runs only when you start it"
             }
         }
-        return (refusal ?? CommandTrust.settingsRefusal(name, changeable: changeable)).map(TerminalText.sanitize)
+        guard let refusal else {
+            return CommandTrust.settingsRefusal(arguments, changeable: changeable, developerFolderLink: developerFolderLink)
+                .map(TerminalText.sanitize)
+        }
+        return TerminalText.sanitize(refusal)
+    }
+
+    /// Why a command that names no item (a whole rule's, or a model's) doesn't start in an automatic run for where its
+    /// rule's paths lead, or `nil`. The tool cleans those folders by its own lights, with no check of SpaceKit's on what
+    /// it deletes, so a folder on the way that is a symlink (`~/Library/Caches/go-build` leading to `~/Documents`) would
+    /// have it clean wherever the link leads. Every folder below `home` on the way to each path the rule names is
+    /// checked: the part before the first wildcard, and each match of a pattern. A manual run is left to the person,
+    /// who reviews the command.
+    static func linkedPathRefusal(_ rule: Rule, home: String) -> String? {
+        for declared in rule.paths {
+            let expanded = PathUtil.expand(declared, home: home)
+            guard PathUtil.isStrictAncestor(home, of: expanded) else { continue }
+            let literal = PathUtil.components(expanded).prefix { !PathUtil.isGlob(String($0)) }
+            let paths = ["/" + literal.joined(separator: "/")] + (PathUtil.isGlob(expanded) ? PathUtil.glob(declared, home: home) : [])
+            for path in paths {
+                guard let link = firstSymlink(on: path, below: home) else { continue }
+                return TerminalText.sanitize(
+                    "\(PathUtil.abbreviate(link, home: home)), on the way to a folder rule \(rule.id) cleans, is a symlink, so its "
+                        + "command could clean wherever that leads; it runs only when you start it")
+            }
+        }
+        return nil
+    }
+
+    /// The first folder or file below `home` on the way to `path` that is a symlink; `nil` when none is, up to the first
+    /// part that isn't there.
+    private static func firstSymlink(on path: String, below home: String) -> String? {
+        guard PathUtil.isStrictAncestor(home, of: path) else { return nil }
+        var current = home
+        for component in PathUtil.components(String(path.dropFirst(home.count))) {
+            current = PathUtil.join(current, String(component))
+            var st = stat()
+            guard lstat(current, &st) == 0 else { return nil }
+            if st.st_mode & S_IFMT == S_IFLNK { return current }
+        }
+        return nil
     }
 
     /// The first file, folder or symlink on the way to `path` that the person could change (`isChangeable`), following
@@ -114,17 +157,19 @@ extension CommandTrust {
         "/usr/libexec/docker/cli-plugins",
     ]
 
-    /// Why the tool `name` doesn't start in an automatic run for the settings and helpers it reads, or `nil`.
-    static func settingsRefusal(_ name: String, changeable: (String) -> String?) -> String? {
+    /// Why the command `arguments` doesn't start in an automatic run for the settings and helpers its tool reads, or
+    /// `nil`.
+    static func settingsRefusal(
+        _ arguments: [String], changeable: (String) -> String?, developerFolderLink: String = CommandTrust.developerFolderLink
+    ) -> String? {
+        let name = arguments.first ?? ""
         let byHand = "so '\(name)' runs only when you start it"
         if let reads = unisolatedTools[name] { return "'\(name)' \(reads); any program of yours can change those, \(byHand)" }
         guard isolatedTools.contains(name) else { return "SpaceKit hasn't checked which settings of yours '\(name)' reads, \(byHand)" }
         switch name {
         case "xcrun":
-            let tools = developerFolderLink + "/usr/bin"
-            return changeable(tools).map {
-                "xcrun starts developer tools from \(tools), and \($0) can be replaced by any program of yours, \(byHand)"
-            }
+            let tool = arguments.count > 1 ? arguments[1] : ""
+            return xcrunRefusal(tool, link: developerFolderLink, changeable: changeable).map { "\($0), \(byHand)" }
         case "docker":
             return dockerFoldersRefusal(changeable: changeable).map { "\($0), \(byHand)" }
         default:
@@ -132,17 +177,38 @@ extension CommandTrust {
         }
     }
 
+    /// Why `xcrun` wouldn't start `tool` from a developer folder nothing of the person's can change, or `nil`. xcrun
+    /// looks for the tool in the folder `link` leads to, and for one that isn't there it searches the PATH, toolchains
+    /// and SDKs, which SpaceKit doesn't follow: the Command Line Tools have no `simctl`, so a simulator command there
+    /// would run whatever else xcrun finds.
+    private static func xcrunRefusal(_ tool: String, link: String, changeable: (String) -> String?) -> String? {
+        var st = stat()
+        guard lstat(link, &st) == 0, let developer = PathUtil.realpath(link) else {
+            return "xcrun starts developer tools from the folder xcode-select chose, and \(link) is missing, so none is chosen"
+        }
+        let tools = link + "/usr/bin"
+        if let part = changeable(tools) {
+            return "xcrun starts developer tools from \(tools), and \(part) can be replaced by any program of yours"
+        }
+        let path = PathUtil.join(tools, tool)
+        guard Shell.isBareName(tool), stat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else {
+            return "the developer folder \(developer) has no '\(tool)' (the Command Line Tools have no simulators), and xcrun "
+                + "would look for it elsewhere"
+        }
+        return changeable(path).map { "xcrun would start \(path), and \($0) can be replaced by any program of yours" }
+    }
+
     /// Why Docker's settings folder or plugin folders aren't fixed, or `nil`: the empty folder the run points
     /// `DOCKER_CONFIG` at must be empty and nobody's but root's, and each system plugin folder, with every plugin in it,
     /// one the person can't change. A plugin folder that isn't there must be one they can't create.
-    private static func dockerFoldersRefusal(changeable: (String) -> String?) -> String? {
+    static func dockerFoldersRefusal(changeable: (String) -> String?, pluginFolders: [String] = dockerPluginFolders) -> String? {
         let settings = Shell.emptyFolder
         let empty = (try? FileManager.default.contentsOfDirectory(atPath: settings))?.isEmpty == true
         if let part = changeable(settings) ?? (empty ? nil : settings) {
             return "docker reads its settings from the empty folder \(settings) in automatic runs, and \(part) isn't empty or "
                 + "can be changed by any program of yours"
         }
-        for folder in dockerPluginFolders {
+        for folder in pluginFolders {
             var existing = folder
             var st = stat()
             while existing != "/" && lstat(existing, &st) != 0 { existing = PathUtil.parent(existing) }

@@ -8,7 +8,8 @@ import Foundation
 /// Every question goes to `docker` itself, through the runner, in the cleaned environment the command's run gets: without
 /// DOCKER_HOST, DOCKER_CONTEXT or BUILDX_BUILDER (see `Shell.toolEnvironment`). So the active context and the
 /// selected builder it reports are the ones the command uses, whatever SpaceKit's own environment says. Answers are
-/// read from standard output only; anything that can't be read as an answer refuses the command.
+/// read from standard output only; anything that can't be read as an answer refuses the command. The one thing read from
+/// standard error is docker's own line saying the buildx plugin isn't installed, after a failed `docker buildx version`.
 extension CommandTrust {
     /// How long Docker gets to answer one question.
     static let dockerQueryTimeout: TimeInterval = 30
@@ -94,13 +95,17 @@ extension CommandTrust {
         return .success(builder)
     }
 
-    /// Docker's answer when no buildx plugin is installed, in the words older and newer Docker CLIs use.
-    static let buildxMissing = ["'buildx' is not a docker command", "unknown command: docker buildx"]
+    /// The line the docker CLI itself prints on standard error when no buildx plugin is installed, in the words older
+    /// and newer CLIs use (Docker 28 changed them).
+    static let buildxMissing = ["docker: 'buildx' is not a docker command.", "docker: unknown command: docker buildx"]
 
-    /// True when `result`, a failed `docker buildx version`, says the plugin isn't installed.
+    /// True when `result`, a failed `docker buildx version`, says the plugin isn't installed: a line of its standard
+    /// error is exactly one of `buildxMissing`. That line comes from the docker binary, already found where the command
+    /// runs it and judged; a plugin's own output, or the words inside a longer line, don't count.
     private static func saysBuildxIsMissing(_ result: Shell.Result) -> Bool {
-        let said = result.errors + "\n" + result.output
-        return buildxMissing.contains { said.contains($0) }
+        guard result.status != 0, !result.timedOut else { return false }
+        let lines = result.errors.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.contains { buildxMissing.contains($0) }
     }
 
     /// Why one node of a builder isn't on this Mac. A node names a socket (`unix://…`) or a Docker context, which is

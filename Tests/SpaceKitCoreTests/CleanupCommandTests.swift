@@ -96,6 +96,7 @@ struct CleanupCommandTests {
         var builtin = sandboxExecutor(tree, rules: [rule(tree, origin: .builtin, command: simulators)])
         // Where this Mac keeps xcrun and its developer folder isn't what this test is about.
         builtin.changeable = { _ in nil }
+        builtin.developerFolderLink = try standInDeveloperFolder(tree)
         #expect(wouldRun(outcome(builtin.execute(AutomaticPlan(builtinPlan, automation: automatic), dryRun: true))))
     }
 
@@ -163,10 +164,12 @@ struct CleanupCommandTests {
         let builtin = rule(tree, origin: .builtin, command: arguments)
         let big = CleanupPlan(commands: [PlannedCommand(ruleID: "tool", arguments: arguments, estimatedBytes: 20_000)])
         let context = AutomationContext(jobID: "j")
+        let developer = try standInDeveloperFolder(tree)
         func executor(budget: ByteCount) -> CleanupExecutor {
             var executor = sandboxExecutor(tree, rules: [builtin], budget: budget)
             // Where this Mac keeps xcrun and its developer folder isn't what this test is about.
             executor.changeable = { _ in nil }
+            executor.developerFolderLink = developer
             return executor
         }
         let over = executor(budget: ByteCount(10_000)).execute(AutomaticPlan(big, automation: context), dryRun: true)

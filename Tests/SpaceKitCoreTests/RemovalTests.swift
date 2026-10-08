@@ -48,7 +48,7 @@ struct RemovalTests {
             try FileManager.default.removeItem(atPath: tree.path("home/cache/item"))
             try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache/item"), withDestinationPath: tree.path("home/victim"))
 
-            #expect(throws: (any Error).self) { try remover.remove(checked, by: method) }
+            #expect(throws: (any Error).self) { try remover.remove(checked, by: method, context: manual) }
             #expect(onDisk(tree.path("home/cache/item")), "the link stays: it isn't what was checked")
             #expect(onDisk(tree.path("home/victim/keep")))
             #expect(!onDisk(tree.path("home/.Trash/item")))
@@ -76,7 +76,7 @@ struct RemovalTests {
         }
         let checked = target(tree, "home/cache/item")
 
-        #expect(throws: SafeRemoval.Refused.self) { try executor.remover.remove(checked, by: .delete) }
+        #expect(throws: SafeRemoval.Refused.self) { try executor.remover.remove(checked, by: .delete, context: manual) }
         let swapped = flags.swapped.load(ordering: .acquiring)
         #expect(swapped, "the swap never happened; the test proved nothing")
         #expect(onDisk(tree.path("home/cache/item/keep")), "the folder swapped in isn't what was checked")
@@ -103,7 +103,7 @@ struct RemovalTests {
         let checked = target(tree, "home/cache/item")
 
         // The item's contents went before its name turned out to be taken: a deletion that stopped part way.
-        #expect(throws: Remover.Interrupted.self) { try executor.remover.remove(checked, by: .delete) }
+        #expect(throws: Remover.Interrupted.self) { try executor.remover.remove(checked, by: .delete, context: manual) }
         #expect(reads.load(ordering: .acquiring) >= 2, "the swap never happened; the test proved nothing")
         #expect(onDisk(item), "the file in the item's place isn't the item")
         #expect(!onDisk(tree.path("home/cache/aside/x")), "the item's own contents went")
@@ -121,12 +121,12 @@ struct RemovalTests {
         // same file, so the item itself still matches.
         #expect(rename(tree.path("parent"), tree.path("parent-old")) == 0)
         try FileManager.default.createSymbolicLink(atPath: tree.path("parent"), withDestinationPath: tree.path("elsewhere"))
-        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete) }
+        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete, context: manual) }
         #expect(unlink(tree.path("parent")) == 0)
         try tree.directory("parent")
         #expect(link(tree.path("parent-old/item"), tree.path("parent/item")) == 0)
 
-        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete) }
+        #expect(throws: (any Error).self) { try remover.remove(checked, by: .delete, context: manual) }
         #expect(onDisk(tree.path("parent/item")))
         #expect(onDisk(tree.path("parent-old/item")))
     }
@@ -203,7 +203,7 @@ struct RemovalTests {
         try FileManager.default.removeItem(atPath: tree.path("home/cache/item"))
         try tree.file("home/cache/item/b", bytes: 1_000)
 
-        #expect(throws: SafeRemoval.Refused.self) { try remover.remove(checked, by: .delete) }
+        #expect(throws: SafeRemoval.Refused.self) { try remover.remove(checked, by: .delete, context: manual) }
         #expect(onDisk(tree.path("home/cache/item/b")))
     }
 
@@ -218,12 +218,12 @@ struct RemovalTests {
             return SafeRemoval.currentPath(of: fd)?.hasSuffix("/mnt") == true ? st.st_dev &+ 1 : st.st_dev
         }
         let item = target(tree, "home/Projects/mnt")
-        #expect(throws: SafeRemoval.Refused.self) { try mounted.remover.remove(item, by: .delete) }
+        #expect(throws: SafeRemoval.Refused.self) { try mounted.remover.remove(item, by: .delete, context: manual) }
 
         var unreadable = sandboxExecutor(tree)
         unreadable.device = { _ in nil }
         #expect {
-            try unreadable.remover.remove(item, by: .delete)
+            try unreadable.remover.remove(item, by: .delete, context: manual)
         } throws: { error in
             !(error is Remover.Interrupted)
         }
@@ -244,6 +244,73 @@ struct RemovalTests {
         let report = manualRun(plan, with: executor)
         #expect(onDisk(tree.path("home/Projects/mnt/y")))
         #expect(report.items.first?.outcome.isRemoved == false)
+    }
+
+    let automatic = CleanupContext.automatic(AutomationContext(jobID: "j"))
+
+    /// An executor whose path-based Trash move fails the test: an automatic run must never call it.
+    func handleOnlyExecutor(_ tree: TempTree) -> CleanupExecutor {
+        var executor = sandboxExecutor(tree)
+        executor.trash = { path in
+            Issue.record("an automatic run moved \(path) to the Trash by path")
+            return nil
+        }
+        return executor
+    }
+
+    /// The executor's `device` seam is read once the entry is checked, right before the move: the swap lands in the
+    /// moment a move by path would follow it to the sealed folder.
+    @Test("An automatic run moves to the Trash through the checked folder: a parent swapped for a symlink doesn't redirect it")
+    func automaticTrashThroughHandle() throws {
+        let tree = try TempTree()
+        try tree.file("home/Projects/cache/item/x", bytes: 100)
+        try tree.file("home/Sealed/item/keep", bytes: 100)
+        let flags = RaceFlags()
+        let cache = tree.path("home/Projects/cache")
+        let aside = tree.path("home/Projects/aside")
+        let sealed = tree.path("home/Sealed")
+        var executor = handleOnlyExecutor(tree)
+        executor.device = { fd in
+            if !flags.swapped.exchange(true, ordering: .acquiringAndReleasing) {
+                _ = rename(cache, aside)
+                _ = symlink(sealed, cache)
+            }
+            return SafeRemoval.device(of: fd)
+        }
+        let checked = target(tree, "home/Projects/cache/item")
+
+        let removed = try executor.remover.remove(checked, by: .trash, context: automatic)
+        let swapped = flags.swapped.load(ordering: .acquiring)
+        #expect(swapped, "the swap never happened; the test proved nothing")
+        #expect(onDisk(tree.path("home/Sealed/item/keep")), "the sealed folder stays where it is")
+        #expect(removed.trashedTo == tree.path("home/.Trash/item"))
+        #expect(onDisk(tree.path("home/.Trash/item/x")), "the checked item went, from where it was moved")
+        #expect(!onDisk(tree.path("home/Projects/aside/item")))
+    }
+
+    @Test("An automatic run never overwrites a Trash entry, and leaves an item on another volume than the Trash")
+    func automaticTrashNames() throws {
+        let tree = try TempTree()
+        try tree.file("home/.Trash/old/earlier", bytes: 10)
+        try tree.file("home/Projects/old/x", bytes: 1_000)
+        try tree.file("home/Projects/other/y", bytes: 1_000)
+        let executor = handleOnlyExecutor(tree)
+        let rule = cacheRule(tree, level: .review, paths: ["home/Projects"])
+        var ruled = executor
+        ruled.rules = [rule.id: rule]
+        let plan = CleanupPlan(items: [CleanupItem(path: tree.path("home/Projects/old"), size: 1_000, ruleID: rule.id)], useTrash: false)
+        let report = ruled.execute(AutomaticPlan(plan, automation: AutomationContext(jobID: "j", allowReview: true)), dryRun: false)
+        #expect(report.items.first?.outcome.trashedTo == tree.path("home/.Trash/old 2"))
+        #expect(onDisk(tree.path("home/.Trash/old/earlier")) && onDisk(tree.path("home/.Trash/old 2/x")))
+        #expect(journalEntries(tree).first?.trashedTo == tree.path("home/.Trash/old 2"))
+
+        // A test can't mount a volume: the device seam puts the item's folder on another one than the Trash.
+        var elsewhere = handleOnlyExecutor(tree)
+        let trashDevice = try #require(identity(tree.path("home/.Trash"))).device
+        elsewhere.device = { fd in SafeRemoval.device(of: fd).map { $0 == trashDevice ? $0 &+ 1 : $0 } }
+        let other = target(tree, "home/Projects/other")
+        #expect(throws: SafeRemoval.Refused.self) { try elsewhere.remover.remove(other, by: .trash, context: automatic) }
+        #expect(onDisk(tree.path("home/Projects/other/y")))
     }
 
     @Test("A move to the Trash that took something other than the checked item is reported, not called removed")

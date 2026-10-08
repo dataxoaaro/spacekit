@@ -90,6 +90,8 @@
 
 **Remover**: the module that takes an item off its place (`Remover`): it builds the item's removal target, decides Trash or delete in one place, and moves or deletes the item only while it still matches its target. _Avoid_: deleter, safe removal (that's only its handle-level deletion, `SafeRemoval`).
 
+**Move by handle**: how an automatic run moves an item to the Trash: the entry leaves the checked folder's handle straight into the home Trash's handle under a name not yet taken there (`renameatx_np`, `RENAME_EXCL`), so no path is resolved again; Finder's Put Back doesn't know it. _Avoid_: unattended trash, raw rename.
+
 **Removal**: one item a cleanup took off its place, as the report and the trees record it (`Removal`), whether deleted or moved to the Trash. _Avoid_: deletion.
 
 ## Suggestions

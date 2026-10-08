@@ -118,7 +118,7 @@ Names are compared with full Unicode case folding and without a version suffix, 
 | `always` (default) | Everything goes to the Trash; the executor enforces this whatever a front end asks for. The CLI refuses `--permanent`, and the app's cleanup sheet has no delete option and its button says Move to Trash. Emptying the Trash still deletes, since that is the only way to remove what's in it. | Everything goes to the Trash, whatever the job's `action`. |
 | `rules` | When every rule in a cleanup is 🟢 with `safety.trash: false`, its items are deleted; otherwise everything goes to the Trash. The CLI's `--permanent` and the app's toggle delete everything. Paths you name on the CLI send the whole cleanup to the Trash unless you pass `--permanent`. | `action: delete` deletes 🟢 items; `action: rule` follows each rule; `action: trash` trashes. Everything that isn't 🟢 goes to the Trash. |
 
-Items already in the Trash can only be deleted. Automatic runs delete them only when a 🟢 rule covers them.
+Items already in the Trash can only be deleted. Automatic runs delete them only when a 🟢 rule covers them. What an automatic run moves to the Trash has no Finder Put Back (the journal says where it came from), and an item on another volume than your home folder is left for you to clean by hand (see [SAFETY.md](SAFETY.md#1-one-gate-for-everything)).
 
 ### Jobs and modes
 

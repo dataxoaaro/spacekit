@@ -38,7 +38,8 @@ struct SafeRemovalTests {
     /// Deletes `relative` the way a cleanup does: through its removal target.
     func delete(_ relative: String, in tree: TempTree) throws {
         let remover = sandboxExecutor(tree).remover
-        _ = try remover.remove(remover.target(of: CleanupItem(path: tree.path(relative), size: 0), probingRepositories: false), by: .delete)
+        let target = remover.target(of: CleanupItem(path: tree.path(relative), size: 0), probingRepositories: false)
+        _ = try remover.remove(target, by: .delete, context: .manual)
     }
 
     @Test("A subfolder swapped for a symlink mid-removal never leads the deletion outside the item")
@@ -140,7 +141,7 @@ struct SafeRemovalTests {
         #expect(chmod(tree.path("locked"), 0o600) == 0)
         defer { chmod(tree.path("locked"), 0o755) }
 
-        _ = try remover.remove(target, in: fd, by: .delete)
+        _ = try remover.remove(target, in: fd, by: .delete, context: .manual)
         chmod(tree.path("locked"), 0o755)
         #expect(!onDisk(tree.path("locked/parent/item")))
     }

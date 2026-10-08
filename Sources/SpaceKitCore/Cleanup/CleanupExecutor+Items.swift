@@ -60,7 +60,7 @@ extension CleanupExecutor {
 
         let removed: Remover.Removed
         do {
-            removed = try remover.remove(sized, by: method)
+            removed = try remover.remove(sized, by: method, context: context)
         } catch let interrupted as Remover.Interrupted {
             // Moving to the Trash is all or nothing; a deletion may have removed part of the item before it stopped.
             return partlyDeleted(item, target: sized, before: measured, error: interrupted, context: context, run: &run)
@@ -147,7 +147,7 @@ extension CleanupExecutor {
                 continue
             }
             do {
-                let trashedTo = try remover.remove(file, in: fd, by: method).trashedTo
+                let trashedTo = try remover.remove(file, in: fd, by: method, context: context).trashedTo
                 totalFreed &+= freed
                 removedCount += 1
                 trashedTo.map { trashLocations.append($0) }

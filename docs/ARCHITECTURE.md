@@ -142,7 +142,7 @@ JobRunner (automatic) ─► AutomaticPlan      ReviewedPlan
                                       ▼
    CleanupExecutor: for each item ─► RemovalTarget (resolved once: folder, pinned dev+inode, repositories, size)
                                          ─► Trash or delete ─► SafetyGuard (again; an unshown warning skips) ─► budget
-                                         ─► Remover: identity checked ─► trashItem + check what moved │ delete via handles, same volume
+                                         ─► Remover: identity checked ─► trashItem (manual) or move by handle (automatic) + check what moved │ delete via handles, same volume
                                          ─► journal entry
                     for each command ─► gates + CommandTrust ─► budget ─► launcher behind it? local Docker? ─► ProcessRunner: no shell,
                                          cleaned environment ─► measure freed ─► charge budget ─► journal entry

@@ -100,20 +100,21 @@ struct Remover: Sendable {
         return try SafeRemoval.openDirectory(directory, pinned: target.directoryIdentity)
     }
 
-    /// Removes the target by `method`, refusing anything at its location that isn't what it pinned.
-    func remove(_ target: RemovalTarget, by method: Method) throws -> Removed {
+    /// Removes the target by `method` in a run of `context`, refusing anything at its location that isn't what it pinned.
+    func remove(_ target: RemovalTarget, by method: Method, context: CleanupContext) throws -> Removed {
         let fd = try openDirectory(of: target)
         defer { close(fd) }
-        return try remove(target, in: fd, by: method)
+        return try remove(target, in: fd, by: method, context: context)
     }
 
     /// Removes the target from its folder, open as `fd` (`openDirectory(of:)`).
     ///
-    /// Deleting stays on handles throughout; one that stops part way throws `Interrupted`. Moving to the Trash goes
-    /// through `FileManager.trashItem`, so Put Back works, and that takes a path; so the entry is checked against the
-    /// target right before the move, and what arrived in the Trash is checked after it. A swap in the moment between
-    /// the two moves the wrong item to the Trash, where it can be put back, and is reported.
-    func remove(_ target: RemovalTarget, in fd: Int32, by method: Method) throws -> Removed {
+    /// Deleting stays on handles throughout; one that stops part way throws `Interrupted`. A manual run moves to the
+    /// Trash through `FileManager.trashItem`, so Put Back works, and that takes a path; so the entry is checked against
+    /// the target right before the move, and what arrived in the Trash is checked after it. A swap in the moment between
+    /// the two moves the wrong item to the Trash, where the person who just started the cleanup can put it back, and is
+    /// reported. Nobody watches an automatic run, so it moves on handles instead (`trashByHandle`).
+    func remove(_ target: RemovalTarget, in fd: Int32, by method: Method, context: CleanupContext) throws -> Removed {
         try SafeRemoval.verifyEntry(target, in: fd)
         switch method {
         case .delete:
@@ -125,11 +126,55 @@ struct Remover: Sendable {
             } catch let error as SafeRemoval.Stopped {
                 throw Interrupted(cause: error)
             }
+        case .trash where context.isAutomatic:
+            let destination = try trashByHandle(target, from: fd)
+            try verifyTrashed(target, at: destination, keepsInodes: keepsInodes(fd))
+            return Removed(trashedTo: destination)
         case .trash:
             let destination = try trash(target.resolvedPath)
             try verifyTrashed(target, at: destination, keepsInodes: keepsInodes(fd))
             return Removed(trashedTo: destination)
         }
+    }
+
+    /// Moves the target's entry out of its pinned folder `fd` straight into the home Trash, opened as a handle, under
+    /// a name nothing there has yet, and returns where it went. Only the entry the folder handle holds can move, so a
+    /// folder above swapped for a symlink since the check can't send something else (a folder the guard seals) to the
+    /// Trash. Finder's Put Back has no record of it; the journal says where it came from. An item on another volume than
+    /// the home Trash is refused: a move by handle can't cross volumes.
+    private func trashByHandle(_ target: RemovalTarget, from fd: Int32) throws -> String {
+        let trashFolder = try openTrash()
+        defer { close(trashFolder) }
+        var st = stat()
+        guard fstat(trashFolder, &st) == 0, let folderDevice = device(fd) else { throw SafeRemoval.posixError(trashDirectory) }
+        guard folderDevice == st.st_dev else {
+            throw SafeRemoval.Refused(
+                errorDescription: "\(target.resolvedPath) is on another volume than your Trash, and an automatic run moves things to the "
+                    + "Trash only on your home volume. Clean it by hand; nothing was removed")
+        }
+        for attempt in 1...Remover.trashNameAttempts {
+            let name = attempt == 1 ? target.name : "\(target.name) \(attempt)"
+            if renameatx_np(fd, target.name, trashFolder, name, UInt32(RENAME_EXCL)) == 0 { return PathUtil.join(trashDirectory, name) }
+            guard errno == EEXIST else { break }
+        }
+        throw SafeRemoval.posixError(target.resolvedPath)
+    }
+
+    /// How many names (`item`, `item 2`, …) a move by handle tries in the Trash before it gives up.
+    static let trashNameAttempts = 1_000
+
+    /// The home Trash as a handle: a real folder, no symlink, the person's own. Created like Finder does when missing.
+    private func openTrash() throws -> Int32 {
+        let path = trashDirectory
+        if mkdir(path, 0o700) != 0 && errno != EEXIST { throw SafeRemoval.posixError(path) }
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw SafeRemoval.posixError(path) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_uid == getuid() else {
+            close(fd)
+            throw SafeRemoval.Refused(errorDescription: "\(path) isn't your own folder, so nothing is moved there; nothing was removed")
+        }
+        return fd
     }
 
     /// Checks that what arrived in the Trash at `destination` is the target: the same device and inode. Without a

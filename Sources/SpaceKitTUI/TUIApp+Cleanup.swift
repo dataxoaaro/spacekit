@@ -74,14 +74,8 @@ extension TUIApp {
     func cleanupFinished(_ report: CleanupReport, job: ManualJobRun.Outcome?) {
         state.activity = nil
         terminal.holdTerminationSignals(false)
-        let removals = Removal.from(report)
-        for removal in removals where !removal.partial { state.marked[removal.path] = nil }
-        if state.analysisProgress != nil {
-            state.pendingRemovals += removals
-        } else {
-            applyRemovals(removals)
-        }
-        refreshFindings(ruleIDs: report.rulesToReevaluate)
+        for removal in Removal.from(report) where !removal.partial { state.marked[removal.path] = nil }
+        workspace.apply(report, context: context)
         var lines = reportLines(report)
         if let job {
             lines += job.saveErrors.map { TerminalText.sanitize($0).fg(ANSI.protected) }
@@ -123,36 +117,14 @@ extension TUIApp {
         return lines
     }
 
-    /// Updates the trees, findings and AI report after a cleanup without re-scanning. Only call it while no
-    /// analysis is reading the tree.
-    func applyRemovals(_ removals: [Removal]) {
-        guard !removals.isEmpty else { return }
-        let previous = state.current
-        let currentPath = previous?.path
-        if let tree = state.tree {
-            Removal.apply(removals, to: tree)
-            // Folders above the current one may have been removed; their nodes are gone, so go by path.
-            let current = currentPath.map { nearestNode(to: $0, in: tree) } ?? tree.root
-            state.current = current
-            if current !== previous {
-                state.explore = ListCursor()
-            } else {
-                state.explore.selection = min(state.explore.selection, max(0, current.items.count - 1))
-            }
+    /// Keeps Explore on the folder it showed, or on the nearest one above it that a cleanup left.
+    func follow(_ change: Workspace.Change) {
+        guard let previous = state.current, let current = change.survivor(of: previous) else { return }
+        state.current = current
+        if current !== previous {
+            state.explore = ListCursor()
+        } else {
+            state.explore.selection = min(state.explore.selection, max(0, current.items.count - 1))
         }
-        // A copy: reading `state.tree` inside the mutating call on `state.result` is an exclusivity violation.
-        let tree = state.tree
-        state.result?.apply(removals, exploreTree: tree)
-    }
-
-    func nearestNode(to path: String, in tree: ScanTree) -> DirNode {
-        var candidate = path
-        while !candidate.isEmpty {
-            if let node = tree.node(at: candidate) { return node }
-            let parent = PathUtil.parent(candidate)
-            if parent == candidate { break }
-            candidate = parent
-        }
-        return tree.root
     }
 }

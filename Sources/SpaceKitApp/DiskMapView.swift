@@ -126,20 +126,23 @@ struct DiskMapView: View {
         let depth = model.mapDepth
         let colorer = MapColorer(mode: model.colorMode, ruleIndex: model.ruleIndex)
         let key = self.key
-        let layout = try? await model.readingTrees { () -> MapGeometry in
-            var geometry = MapGeometry(key: key, size: size)
-            switch visualization {
-            case .sunburst:
-                geometry.arcs = Sunburst.layout(focus, maxRings: depth, minSweep: 0.004)
-                geometry.colors = geometry.arcs.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.ring - 1) }
-            case .treemap:
-                let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
-                geometry.cells = Treemap.layout(focus, in: rect, maxDepth: depth, minCellArea: 36, padding: 2, headerHeight: 16)
-                geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
+        let workspace = model.workspace
+        let layout = await Task.detached(priority: .userInitiated) {
+            workspace.read { _ -> MapGeometry in
+                var geometry = MapGeometry(key: key, size: size)
+                switch visualization {
+                case .sunburst:
+                    geometry.arcs = Sunburst.layout(focus, maxRings: depth, minSweep: 0.004)
+                    geometry.colors = geometry.arcs.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.ring - 1) }
+                case .treemap:
+                    let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+                    geometry.cells = Treemap.layout(focus, in: rect, maxDepth: depth, minCellArea: 36, padding: 2, headerHeight: 16)
+                    geometry.colors = geometry.cells.map { colorer.color(item: $0.item, branch: $0.branch, depth: $0.depth) }
+                }
+                return geometry
             }
-            return geometry
-        }
-        guard let layout, !Task.isCancelled else { return }
+        }.value
+        guard !Task.isCancelled else { return }
         geometry = layout
     }
 
@@ -280,7 +283,8 @@ struct LiveScanMap: View {
                 var angle = -Double.pi / 2
                 for (index, child) in children.enumerated() where child.liveSize > 0 {
                     let sweep = Double(child.liveSize) / total * 2 * .pi
-                    let path = annularSector(center: center, inner: inner, outer: outer, start: .radians(angle), end: .radians(angle + sweep))
+                    let path = annularSector(
+                        center: center, inner: inner, outer: outer, start: .radians(angle), end: .radians(angle + sweep))
                     context.fill(path, with: .color(Theme.categorical(index).opacity(0.85)))
                     context.stroke(path, with: .color(Theme.surface), lineWidth: 1)
                     angle += sweep

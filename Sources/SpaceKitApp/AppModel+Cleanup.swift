@@ -71,48 +71,30 @@ extension AppModel {
             return (outcome.report, outcome)
         }.value
         if let outcome { finishJobRun(outcome) }
-        Task {
-            await untilTreesAreFree()
-            applyRemovals(report)
-        }
+        applyRemovals(report)
         return report
     }
 
-    /// Brings every view up to date after a cleanup without re-scanning or re-analysing everything:
-    /// the trees shrink in place, findings lose only the cleaned items, the AI report and category
-    /// totals update only if they were affected, and rules whose tool command ran are re-evaluated alone.
+    /// Brings every view up to date after a cleanup without re-scanning or re-analysing everything: the workspace
+    /// shrinks the tree and the findings in place (see `follow` for the views), and the Trash, the journal and the
+    /// volumes are measured again.
     private func applyRemovals(_ report: CleanupReport) {
+        workspace.apply(report, context: context)
         let removals = Removal.from(report)
-        applyToTreesAndFindings(removals)
-
-        // Tool commands free space their own way; re-evaluate just those rules.
-        refreshFindings(ruleIDs: report.rulesToReevaluate)
-
-        let removedPaths = Set(removals.filter { $0.kind != .looseFiles && !$0.partial }.map(\.path))
-        // A partly removed folder was rescanned: it keeps its node, but the folders inside it got new ones.
-        let rescannedPaths = removals.filter(\.partial).map(\.path)
-        let isGone: (String) -> Bool = { path in
-            removedPaths.contains { PathUtil.isAncestorOrEqual($0, of: path) }
-                || rescannedPaths.contains { PathUtil.isStrictAncestor($0, of: path) }
-        }
-        if let focus, isGone(focus.path) {
-            var survivor = focus.parent
-            while let node = survivor, isGone(node.path) { survivor = node.parent }
-            refocus(on: survivor ?? tree?.root)
-        }
-        if !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) {
-            cleanupList.removeAll { item in
-                removedPaths.contains { PathUtil.isAncestorOrEqual($0, of: item.path) }
-                    || (item.kind == .looseFiles && removals.contains { $0.kind == .looseFiles && $0.path == item.path })
-            }
-        }
-        if let path = selection?.path, isGone(path) { selection = nil }
-        if let path = hovered?.path, isGone(path) { hovered = nil }
-
         refreshJournal()
         refreshVolumes()
         // Re-measure the Trash exactly (and resync it in the map) once the move has settled.
         refreshTrash(resync: report.trashedBytes > 0 || removals.contains { PathUtil.isStrictAncestor(trashPath, of: $0.path) })
         refreshSnapshots()
+    }
+
+    /// Takes what a cleanup removed off the cleanup list.
+    func forgetRemoved(_ removals: [Removal]) {
+        let removedPaths = Set(removals.filter { $0.kind != .looseFiles && !$0.partial }.map(\.path))
+        guard !removedPaths.isEmpty || removals.contains(where: { $0.kind == .looseFiles }) else { return }
+        cleanupList.removeAll { item in
+            removedPaths.contains { PathUtil.isAncestorOrEqual($0, of: item.path) }
+                || (item.kind == .looseFiles && removals.contains { $0.kind == .looseFiles && $0.path == item.path })
+        }
     }
 }

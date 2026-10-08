@@ -15,8 +15,11 @@ import Synchronization
 /// Every step returns events (`Event`) that tell the front end what changed, so it can fix its own selection.
 /// One-shot CLI commands don't need any of this and call `Scanner` and `StorageAnalyzer` directly.
 public final class Workspace: Sendable {
+    /// A piece of the workspace's work that may change the tree; it returns what it did.
+    public typealias Step = @Sendable () -> [Event]
     /// Runs `step` on the thread that owns the front end's view of the tree, then handles the events it returns.
-    public typealias Deliver = @Sendable (_ step: @escaping @Sendable () -> [Event]) -> Void
+    /// Steps must run one at a time, in the order they are handed over.
+    public typealias Deliver = @Sendable (_ step: @escaping Step) -> Void
     /// Evaluates every rule, reusing the tree when it covers what they need (a seam for tests).
     typealias Analyze = @Sendable (SpaceKitContext, ScanTree?, ScanProgress) throws -> Analysis
 

@@ -51,16 +51,39 @@ public enum Shell {
     /// How long a tool gets to exit after SIGTERM before it (and its process group) gets SIGKILL.
     static let terminationGrace: TimeInterval = 1
 
+    /// Variables a tool keeps from SpaceKit's environment: who and where the person is, their locale, and the
+    /// variables that move a tool's own cache, so a tool cleans the cache SpaceKit measured.
+    static let keptVariables: Set<String> = [
+        "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
+        "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "npm_config_cache", "NPM_CONFIG_CACHE", "PNPM_HOME",
+        "YARN_CACHE_FOLDER", "GRADLE_USER_HOME", "OLLAMA_MODELS", "HOMEBREW_CACHE", "HOMEBREW_PREFIX",
+    ]
+    static let keptPrefixes = ["LC_", "XDG_"]
+
+    /// The environment a tool runs with: `keptVariables` from `environment`, and PATH set to `searchPath`. Everything
+    /// else stays behind. A variable can point a tool somewhere else entirely (DOCKER_HOST at another machine's
+    /// daemon, OLLAMA_HOST at another server), load code into it (DYLD_*, NODE_OPTIONS) or hand it credentials
+    /// (tokens, SSH_AUTH_SOCK), and SpaceKit runs with Full Disk Access, often from an agent nobody watches.
+    public static func toolEnvironment(from environment: [String: String], home: String) -> [String: String] {
+        var kept = environment.filter { name, _ in
+            keptVariables.contains(name) || keptPrefixes.contains { name.hasPrefix($0) }
+        }
+        kept["PATH"] = searchPath(environmentPATH: environment["PATH"], home: home).joined(separator: ":")
+        return kept
+    }
+
     /// Runs a tool and waits until it has exited and closed its output, or until `timeout`. A tool that is still
     /// running then, or left a background child holding its output, is sent SIGTERM and then SIGKILL; its
-    /// process group goes with it. Timed-out runs report status -2.
-    public static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120) -> Result {
+    /// process group goes with it. Timed-out runs report status -2. The tool gets `toolEnvironment(from:)` of
+    /// `environment`, never SpaceKit's own environment as is.
+    public static func run(
+        _ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = searchPath.joined(separator: ":")
-        process.environment = environment
+        process.environment = toolEnvironment(from: environment, home: PathUtil.home)
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

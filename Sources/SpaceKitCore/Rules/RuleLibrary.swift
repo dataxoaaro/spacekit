@@ -32,14 +32,6 @@ public struct RuleLibrary: Sendable {
         self.issues = issues
     }
 
-    /// Executables that built-in rule commands may run without the user explicitly allowing them in the config.
-    /// Rules from any other folder need their executable listed in `safety.allowedCommands`.
-    public static let trustedCommands: Set<String> = [
-        "brew", "docker", "xcrun", "npm", "pnpm", "yarn", "bun", "ollama", "go", "cargo", "pip", "pip3",
-        "uv", "conda", "mamba", "gem", "pod", "flutter", "dart", "gradle", "huggingface-cli", "hf", "mise", "rustup",
-        "orb", "podman", "colima", "swift", "deno",
-    ]
-
     /// Loads the built-in rules and every `*.yaml` / `*.yml` in `directories`.
     ///
     /// A user rule with the id of an earlier rule replaces it, so a built-in rule can be customised by copying
@@ -262,7 +254,7 @@ public struct RuleLibrary: Sendable {
             issue(.error, "protected rules identify data to keep; they can't have a cleanup action or manual steps")
         }
         for command in [rule.action.command, rule.action.itemCommand].compactMap({ $0 }) {
-            commandIssues(command, rule: rule).forEach { issue($0.severity, $0.message) }
+            CommandTrust.ruleIssues(command, isBuiltin: rule.isBuiltin).forEach { issue($0.severity, $0.message) }
         }
         if rule.granularity == .children && rule.match != nil {
             issue(.warning, "`granularity: children` is unusual for pattern rules")
@@ -272,7 +264,7 @@ public struct RuleLibrary: Sendable {
             issue(.warning, "unknown ai.layout '\(ai.layout)'; it is shown as a cache. Use one of \(layouts)")
         }
         if let command = rule.ai?.removeCommand {
-            commandIssues(command, rule: rule).forEach { issue($0.severity, $0.message) }
+            CommandTrust.ruleIssues(command, isBuiltin: rule.isBuiltin).forEach { issue($0.severity, $0.message) }
             if command.contains(where: { $0.contains("{path}") }) {
                 issue(.error, "ai.removeCommand names a model with {name}; {path} isn't available there")
             }
@@ -290,35 +282,5 @@ public struct RuleLibrary: Sendable {
         let prefix = PathUtil.comparisonKey("/" + literal.joined(separator: "/"))
         let homeKey = PathUtil.comparisonKey(home)
         return components.count < 2 || prefix == "/" || prefix == homeKey || PathUtil.comparisonKey(expanded) == homeKey
-    }
-
-    /// Why a command from a rule outside the built-in library doesn't run: the validation warning and the
-    /// executor's refusal say the same thing.
-    static func untrustedRuleCommand(_ executable: String) -> String {
-        "'\(executable)' comes from a rule outside SpaceKit's built-in library; built-in trust covers SpaceKit's own rules only. "
-            + "It runs only in manual runs, and only if you add it to safety.allowedCommands"
-    }
-
-    private static func commandIssues(_ command: [String], rule: Rule) -> [(severity: RuleIssue.Severity, message: String)] {
-        guard let executable = command.first, Shell.isBareName(executable) else {
-            let got = command.first ?? ""
-            return [(.error, "command must start with a bare program name such as brew, without / or .. or {name}; got '\(got)'")]
-        }
-        var issues: [(RuleIssue.Severity, String)] = []
-        if rule.isBuiltin {
-            if !trustedCommands.contains(executable) {
-                let message = "command '\(executable)' is not in the trusted list; it only runs if listed in safety.allowedCommands"
-                issues.append((.warning, message))
-            }
-        } else if SafetySettings.isCodeLauncher(executable) {
-            issues.append(
-                (.warning, "command '\(executable)' never runs: it runs any code its arguments name, so safety.allowedCommands can't list it"))
-        } else {
-            issues.append((.warning, untrustedRuleCommand(executable)))
-        }
-        if command.contains(where: { $0.contains(";") || $0.contains("&&") || $0.contains("|") || $0.contains("`") || $0.contains("$(") }) {
-            issues.append((.error, "commands run without a shell; remove shell syntax (; && | ` $( )"))
-        }
-        return issues
     }
 }

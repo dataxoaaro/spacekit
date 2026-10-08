@@ -13,7 +13,7 @@ func sandboxExecutor(
     let guardian = SafetyGuard(
         home: home, userProtectedPaths: protectedPaths, protectedRules: protectedRules, volumes: emptyVolumes, isRunningAsRoot: root)
     var executor = CleanupExecutor(
-        safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules, extraAllowedCommands: allowed,
+        safety: guardian, journal: Journal(file: tree.path("state/journal.jsonl")), rules: rules, allowedCommands: allowed,
         maxBytesPerAutomaticRun: budget.bytes, configError: configError)
     executor.trash = sandboxTrash(home: home)
     return executor

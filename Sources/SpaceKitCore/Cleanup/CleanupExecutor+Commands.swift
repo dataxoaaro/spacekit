@@ -16,10 +16,7 @@ extension CleanupExecutor {
         if expectedArguments(for: command, rule: rule) != command.arguments {
             verdict.raise(.block, "The command no longer matches rule \(rule.id); refresh the plan")
         }
-        checkExecutable(command.arguments.first ?? "", rule: rule, context: context, into: &verdict)
-        if let model = command.modelName, model.isEmpty || model.hasPrefix("-") {
-            verdict.raise(.block, "'\(model)' isn't a model name the tool can be given safely")
-        }
+        for reason in commandTrust.refusals(command, rule: rule, context: context) { verdict.raise(.block, reason) }
 
         if let itemPath = command.itemPath {
             let target = RemovalTarget.resolving(
@@ -55,42 +52,16 @@ extension CleanupExecutor {
         return rule.action.command
     }
 
-    /// Built-in rules may use `RuleLibrary.trustedCommands`; every other rule only `safety.allowedCommands`, and
-    /// only in manual runs. A code launcher never counts as allowed, whoever lists it.
-    private func checkExecutable(_ executable: String, rule: Rule, context: CleanupContext, into verdict: inout SafetyVerdict) {
-        guard Shell.isBareName(executable) else {
-            verdict.raise(.block, "Commands must name a tool by its bare name, not a path: '\(executable)'")
-            return
-        }
-        // The agent runs as the person with Full Disk Access, and any process of theirs can write a rule file. So
-        // a command from outside the built-in library runs only when the person reviews and starts it by hand.
-        if !rule.isBuiltin && context.isAutomatic {
-            verdict.raise(
-                .block,
-                "'\(executable)' comes from a rule outside SpaceKit's built-in library; automatic runs never run those, run it by hand")
-            return
-        }
-        let isLauncher = SafetySettings.isCodeLauncher(executable)
-        if extraAllowedCommands.contains(executable) && !isLauncher { return }
-        if rule.isBuiltin && RuleLibrary.trustedCommands.contains(executable) { return }
-        if isLauncher {
-            verdict.raise(.block, "'\(executable)' runs whatever code its arguments name, so it can't be allowed")
-        } else if rule.isBuiltin {
-            verdict.raise(.block, "'\(executable)' isn't a trusted command; add it to safety.allowedCommands to allow it")
-        } else {
-            verdict.raise(.block, RuleLibrary.untrustedRuleCommand(executable))
-        }
-    }
-
     func runCommand(_ command: PlannedCommand, context: CleanupContext, accepted: Set<String>, run: inout Run) -> (CleanupOutcome, String) {
         if let refused = CleanupExecutor.refusal(verdict(for: command, context: context), accepted: accepted) { return (refused, "") }
         if context.isAutomatic && (run.budget == 0 || command.estimatedBytes > run.budget) { return (overBudget(), "") }
         let name = command.arguments[0]
-        guard let executable = Shell.which(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
+        guard let executable = runner.locate(name) else { return (.skipped(reason: "'\(name)' is not installed"), "") }
+        if let refusal = commandTrust.endpointRefusal(name, runner: runner) { return (.skipped(reason: refusal), "") }
         if run.dryRun { return (.wouldRemove(bytes: command.estimatedBytes), "") }
 
         let before = measure(command.measurePaths) ?? 0
-        let result = Shell.run(executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout)
+        let result = runner.run(executable, Array(command.arguments.dropFirst()), timeout: CleanupExecutor.commandTimeout)
         if result.timedOut {
             return (.failed(reason: "Stopped after \(Int(CleanupExecutor.commandTimeout)) seconds"), result.output)
         }

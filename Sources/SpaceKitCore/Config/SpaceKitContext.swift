@@ -58,7 +58,7 @@ public struct SpaceKitContext: Sendable {
     public var executor: CleanupExecutor {
         CleanupExecutor(
             safety: safetyGuard, journal: journal, rules: library.rules,
-            extraAllowedCommands: Set(config.safety.allowedCommands),
+            allowedCommands: Set(config.safety.allowedCommands),
             maxBytesPerAutomaticRun: config.safety.maxBytesPerRun.bytes, configError: configError,
             alwaysTrash: config.safety.trashesEverything)
     }

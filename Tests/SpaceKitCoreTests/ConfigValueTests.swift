@@ -115,8 +115,8 @@ struct ConfigValueTests {
             #expect(message.contains("safety.allowedCommands") && message.contains("'\(name)'"), "\(message)")
         }
         #expect(try ConfigStore.parse("safety:\n  allowedCommands: [rsync, pip3, shasum]\n").safety.allowedCommands.count == 3)
-        #expect(SafetySettings.isCodeLauncher("pythonw"))
-        #expect(!SafetySettings.isCodeLauncher("shasum"))
+        #expect(CommandTrust.isCodeLauncher("pythonw"))
+        #expect(!CommandTrust.isCodeLauncher("shasum"))
     }
 
     @Test("A config allowing a code launcher fails closed: removals are refused like any invalid config")

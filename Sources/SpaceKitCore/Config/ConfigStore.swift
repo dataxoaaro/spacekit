@@ -63,7 +63,7 @@ public struct ConfigStore: Sendable {
     /// Semantic checks beyond YAML syntax.
     public static func validate(_ config: SpaceKitConfig) throws {
         // An error, not a silent skip: the whole config fails closed, so the person sees why and nothing runs.
-        if let launcher = config.safety.allowedCommands.first(where: SafetySettings.isCodeLauncher) {
+        if let launcher = config.safety.allowedCommands.first(where: CommandTrust.isCodeLauncher) {
             let path: [CodingKey] = [SpaceKitConfig.CodingKeys.safety, SafetySettings.CodingKeys.allowedCommands]
             throw DecodingError.dataCorrupted(
                 .init(

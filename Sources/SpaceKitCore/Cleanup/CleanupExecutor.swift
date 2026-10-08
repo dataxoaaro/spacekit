@@ -99,9 +99,8 @@ public struct CleanupExecutor: Sendable {
     public var safety: SafetyGuard
     public var journal: Journal?
     public var rules: [String: Rule]
-    /// Executables allowed beyond `RuleLibrary.trustedCommands`. The only executables rules from outside the
-    /// built-in library may run.
-    public var extraAllowedCommands: Set<String>
+    /// Which tool commands may run (`safety.allowedCommands` on top of the built-in trusted list).
+    public var commandTrust: CommandTrust
     /// Upper bound for one automatic run.
     public var maxBytesPerAutomaticRun: UInt64
     /// Set when the config file exists but couldn't be read. Every removal and command is then refused, because
@@ -116,17 +115,19 @@ public struct CleanupExecutor: Sendable {
     var resolve: @Sendable (String) -> String? = PathUtil.realpath
     /// Reads the device of a folder open while deleting. Tests can't mount a volume, so they replace it to stand one in.
     var device: SafeRemoval.DeviceReader = SafeRemoval.device(of:)
+    /// Finds and runs tools. Tests replace it with a recorder, so trust and budget checks run without real tools.
+    var runner: any ProcessRunner = SystemProcessRunner()
 
     public static let commandTimeout: TimeInterval = 600
 
     public init(
-        safety: SafetyGuard, journal: Journal?, rules: [Rule], extraAllowedCommands: Set<String> = [],
+        safety: SafetyGuard, journal: Journal?, rules: [Rule], allowedCommands: Set<String> = [],
         maxBytesPerAutomaticRun: UInt64 = ByteCount.gb(100).bytes, configError: String? = nil, alwaysTrash: Bool = false
     ) {
         self.safety = safety
         self.journal = journal
         self.rules = Dictionary(rules.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-        self.extraAllowedCommands = extraAllowedCommands
+        self.commandTrust = CommandTrust(allowedCommands: allowedCommands)
         self.maxBytesPerAutomaticRun = maxBytesPerAutomaticRun
         self.configError = configError
         self.alwaysTrash = alwaysTrash

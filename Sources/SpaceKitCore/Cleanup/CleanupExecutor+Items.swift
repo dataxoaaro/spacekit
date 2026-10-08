@@ -132,9 +132,9 @@ extension CleanupExecutor {
             guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, (st.st_mode & S_IFMT) != S_IFDIR else { continue }
             guard !CleanupExecutor.changed(st, after: created) else { continue }
             let path = PathUtil.join(item.path, name)
-            let checked = PathUtil.join(directory, name)
-            var verdict = safety.evaluate(path: path, rule: rule, context: context)
-            if checked != path { verdict = verdict.merging(safety.evaluate(path: checked, rule: rule, context: context)) }
+            let verdict = CleanupExecutor.judge(path, checked: PathUtil.join(directory, name)) { candidate in
+                safety.evaluate(path: candidate, rule: rule, context: context)
+            }
             guard verdict.permits(confirmed: confirmed) else { continue }
             let size = FileSize.allocated(st)
             let freed = CleanupExecutor.isLastLink(st) ? size : 0

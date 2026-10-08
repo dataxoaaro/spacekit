@@ -77,8 +77,9 @@ public struct Finding: Sendable, Identifiable {
 
     /// Items a cleanup with these conditions would touch.
     public func eligibleItems(olderThan: Age? = nil, keepRecent: Age? = nil, now: Date = Date()) -> [FindingItem] {
-        let keep =
-            keepRecent ?? (rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken) ? rule.policy?.keepRecent ?? Job.defaultActiveProjectsWindow : nil)
+        let keepsActiveProjects = rule.exclusions.contains(where: RuleEngine.isActiveProjectsToken)
+        let activeWindow: Age? = keepsActiveProjects ? rule.policy?.keepRecent ?? Job.defaultActiveProjectsWindow : nil
+        let keep = keepRecent ?? activeWindow
         return items.filter { item in
             guard let used = item.lastUsed else { return olderThan == nil && keep == nil }
             let idle = now.timeIntervalSince(used)
@@ -371,17 +372,16 @@ public struct RuleEngine: Sendable {
         }
         var wholeClaims = Set<String>()
         var looseClaims = Set<String>()
-        /// Bytes and names of claimed single files, by the folder that holds them.
-        var fileClaims: [String: UInt64] = [:]
-        var fileClaimNames: [String: Set<String>] = [:]
+        /// Claimed single files, by the folder that holds them.
+        var fileClaims: [String: ClaimedFiles] = [:]
         for claim in best.values {
             switch claim.item.kind {
             case .directory: wholeClaims.insert(claim.item.path)
             case .looseFiles: looseClaims.insert(claim.item.path)
             case .file:
                 let folder = PathUtil.parent(claim.item.path)
-                fileClaims[folder, default: 0] &+= claim.item.size
-                fileClaimNames[folder, default: []].insert(PathUtil.lastComponent(claim.item.path))
+                fileClaims[folder, default: ClaimedFiles()].bytes &+= claim.item.size
+                fileClaims[folder, default: ClaimedFiles()].names.insert(PathUtil.lastComponent(claim.item.path))
             }
         }
         // A loose-files claim takes bytes from its folder, so its folder path counts as claimed inside an ancestor.
@@ -401,7 +401,7 @@ public struct RuleEngine: Sendable {
         var result: [Claim] = []
         for claim in best.values {
             if claim.item.kind == .looseFiles {
-                if let loose = RuleEngine.withoutClaimedFiles(claim.item, bytes: fileClaims[claim.item.path], names: fileClaimNames[claim.item.path]) {
+                if let loose = RuleEngine.withoutClaimedFiles(claim.item, fileClaims[claim.item.path]) {
                     result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
                 }
                 continue
@@ -423,10 +423,10 @@ public struct RuleEngine: Sendable {
                                 rule: claim.rule, item: RuleEngine.item(for: child, markers: tree.markers), specificity: claim.specificity))
                     }
                 }
+                let claimed = fileClaims[currentPath] ?? ClaimedFiles()
                 guard !looseClaims.contains(currentPath),
                     let loose = RuleEngine.looseFilesItem(
-                        of: current, path: currentPath, excludingBytes: fileClaims[currentPath] ?? 0,
-                        excludingNames: fileClaimNames[currentPath] ?? [])
+                        of: current, path: currentPath, excludingBytes: claimed.bytes, excludingNames: claimed.names)
                 else { continue }
                 result.append(Claim(rule: claim.rule, item: loose, specificity: claim.specificity))
             }
@@ -436,13 +436,19 @@ public struct RuleEngine: Sendable {
 }
 
 extension RuleEngine {
+    /// Single files rules claim in one folder: their bytes and names.
+    fileprivate struct ClaimedFiles {
+        var bytes: UInt64 = 0
+        var names: Set<String> = []
+    }
+
     /// A loose-files claim less the single files other rules claim in the same folder. `nil` if nothing is left.
-    fileprivate static func withoutClaimedFiles(_ item: FindingItem, bytes: UInt64?, names: Set<String>?) -> FindingItem? {
-        guard let bytes, let names else { return item }
-        guard item.size > bytes else { return nil }
+    fileprivate static func withoutClaimedFiles(_ item: FindingItem, _ claimed: ClaimedFiles?) -> FindingItem? {
+        guard let claimed else { return item }
+        guard item.size > claimed.bytes else { return nil }
         var loose = item
-        loose.size -= bytes
-        loose.looseFileNames = item.looseFileNames?.filter { !names.contains($0) }
+        loose.size -= claimed.bytes
+        loose.looseFileNames = item.looseFileNames?.filter { !claimed.names.contains($0) }
         return loose
     }
 }

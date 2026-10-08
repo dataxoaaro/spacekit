@@ -18,14 +18,14 @@ public struct ConfigStore: Sendable {
     public init(file: String) { self.file = file }
 
     /// True if anything is at the config path, including a symlink whose target is missing.
-    public var exists: Bool {
-        var st = stat()
-        return lstat(file, &st) == 0
-    }
+    public var exists: Bool { linkStatus != nil }
 
-    var isSymlink: Bool {
+    var isSymlink: Bool { linkStatus.map { ($0.st_mode & S_IFMT) == S_IFLNK } ?? false }
+
+    /// The config path itself, not followed if it's a symlink. `nil` if nothing is there.
+    private var linkStatus: stat? {
         var st = stat()
-        return lstat(file, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK
+        return lstat(file, &st) == 0 ? st : nil
     }
 
     /// Loads the config. A missing file yields the defaults. A file (or symlink) that is there but can't be read is

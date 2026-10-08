@@ -256,7 +256,8 @@ public struct SafetyGuard: Sendable {
             let share = Double(size) / Double(capacity.used)
             if context.isAutomatic {
                 if share > SafetyGuard.maxAutomaticVolumeShare {
-                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(Int(share * 100))% of the disk's used space")
+                    let percent = Int(share * 100)
+                    verdict.raise(.block, "Automatic cleanup won't remove a single item holding \(percent)% of the disk's used space")
                 }
             } else if share > SafetyGuard.confirmVolumeShare {
                 verdict.raise(.confirm, "This holds \(Int(share * 100))% of the disk's used space")
@@ -296,7 +297,8 @@ public struct SafetyGuard: Sendable {
                 if !(isCustom && ageOK && automation.usesTrash) {
                     verdict.raise(
                         .block,
-                        "Automatic cleanup inside personal folders requires a folder listed in the job, “older than” of at least 7 days, and moving to Trash"
+                        "Automatic cleanup inside personal folders requires a folder listed in the job, "
+                            + "“older than” of at least 7 days, and moving to Trash"
                     )
                 }
             }

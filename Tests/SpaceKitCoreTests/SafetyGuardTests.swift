@@ -174,8 +174,6 @@ struct SafetyGuardTests {
     }
 }
 
-/// APFS treats `Library`, `library` and `LIBRARY` (and NFC/NFD spellings of a name) as the same folder,
-/// so every protected list must match regardless of how the path is spelled.
 @Suite("Safety verdict reasons")
 struct VerdictEntryTests {
     @Test("Each reason keeps its own decision, whatever order they were raised in")
@@ -205,6 +203,8 @@ struct VerdictEntryTests {
     }
 }
 
+/// APFS treats `Library`, `library` and `LIBRARY` (and NFC/NFD spellings of a name) as the same folder,
+/// so every protected list must match regardless of how the path is spelled.
 @Suite("Safety guard: case and Unicode spellings")
 struct SafetyGuardSpellingTests {
     let manual = CleanupContext.manual(confirmed: true)
@@ -471,7 +471,8 @@ struct SafetyGuardAutomationTests {
         try tree.file("home/jobs/old/keep/x", bytes: 100)
         try tree.file("home/Important/data/x", bytes: 100)
         try FileManager.default.createSymbolicLink(atPath: tree.path("home/cache/link"), withDestinationPath: tree.path("home/Important"))
-        try FileManager.default.createSymbolicLink(atPath: tree.path("home/jobs/old/link"), withDestinationPath: tree.path("home/Important"))
+        let important = tree.path("home/Important")
+        try FileManager.default.createSymbolicLink(atPath: tree.path("home/jobs/old/link"), withDestinationPath: important)
         let guardian = SafetyGuard(home: tree.path("home"), volumes: emptyVolumes, isRunningAsRoot: false)
 
         let rule = Rule(

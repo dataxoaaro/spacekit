@@ -119,7 +119,8 @@ public struct JobRunner: Sendable {
 
     public func plan(for evaluation: JobEvaluation) -> CleanupPlan {
         var plan = CleanupPlan.make(
-            findings: evaluation.eligible, trashPreference: context.trashPreference(for: evaluation.job.action), created: evaluation.scanned)
+            findings: evaluation.eligible, trashPreference: context.trashPreference(for: evaluation.job.action),
+            created: evaluation.scanned)
         let customID = JobRunner.customRuleID(evaluation.job)
         for index in plan.items.indices where plan.items[index].ruleID == customID {
             plan.items[index].ruleID = nil
